@@ -1,0 +1,73 @@
+# Source code, dev tools, and project configs (commercial app - binaries published to Releases)
+src/
+public/
+tests/
+scripts/
+cloud/
+docs/
+installer/
+package.json
+package-lock.json
+publish.bat
+publish-release.bat
+start.bat
+
+# Node dependencies
+node_modules/
+
+# Vendor signing keys & private assets
+vendor-private-key.pem
+*.pem
+
+# Build outputs and release archives
+dist/
+release/
+publish/
+build/
+*.zip
+*.7z
+*.tar.gz
+*.exe
+
+# Live shop data, logs & backups
+data/
+backups/
+*.db
+*.db-shm
+*.db-wal
+pos-crash.log
+pos-server.log
+pos-server.log.*
+browser-profile/
+gui-test-screenshots/
+
+# In-app updater staging files
+apply_update.cmd
+TechPartsPOS_update.exe
+
+# Agent skills, tool metadata & planning docs
+.superpowers/
+.kilo/
+.kilocode/
+.zcode/
+.zcodeignore
+.claude/
+.qoder/
+skills-lock.json
+scratch/
+REMEDIATION_PLAN.md
+SECURITY-SETUP.md
+AUDIT_*.md
+
+# Temporary, log, and OS files
+*.tmp
+*.log
+*.bak
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vs/
+.vscode/
+.idea/
+.editorconfig
+.gitattributes
