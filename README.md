@@ -18,6 +18,6 @@ A commercial-grade Point of Sale and inventory management workstation built for 
 
 Download the latest pre-built Windows release from the [Releases](https://github.com/katalepsis69/PHONEPOS/releases) page.
 
-1. Download `TechPartsPOS-v1.2.zip` (or `TechPartsPOS.exe`).
+1. Download `TechPartsPOS-v2.0.zip` (or `TechPartsPOS.exe`).
 2. Extract the folder anywhere on your Windows PC.
 3. Run `TechPartsPOS.exe` to launch the POS workstation (automatically opens your default browser to `http://localhost:3000`).
