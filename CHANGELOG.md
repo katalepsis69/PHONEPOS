@@ -1,0 +1,49 @@
+# Changelog
+
+All notable changes to TechParts POS and Phone Repair Management System are documented in this file.
+
+The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
+
+## [v2.2] - 2026-11-03
+
+### Highlights & Changes
+- Counter Ergonomics: Compact workstation spacing and enlarged typography (cells 14px, part names 14.5px bold, prices 15px tabular numbers, grand total 25px bold green) for 1366x768 and 1280x800 counter monitors.
+- Automatic Rail Collapse: Navigation rail automatically collapses from 250px to 68px icon mode on screens 1366px wide or smaller, reclaiming 182px of horizontal table space.
+- Responsive Font Scaling: Standardized badges, wholesale tags, customer status pills, and utang payment references to responsive scale-aware sizes.
+- Software Updates: Safe offline update staging with strict SHA-256 verification and atomic binary installation.
+- Security & Licensing: Cryptographic offline RSA license validation and salted PBKDF2 manager PIN protection.
+- Automated Test Suite: Comprehensive test suite verification ensuring zero floating-point drift, database safety, and UI resilience.
+
+
+## [v2.1] - 2026-11-02
+
+### Added & Improved
+- Cryptographic offline license verification (RSA machine-ID binding and LicenseGenerator.exe).
+- End-of-day cash drawer reconciliation and drawer count verification.
+- In-app updater checksum validation and staging resilience.
+
+## [v2.0] - 2026-10-15
+
+### Added & Improved
+- Salted PBKDF2 manager PIN security with persistent lockout protection.
+- Customer credit ("Utang") FIFO allocation and ledger settlement.
+- Dual-tier pricing with walk-in retail and technician wholesale prices.
+
+## [v1.2] - 2026-10-15
+
+### Added & Improved
+- Offline in-app software updater with automated SHA-256 verification.
+- Automated daily SQLite database backups with integrity checks.
+
+## [v1.1] - 2026-09-17
+
+### Added & Improved
+- Raw ESC/POS thermal printing for 58mm and 80mm printers with cash drawer kick pulse.
+- Excel (.xlsx) and CSV inventory spreadsheet import with automated price markup calculation.
+- Bilingual English and Tagalog counter guidance.
+
+## [v1.0.0] - 2026-09-12
+
+### Initial Release
+- Standalone Single Executable Application (SEA) for offline phone repair counters.
+- Zero runtime dependencies with local SQLite storage.

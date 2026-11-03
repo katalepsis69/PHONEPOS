@@ -3,10 +3,12 @@
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- Simplified Excel and CSV parts import with automatic markup calculation from cost.
-- Added friendly bilingual micro-hints (English & Tagalog) throughout counter and screens.
-- Added fast counter shortcuts for checkout, customer search, price tiers, and claim stubs.
-- System stability, thermal receipt printing, and automated daily backup improvements.
+- Counter Ergonomics: Compact workstation spacing and enlarged typography (cells 14px, part names 14.5px bold, prices 15px tabular numbers, grand total 25px bold green) for 1366x768 and 1280x800 counter monitors.
+- Automatic Rail Collapse: Navigation rail automatically collapses from 250px to 68px icon mode on screens 1366px wide or smaller, reclaiming 182px of horizontal table space.
+- Responsive Font Scaling: Standardized badges, wholesale tags, customer status pills, and utang payment references to responsive scale-aware sizes.
+- Software Updates: Safe offline update staging with strict SHA-256 verification and atomic binary installation.
+- Security & Licensing: Cryptographic offline RSA license validation and salted PBKDF2 manager PIN protection.
+- Automated Test Suite: Comprehensive test suite verification ensuring zero floating-point drift, database safety, and UI resilience.
 
 ---
 
