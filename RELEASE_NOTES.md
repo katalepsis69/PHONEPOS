@@ -1,10 +1,12 @@
-﻿# What is New in TechParts POS (v2.1)
+﻿# What is New in TechParts POS (v2.2)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- Release v2.1
-- Updated: improvements to system internals.
+- Simplified Excel and CSV parts import with automatic markup calculation from cost.
+- Added friendly bilingual micro-hints (English & Tagalog) throughout counter and screens.
+- Added fast counter shortcuts for checkout, customer search, price tiers, and claim stubs.
+- System stability, thermal receipt printing, and automated daily backup improvements.
 
 ---
 
@@ -104,6 +106,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-v2.1.zip` below.
+  1. Download `TechPartsPOS-v2.2.zip` below.
   2. Extract the folder to your computer (e.g. `C:\TechPartsPOS`).
   3. Double-click `TechPartsPOS.exe` to start.
