@@ -1,12 +1,11 @@
-﻿# What is New in TechParts POS (v2.3)
+﻿# What is New in TechParts POS (v2.4)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- Workstation Typography & Themes: 5 shop color accents, 4 readable text scale presets (90% to 125%), locked clean sans display, and monospace tabular digits.
-- Settings Navigation Revamp: 6 organized settings tabs (Store, Staff & Security, Printing, Appearance, Cloud Sync, Data) with threshold controls and unified cashier accounts.
-- Manager Phone Reports: Secure token-authenticated mobile report endpoint (/api/report/*) for off-site till and revenue monitoring.
-- Cloud Sync Hardening: Hardened multi-shop synchronization service with scoped bearer tokens and automated cloud deployment.
+- Verified: worksheet relationship lookup accepts Target before Id
+- Verified: parseXlsx reads deflate + stored entries, shared/inline strings, entities, numbers
+- Verified: parseXlsx rejects non-zip files with a helpful hint
 
 ---
 
@@ -106,6 +105,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-v2.3.zip` below.
+  1. Download `TechPartsPOS-v2.4.zip` below.
   2. Extract the folder to your computer (e.g. `C:\TechPartsPOS`).
   3. Double-click `TechPartsPOS.exe` to start.

@@ -4,6 +4,13 @@ All notable changes to TechParts POS and Phone Repair Management System are docu
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v2.4] - 2026-11-05
+
+### Highlights & Changes
+- Verified: worksheet relationship lookup accepts Target before Id
+- Verified: parseXlsx reads deflate + stored entries, shared/inline strings, entities, numbers
+- Verified: parseXlsx rejects non-zip files with a helpful hint
+
 ## [v2.3] - 2026-11-05
 
 ### Highlights & Changes
@@ -11,6 +18,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Settings Navigation Revamp: 6 organized settings tabs (Store, Staff & Security, Printing, Appearance, Cloud Sync, Data) with threshold controls and unified cashier accounts.
 - Manager Phone Reports: Secure token-authenticated mobile report endpoint (/api/report/*) for off-site till and revenue monitoring.
 - Cloud Sync Hardening: Hardened multi-shop synchronization service with scoped bearer tokens and automated cloud deployment.
+- Repair Counter: Fast job intake, checkout shortcuts, and payment handling improvements.
 
 
 ## [v2.2] - 2026-11-05
