@@ -4,7 +4,16 @@ All notable changes to TechParts POS and Phone Repair Management System are docu
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
-## [v2.2] - 2026-11-03
+## [v2.3] - 2026-11-05
+
+### Highlights & Changes
+- Workstation Typography & Themes: 5 shop color accents, 4 readable text scale presets (90% to 125%), locked clean sans display, and monospace tabular digits.
+- Settings Navigation Revamp: 6 organized settings tabs (Store, Staff & Security, Printing, Appearance, Cloud Sync, Data) with threshold controls and unified cashier accounts.
+- Manager Phone Reports: Secure token-authenticated mobile report endpoint (/api/report/*) for off-site till and revenue monitoring.
+- Cloud Sync Hardening: Hardened multi-shop synchronization service with scoped bearer tokens and automated cloud deployment.
+
+
+## [v2.2] - 2026-11-05
 
 ### Highlights & Changes
 - Counter Ergonomics: Compact workstation spacing and enlarged typography (cells 14px, part names 14.5px bold, prices 15px tabular numbers, grand total 25px bold green) for 1366x768 and 1280x800 counter monitors.
