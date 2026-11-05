@@ -1,11 +1,10 @@
-﻿# What is New in TechParts POS (v2.4)
+# What is New in TechParts POS (v2.4)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- Verified: worksheet relationship lookup accepts Target before Id
-- Verified: parseXlsx reads deflate + stored entries, shared/inline strings, entities, numbers
-- Verified: parseXlsx rejects non-zip files with a helpful hint
+- Inventory Capital & Blank Template: Standardized cost price to Capital across all screens and exports; download template is now completely empty with zero dummy rows.
+- Wholesale Pricing & Catalog Transfer: Fixed CSV exports to use friendly Capital and Wholesale Price headers for seamless multi-PC catalog updates.
 
 ---
 

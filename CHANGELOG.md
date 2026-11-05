@@ -7,9 +7,9 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 ## [v2.4] - 2026-11-05
 
 ### Highlights & Changes
-- Verified: worksheet relationship lookup accepts Target before Id
-- Verified: parseXlsx reads deflate + stored entries, shared/inline strings, entities, numbers
-- Verified: parseXlsx rejects non-zip files with a helpful hint
+- Inventory Capital & Blank Template: Standardized cost price to Capital across all screens and exports; download template is now completely empty with zero dummy rows.
+- Wholesale Pricing & Catalog Transfer: Fixed CSV exports to use friendly Capital and Wholesale Price headers for seamless multi-PC catalog updates.
+
 
 ## [v2.3] - 2026-11-05
 
