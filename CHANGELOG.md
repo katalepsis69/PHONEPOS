@@ -7,6 +7,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 ## [v2.4] - 2026-11-05
 
 ### Highlights & Changes
+- Update v2.4 release notes with inventory capital and empty template highlights
 - Inventory Capital & Blank Template: Standardized cost price to Capital across all screens and exports; download template is now completely empty with zero dummy rows.
 - Wholesale Pricing & Catalog Transfer: Fixed CSV exports to use friendly Capital and Wholesale Price headers for seamless multi-PC catalog updates.
 
