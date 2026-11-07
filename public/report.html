@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>TechParts Reports</title>
+  <meta name="description" content="Live read-only shop reports for the manager: today's sales, collections, credit, and the latest tickets.">
+  <!-- Same compiled Tailwind + shared design tokens as the counter (build:css scans this file) -->
+  <link rel="stylesheet" href="tailwind.build.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest-report.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#0d1826">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <style>
+    /* Report page skin: mobile-first, no POS rail. Unlayered like styles.css,
+       so it wins over compiled Tailwind utilities where both apply. */
+    body {
+      font-size: 15px;
+      padding: calc(env(safe-area-inset-top, 0px) + 14px) calc(env(safe-area-inset-right, 0px) + 16px) calc(env(safe-area-inset-bottom, 0px) + 28px);
+    }
+
+    .rpt-wrap {
+      position: relative;
+      z-index: 2;
+      max-width: 560px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .rpt-body, .rpt-col {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* ---- header ---- */
+    .rpt-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .rpt-top__brand { display: flex; align-items: center; gap: 10px; }
+    .rpt-top__mark {
+      width: 36px; height: 36px; border-radius: 11px;
+      background: var(--accent-soft); border: 1px solid var(--accent-line);
+      color: var(--accent-hi);
+      display: grid; place-items: center; flex: none;
+    }
+    .rpt-top__name { font-family: var(--font-display); font-weight: 650; font-size: 17px; letter-spacing: -0.019em; }
+    .rpt-top__sub { color: var(--txt-3); font-size: 12px; margin-top: 1px; }
+    .rpt-top__actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+    .rpt-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em;
+      color: var(--pos); background: var(--pos-bg);
+      border: 1px solid rgba(75, 201, 130, 0.35);
+      border-radius: 999px; padding: 3px 10px; white-space: nowrap;
+    }
+    .rpt-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .rpt-pill[data-state="stale"] {
+      color: var(--warn); background: var(--warn-bg); border-color: rgba(230, 200, 122, 0.45);
+    }
+    .rpt-pill[data-state="offline"] {
+      color: var(--danger); background: var(--danger-bg); border-color: rgba(226, 100, 124, 0.4);
+    }
+    .rpt-updated { color: var(--txt-4); font-size: 12px; font-family: var(--font-numeric); text-align: right; margin-top: 5px; }
+
+    .rpt-link {
+      background: none; border: none; color: var(--txt-3); font: inherit; font-size: 12.5px;
+      text-decoration: underline; text-underline-offset: 3px; cursor: pointer; padding: 4px 2px;
+      display: inline-flex; align-items: center; min-height: 44px;
+    }
+    .rpt-link:active { color: var(--txt); }
+    .rpt-icon-btn {
+      width: 44px; height: 44px; border-radius: 10px;
+      background: var(--surface); border: 1px solid var(--line);
+      color: var(--txt-2); display: inline-grid; place-items: center;
+      cursor: pointer; flex: none;
+    }
+    .rpt-icon-btn:active { background: var(--surface-2); color: var(--txt); }
+
+    /* ---- offline banner ---- */
+    .rpt-offline {
+      display: flex; align-items: center; gap: 8px;
+      color: var(--danger); background: var(--danger-bg);
+      border: 1px solid rgba(226, 100, 124, 0.45);
+      border-radius: 12px; padding: 9px 12px; font-size: 13px;
+    }
+
+    /* ---- print ---- */
+    /* styles.css's print rules only lay out the counter's thermal receipt
+       (scoped with :has(#printable-receipt)), so browser "Save as PDF" here
+       gets the report itself: controls out, figures in, light ink forced -
+       the dark theme's pale text would vanish on white paper. */
+    @media print {
+      body { color: #111 !important; background: #fff !important; }
+      .rpt-wrap { max-width: none; }
+      .rpt-card, .rpt-panel, .rpt-sale {
+        background: #fff !important; border-color: #ddd !important; box-shadow: none !important;
+      }
+      .rpt-label, .rpt-meta, .rpt-updated, .rpt-panel__hint,
+      .rpt-kv__k, .rpt-sale__time, .rpt-sale__cust { color: #333 !important; }
+      .rpt-value, .rpt-kv__v, .rpt-sale__total, .rpt-sale__code,
+      .rpt-panel__title, .rpt-top__name, .rpt-top__sub { color: #111 !important; }
+      .rpt-btn, .rpt-link, .rpt-icon-btn, .rpt-pill, .rpt-offline, .rpt-gate { display: none !important; }
+    }
+
+    /* ---- cards & panels ---- */
+    .rpt-card {
+      background: var(--surface); border: 1px solid var(--line-soft);
+      border-radius: 14px; padding: 13px 14px;
+      box-shadow: var(--shadow-sm);
+    }
+    .rpt-label { color: var(--txt-3); font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+    .rpt-value { font-family: var(--font-numeric); font-size: clamp(18px, 5.4vw, 21px); font-weight: 600; letter-spacing: -0.02em; margin-top: 3px; }
+    .rpt-meta { color: var(--txt-4); font-size: 12px; margin-top: 3px; }
+
+    .rpt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .rpt-hero { grid-column: 1 / -1; background: linear-gradient(150deg, var(--surface-2), var(--surface)); border-color: var(--line); }
+    .rpt-hero .rpt-value { font-size: clamp(24px, 7.5vw, 30px); }
+    .rpt-hero__split { display: flex; gap: 18px; margin-top: 8px; flex-wrap: wrap; }
+    .rpt-hero__cell .rpt-label { font-size: 10.5px; }
+    .rpt-hero__cell .rpt-value { font-size: 15px; margin-top: 1px; }
+
+    .rpt-card[data-tone="pos"] .rpt-value { color: var(--pos); }
+    .rpt-card[data-tone="warn"] .rpt-value { color: var(--warn); }
+    .rpt-card[data-tone="danger"] .rpt-value { color: var(--danger); }
+    .rpt-card[data-tone="info"] .rpt-value { color: var(--info); }
+
+    .rpt-panel { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 14px; overflow: hidden; }
+    .rpt-panel__head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+      padding: 11px 14px 9px; border-bottom: 1px solid var(--line-soft);
+    }
+    .rpt-panel__title { font-family: var(--font-display); font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+    .rpt-panel__hint { color: var(--txt-4); font-size: 11.5px; }
+
+    .rpt-kv { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 14px; }
+    .rpt-kv + .rpt-kv { border-top: 1px solid var(--line-soft); }
+    .rpt-kv__k { color: var(--txt-2); font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+    .rpt-kv__k i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+    .rpt-kv__v { font-family: var(--font-numeric); font-weight: 600; font-size: 14px; }
+    .rpt-kv__v[data-tone="pos"] { color: var(--pos); }
+    .rpt-kv__v[data-tone="info"] { color: var(--info); }
+    .rpt-kv__v[data-tone="warn"] { color: var(--warn); }
+    .rpt-kv__v[data-tone="danger"] { color: var(--danger); }
+
+    /* ---- sales list ---- */
+    .rpt-sale { display: flex; align-items: center; gap: 10px; padding: 11px 14px; }
+    .rpt-sale + .rpt-sale { border-top: 1px solid var(--line-soft); }
+    .rpt-sale__main { flex: 1; min-width: 0; }
+    .rpt-sale__top { display: flex; align-items: baseline; gap: 8px; }
+    .rpt-sale__code { font-family: var(--font-numeric); font-size: 12.5px; color: var(--accent-hi); }
+    .rpt-sale__time { color: var(--txt-4); font-size: 11.5px; font-family: var(--font-numeric); }
+    .rpt-sale__cust { color: var(--txt-2); font-size: 13.5px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rpt-sale__amt { text-align: right; }
+    .rpt-sale__total { font-family: var(--font-numeric); font-weight: 600; font-size: 14.5px; }
+    .rpt-sale__method { font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; margin-top: 2px; }
+    .rpt-sale__method[data-m="cash"] { color: var(--pos); }
+    .rpt-sale__method[data-m="gcash"] { color: var(--info); }
+    .rpt-sale__method[data-m="transfer"] { color: var(--info); }
+    .rpt-sale__method[data-m="credit"] { color: var(--warn); }
+    .rpt-sale__method[data-m="voided"] { color: var(--danger); }
+    .rpt-sale__due { color: var(--danger); font-size: 11px; font-family: var(--font-numeric); }
+    .rpt-empty { color: var(--txt-4); font-size: 13px; padding: 18px 14px; text-align: center; }
+
+    .rpt-compare summary {
+      cursor: pointer; list-style: none; display: flex; align-items: center;
+      justify-content: space-between; gap: 10px; padding: 11px 14px; min-height: 44px;
+    }
+    .rpt-compare summary::-webkit-details-marker { display: none; }
+    .rpt-compare__grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+      padding: 12px 14px; border-top: 1px solid var(--line-soft);
+    }
+    .rpt-compare__col {
+      background: var(--surface-2); border: 1px solid var(--line-soft);
+      border-radius: 10px; padding: 10px 12px; font-size: 12px; color: var(--txt-2);
+    }
+    .rpt-compare__col--cloud {
+      border-color: var(--accent-line); background: var(--accent-soft);
+    }
+    .rpt-compare__head {
+      font-weight: 700; font-size: 12px; color: var(--txt); margin-bottom: 6px;
+      display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    }
+    .rpt-compare__list {
+      margin: 0; padding-left: 15px; display: flex; flex-direction: column; gap: 4px;
+      color: var(--txt-3); font-size: 11.5px; line-height: 1.4;
+    }
+
+    @media (min-width: 760px) {
+      .rpt-wrap { max-width: 960px; }
+      .rpt-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+        gap: 14px;
+        align-items: start;
+      }
+      .rpt-col:first-child {
+        position: sticky;
+        top: 16px;
+      }
+    }
+
+    /* ---- gate (login) & license screens ---- */
+    .rpt-gate {
+      position: relative; z-index: 2; max-width: 360px; margin: 14vh auto 0;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .rpt-gate__card {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 18px; padding: 26px 22px; text-align: center;
+      box-shadow: var(--shadow-lg);
+      display: flex; flex-direction: column; align-items: center; gap: 12px;
+    }
+    .rpt-gate__mark {
+      width: 52px; height: 52px; border-radius: 15px;
+      background: var(--accent-soft); border: 1px solid var(--accent-line);
+      color: var(--accent-hi); display: grid; place-items: center;
+    }
+    .rpt-gate__title { font-family: var(--font-display); font-size: 19px; font-weight: 650; margin: 0; }
+    .rpt-gate__hint { color: var(--txt-3); font-size: 13px; margin: 0; line-height: 1.45; }
+    .rpt-gate__form { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-top: 4px; }
+    .rpt-input {
+      width: 100%; background: var(--field); border: 1px solid var(--line);
+      border-radius: 11px; color: var(--txt); font-family: var(--font-numeric);
+      font-size: 20px; letter-spacing: 0.35em; text-align: center;
+      padding: 11px 8px; outline: none;
+    }
+    .rpt-input:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .rpt-btn {
+      width: 100%; border: none; border-radius: 11px; cursor: pointer;
+      background: var(--accent); color: var(--accent-ink);
+      font: inherit; font-weight: 650; font-size: 14.5px; padding: 12px;
+      box-shadow: var(--shadow-accent);
+    }
+    .rpt-btn:active { background: var(--accent-lo); }
+    .rpt-btn[disabled] { opacity: 0.55; cursor: wait; }
+    .rpt-btn--quiet {
+      background: none; border: 1px solid var(--line); color: var(--txt-2);
+      box-shadow: none; font-weight: 550;
+    }
+    .rpt-btn--quiet:active { background: var(--surface-2); }
+    .rpt-err {
+      color: var(--danger); background: rgba(226, 100, 124, 0.1);
+      border: 1px solid rgba(226, 100, 124, 0.4);
+      border-radius: 10px; font-size: 12.5px; line-height: 1.45;
+      padding: 8px 11px; width: 100%;
+    }
+    .rpt-gate__mono { color: var(--txt-4); font-family: var(--font-numeric); font-size: 11.5px; }
+    .rpt-gate__foot { color: var(--txt-4); font-size: 11.5px; text-align: center; margin-top: 2px; }
+  </style>
+</head>
+
+<body>
+
+  <!-- 1. LOGIN GATE -->
+  <main id="view-login" class="rpt-gate" hidden>
+    <form class="rpt-gate__card" id="login-form" autocomplete="off">
+      <span class="rpt-gate__mark">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+          <path d="M12 18h.01"></path>
+        </svg>
+      </span>
+      <h1 class="rpt-gate__title">TechParts Reports</h1>
+      <p class="rpt-gate__hint">Enter the manager PIN to see live shop figures on this phone.</p>
+      <div class="rpt-gate__form">
+        <label class="sr-only" for="pin-input">Manager PIN</label>
+        <input type="password" id="pin-input" class="rpt-input" inputmode="numeric" pattern="[0-9]*"
+          maxlength="8" placeholder="&bull;&bull;&bull;&bull;" autocomplete="off" autofocus>
+        <p id="login-error" class="rpt-err" hidden></p>
+        <button type="submit" id="login-btn" class="rpt-btn">Unlock reports</button>
+      </div>
+      <p class="rpt-gate__foot">Five wrong tries lock this report page for 15&nbsp;minutes. The counter is never affected.</p>
+    </form>
+  </main>
+
+  <!-- 2. REPORT -->
+  <main id="view-report" hidden>
+    <div class="rpt-wrap">
+
+      <header class="rpt-top">
+        <div class="rpt-top__brand">
+          <span class="rpt-top__mark">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+              <path d="M12 18h.01"></path>
+            </svg>
+          </span>
+          <div>
+            <div class="rpt-top__name">TechParts Reports</div>
+            <div class="rpt-top__sub">Live shop summary &middot; read-only</div>
+          </div>
+        </div>
+        <div>
+          <div class="rpt-top__actions">
+            <span class="rpt-pill" id="status-pill" data-state="live"><span class="rpt-pill__dot"></span>Live</span>
+            <button type="button" class="rpt-icon-btn" id="btn-theme-toggle" aria-label="Switch color theme" title="Switch light or dark theme">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="4"></circle>
+                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="rpt-updated" id="last-updated">Last updated --:--:--</div>
+          <button type="button" class="rpt-link" id="btn-signout">Sign out</button>
+        </div>
+      </header>
+
+      <div id="offline-banner" class="rpt-offline" hidden>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+          <path d="M12 9v4"></path><path d="M12 17h.01"></path>
+        </svg>
+        <span>Can't reach the shop. Retrying every 20s&hellip;</span>
+      </div>
+
+      <div class="rpt-body">
+        <div class="rpt-col">
+          <!-- Today at a glance -->
+          <section class="rpt-grid" aria-label="Today at a glance">
+            <div class="rpt-card rpt-hero">
+              <span class="rpt-label">Today's sales revenue</span>
+              <span class="rpt-value" id="st-revenue">&minus;</span>
+              <div class="rpt-hero__split">
+                <div class="rpt-hero__cell">
+                  <span class="rpt-label">Sales</span>
+                  <div class="rpt-value" id="st-count">&minus;</div>
+                </div>
+                <div class="rpt-hero__cell">
+                  <span class="rpt-label">Profit after returns</span>
+                  <div class="rpt-value" id="st-profit">&minus;</div>
+                </div>
+                <div class="rpt-hero__cell">
+                  <span class="rpt-label">Parts / labor</span>
+                  <div class="rpt-value" id="st-split">&minus;</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="rpt-card" data-tone="danger">
+              <span class="rpt-label">Credit outstanding</span>
+              <span class="rpt-value" id="st-credit">&minus;</span>
+              <span class="rpt-meta"><span id="st-debtors">&minus;</span> active debtors</span>
+            </div>
+            <div class="rpt-card" data-tone="warn">
+              <span class="rpt-label">Low-stock parts</span>
+              <span class="rpt-value" id="st-lowstock">&minus;</span>
+              <span class="rpt-meta">At or below alert quantity</span>
+            </div>
+
+            <div class="rpt-card" data-tone="info">
+              <span class="rpt-label">Warranty returns</span>
+              <span class="rpt-value" id="st-returns">&minus;</span>
+              <span class="rpt-meta">claims today</span>
+            </div>
+            <div class="rpt-card" data-tone="pos">
+              <span class="rpt-label">Units received</span>
+              <span class="rpt-value" id="st-received">&minus;</span>
+              <span class="rpt-meta">stock in today</span>
+            </div>
+            <div class="rpt-card" data-tone="danger">
+              <span class="rpt-label">Refunded today</span>
+              <span class="rpt-value" id="st-refunded">&minus;</span>
+              <span class="rpt-meta" id="st-refunded-meta">cash + credit refunds</span>
+            </div>
+          </section>
+
+          <!-- Collections -->
+          <section class="rpt-panel" aria-label="Today's payment collections">
+            <div class="rpt-panel__head">
+              <span class="rpt-panel__title">Today's collections</span>
+              <span class="rpt-panel__hint">where the money came in</span>
+            </div>
+            <div class="rpt-kv">
+              <span class="rpt-kv__k"><i style="background: var(--pos);"></i> Cash collected</span>
+              <span class="rpt-kv__v" data-tone="pos" id="st-cash">&minus;</span>
+            </div>
+            <div class="rpt-kv">
+              <span class="rpt-kv__k"><i style="background: var(--info);"></i> GCash collected</span>
+              <span class="rpt-kv__v" data-tone="info" id="st-gcash">&minus;</span>
+            </div>
+            <div class="rpt-kv">
+              <span class="rpt-kv__k"><i style="background: var(--info);"></i> Bank transfer</span>
+              <span class="rpt-kv__v" data-tone="info" id="st-transfer">&minus;</span>
+            </div>
+            <div class="rpt-kv">
+              <span class="rpt-kv__k"><i style="background: var(--warn);"></i> Utang settled today</span>
+              <span class="rpt-kv__v" data-tone="warn" id="st-settled">&minus;</span>
+            </div>
+          </section>
+
+          <!-- Local Wi-Fi vs Cloud Live Comparison -->
+          <details class="rpt-panel rpt-compare" id="rpt-tier-compare">
+            <summary>
+              <span class="rpt-panel__title">Local Wi-Fi View vs. Cloud Live</span>
+              <span class="rpt-panel__hint">Compare features</span>
+            </summary>
+            <div class="rpt-compare__grid">
+              <div class="rpt-compare__col">
+                <div class="rpt-compare__head">
+                  <span>Local Wi-Fi (Current)</span>
+                  <span class="rpt-Updated">Included</span>
+                </div>
+                <ul class="rpt-compare__list">
+                  <li>Shop Wi-Fi only (while PC is on)</li>
+                  <li>Today's cash, GCash &amp; net profit</li>
+                  <li>Last 20 tickets &amp; open utang total</li>
+                  <li>Local PC storage only</li>
+                </ul>
+              </div>
+              <div class="rpt-compare__col rpt-compare__col--cloud">
+                <div class="rpt-compare__head">
+                  <span>TechParts Live Cloud</span>
+                  <span class="rpt-Updated">Subscription</span>
+                </div>
+                <ul class="rpt-compare__list">
+                  <li>24/7 anywhere (mobile data or home)</li>
+                  <li>7d &amp; 30d trends + Parts/Labor split</li>
+                  <li>Cashier Audit (drawer shortages &amp; voids)</li>
+                  <li>Supplier Restock Budget + Off-site backup</li>
+                </ul>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="rpt-col">
+          <!-- Recent sales -->
+          <section class="rpt-panel" aria-label="Latest sales">
+            <div class="rpt-panel__head">
+              <span class="rpt-panel__title">Latest sales</span>
+              <span class="rpt-panel__hint">most recent 20</span>
+            </div>
+            <div id="sales-list"></div>
+          </section>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- 3. LICENSE LOCKED -->
+  <main id="view-license" class="rpt-gate" hidden>
+    <div class="rpt-gate__card">
+      <span class="rpt-gate__mark">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+      </span>
+      <h1 class="rpt-gate__title">Workstation locked</h1>
+      <p class="rpt-gate__hint" id="license-msg">Trial ended. Activate this workstation to continue.</p>
+      <p class="rpt-gate__mono" id="license-mid" hidden></p>
+      <button type="button" class="rpt-btn rpt-btn--quiet" id="btn-license-back">Back to login</button>
+    </div>
+  </main>
+
+  <script src="js/report.js"></script>
+</body>
+
+</html>

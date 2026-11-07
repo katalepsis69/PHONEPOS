@@ -1,0 +1,12 @@
+{
+  "name": "techparts-cloud",
+  "version": "1.0.0",
+  "description": "TechParts POS Cloud Sync & Real-Time Manager Service",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

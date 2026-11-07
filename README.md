@@ -1,6 +1,6 @@
 # TechParts POS & Phone Repair Management System
 
-A commercial-grade Point of Sale and inventory management workstation built for phone repair shops, parts wholesalers, and technician counters. Every sale, print and report path runs on the local machine with no cloud account required; the two things that do reach out are optional and off until configured: the update check against GitHub at boot (silent when there is no route, amber text in Settings only) and the optional cloud sync plus manager app.
+A commercial-grade Point of Sale and inventory management workstation built for phone repair shops, parts wholesalers, and technician counters. Every sale, print and report path runs on the local machine with no cloud account required. Two things reach out to the internet: the boot-time update check against GitHub, which is always on but silent when there is no route and visible as amber text in Settings only, and the optional cloud sync plus manager app, which stay off until an operator configures them.
 
 ## Features
 

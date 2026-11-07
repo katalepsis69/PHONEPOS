@@ -1,0 +1,2343 @@
+<!DOCTYPE html>
+<html lang="en" class="dark" translate="no">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="google" content="notranslate">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>TechParts POS</title>
+  <meta name="description"
+    content="Offline point of sale for phone parts shops: parts catalog, customer credit, warranty returns, and thermal receipts.">
+  <meta property="og:title" content="TechParts POS">
+  <meta property="og:description" content="Offline point of sale and repair management for phone parts shops.">
+  <meta property="og:image" content="icon.svg">
+  <meta property="og:type" content="website">
+  <!-- Tailwind CSS, compiled offline by `npm run build:css` -->
+  <link rel="stylesheet" href="tailwind.build.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="fonts/phosphor.css">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#0d1826">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="icon.svg">
+</head>
+
+<body data-tab="pos" oncontextmenu="return false;">
+
+  <a class="skip-link" href="#workspace">Skip to counter</a>
+  <div class="grain" aria-hidden="true"></div>
+
+  <div class="app">
+
+    <!-- LEFT RAIL: identity, primary action, sections, workstation card -->
+    <aside class="rail no-print">
+      <div class="rail-brand">
+        <span class="rail-mark"><i class="ph ph-device-mobile w-4 h-4"></i></span>
+        <div>
+          <div class="rail-word" id="rail-shop-name">TechParts POS</div>
+          <div class="rail-sub">Repair counter</div>
+        </div>
+      </div>
+
+      <button data-action="start-new-sale" class="rail-cta btn-tactile"
+        title="Jump to the repair counter and start a new job">
+        <i class="ph ph-plus w-4 h-4"></i>
+        <span data-i18n="nav.new_repair">New repair</span>
+        <kbd>F1</kbd>
+      </button>
+
+      <nav class="rail-nav" aria-label="Sections">
+        <span class="rail-label" data-i18n="nav.counter">Counter</span>
+        <button data-action="switch-tab" data-tab="pos" id="tab-btn-pos" class="rail-link tab-btn is-active">
+          <i class="ph ph-calculator w-4 h-4"></i>
+          <span data-i18n="nav.pos">Repair counter</span>
+          <span class="rail-link__hint">F1</span>
+        </button>
+        <button data-action="switch-tab" data-tab="credits" id="tab-btn-credits" class="rail-link tab-btn">
+          <i class="ph ph-users w-4 h-4"></i>
+          <span data-i18n="nav.customers">Customers</span>
+          <span id="nav-debtors-badge" class="rail-count hidden">0</span>
+        </button>
+
+        <span class="rail-label" data-i18n="nav.stock">Stock &amp; service</span>
+        <button data-action="switch-tab" data-tab="inventory" id="tab-btn-inventory" class="rail-link tab-btn">
+          <i class="ph ph-package w-4 h-4"></i>
+          <span data-i18n="nav.inventory">Inventory</span>
+          <span class="rail-link__hint">F3</span>
+        </button>
+        <button data-action="switch-tab" data-tab="returns" id="tab-btn-returns" class="rail-link tab-btn">
+          <i class="ph ph-shield-warning w-4 h-4"></i>
+          <span data-i18n="nav.returns">Warranty &amp; returns</span>
+          <span class="rail-link__hint">F4</span>
+        </button>
+
+        <span class="rail-label" data-i18n="nav.records">Records</span>
+        <button data-action="switch-tab" data-tab="sales" id="tab-btn-sales" class="rail-link tab-btn">
+          <i class="ph ph-receipt w-4 h-4"></i>
+          <span data-i18n="nav.sales">Sales history</span>
+          <span class="rail-link__hint">F8</span>
+        </button>
+        <button data-action="switch-tab" data-tab="dashboard" id="tab-btn-dashboard" class="rail-link tab-btn" data-manager-only>
+          <i class="ph ph-chart-bar w-4 h-4"></i>
+          <span data-i18n="nav.reports">Reports &amp; profit</span>
+          <span class="rail-link__hint">PIN</span>
+        </button>
+        <button data-action="switch-tab" data-tab="audit" id="tab-btn-audit" class="rail-link tab-btn" data-manager-only>
+          <i class="ph ph-book-open w-4 h-4"></i>
+          <span data-i18n="nav.audit">Audit log</span>
+          <span class="rail-link__hint">F7</span>
+        </button>
+      </nav>
+
+      <div class="rail-foot">
+        <div class="rail-sep"></div>
+
+        <!-- Day-to-day actions, two per row -->
+        <div class="rail-quick">
+          <button data-action="shift-open" class="rail-link" title="Open the workstation drawer">
+            <i class="ph ph-play w-4 h-4"></i>
+            <span data-i18n="nav.open_drawer">Open drawer</span>
+          </button>
+          <button data-action="shift-close" class="rail-link" title="Count and close the workstation drawer">
+            <i class="ph ph-square w-4 h-4"></i>
+            <span data-i18n="nav.close_drawer">Close drawer</span>
+          </button>
+          <button data-action="reprint-last" class="rail-link" title="Print the last receipt again">
+            <i class="ph ph-printer w-4 h-4"></i>
+            <span data-i18n="nav.reprint">Reprint</span>
+          </button>
+          <button data-action="logout" class="rail-link" title="Log out or switch user">
+            <i class="ph ph-sign-out w-4 h-4"></i>
+            <span data-i18n="nav.logout">Log out</span>
+          </button>
+        </div>
+
+        <!-- Rare manager tools collapse into one icon row -->
+        <div class="rail-tools" data-manager-only>
+          <button data-action="open-settings" class="rail-tool" title="Settings" aria-label="Settings">
+            <i class="ph ph-gear w-4 h-4"></i>
+          </button>
+          <button data-action="open-staff-settings" class="rail-tool" title="Cashiers & Staff" aria-label="Cashiers & Staff">
+            <i class="ph ph-users-three w-4 h-4"></i>
+          </button>
+          <button data-action="trigger-backup" class="rail-tool" title="Back up database" aria-label="Back up database">
+            <i class="ph ph-download-simple w-4 h-4"></i>
+          </button>
+          <button data-action="shutdown" class="rail-tool rail-tool--danger" title="Quit / Exit POS" aria-label="Quit or exit POS">
+            <i class="ph ph-power w-4 h-4"></i>
+          </button>
+        </div>
+
+        <div class="rail-status">
+          <span class="live-dot"></span>
+          <span id="store-card-shift">Counter 01</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="app-col">
+
+      <!-- TOP BAR: where you are, what you are searching, workstation state -->
+      <header class="topbar no-print">
+        <div class="topbar__head">
+          <h1 class="topbar__title" id="page-title">Repair counter</h1>
+        </div>
+
+        <div class="search">
+          <i class="ph ph-magnifying-glass w-4 h-4"></i>
+          <label class="sr-only" for="global-search">Search the section you are in</label>
+          <input type="text" id="global-search" autocomplete="off"
+            placeholder="Search this view…">
+        </div>
+
+        <div class="topbar__tools">
+          <button type="button" id="draft-chip" class="draft-chip hidden" data-action="resume-draft"
+            title="Resume the held repair job">
+            <span>Resume held job</span>
+          </button>
+          <button type="button" id="trial-chip" class="draft-chip hidden" data-action="check-license"
+            title="Trial days remaining. Click to activate this workstation now.">
+            Trial
+          </button>
+          <button type="button" id="sync-status-chip" class="draft-chip hidden cursor-pointer" data-action="open-cloud-settings"
+            title="Cloud sync state. Click to manage."></button>
+          <button type="button" id="update-status-chip" class="draft-chip hidden" data-action="open-settings-updates"
+            title="A new update is available. Click to review.">
+            <i class="ph ph-arrow-circle-up w-3.5 h-3.5 text-emerald-400"></i>
+            <span id="update-chip-text">Update available</span>
+          </button>
+          <span class="live-pill" title="No internet connection required"><span class="live-dot"></span><span data-i18n="nav.offline">Offline ready</span></span>
+          <span class="icon-btn icon-btn--quiet" title="Workstation clock">
+            <span id="header-live-clock" class="font-mono">--:--:--</span>
+          </span>
+          <button type="button" id="lang-toggle-btn" data-action="toggle-lang" class="icon-btn btn-tactile text-xs font-bold"
+            aria-label="Switch language (English / Tagalog)" title="Switch language (English / Tagalog)">
+            <span id="lang-toggle-label">TL</span>
+          </button>
+          <button id="theme-toggle-btn" data-action="toggle-theme" class="icon-btn btn-tactile"
+            aria-label="Switch light / dark theme" title="Switch light / dark theme">
+            <i class="ph ph-sun w-4 h-4"></i>
+          </button>
+        </div>
+      </header>
+
+      <!-- UPDATE NOTIFICATION BANNER (hidden by default, like adhdvnreader) -->
+      <div id="update-notification-banner" class="hidden no-print px-4 py-2 bg-emerald-950/90 border-b border-emerald-500/40 text-emerald-200 text-xs flex items-center justify-between transition-all">
+        <div class="flex items-center gap-2">
+          <i class="ph ph-arrow-circle-up text-emerald-400 w-4 h-4"></i>
+          <span id="update-banner-text">A new version is available!</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button type="button" id="btn-banner-apply-update" class="btn-mini btn-primary" data-action="apply-update">
+            <i class="ph ph-download-simple w-3.5 h-3.5"></i> <span>Update Now</span>
+          </button>
+          <a id="update-banner-notes" href="https://github.com/katalepsis69/PHONEPOS/releases" target="_blank" rel="noopener noreferrer" class="linkish text-xs">
+            Release Notes
+          </a>
+          <button type="button" id="btn-banner-dismiss-update" class="btn-quiet text-xs px-2 py-0.5" data-action="dismiss-update-banner" title="Dismiss for this session">
+            Later
+          </button>
+        </div>
+      </div>
+
+      <!-- MAIN APPLICATION BODY -->
+      <main id="workspace" class="workspace no-print">
+
+        <!-- 1. REPAIR COUNTER: device, services, parts and payment in one pass -->
+        <div id="view-pos" class="tab-view counter">
+
+          <!-- REPAIR REGISTER WORKSPACE: Parts Shelf -->
+          <div class="counter__main">
+
+            <!-- LIVE PARTS SHELF -->
+            <section class="panel shelf-panel" id="repair-parts-shelf" aria-label="Available parts">
+              <header class="panel__head">
+                <div>
+                  <h2 class="panel__title" id="shelf-title">All Available Parts</h2>
+                  <p class="panel__hint" id="shelf-hint">Showing all active parts in inventory.</p>
+                </div>
+                <div class="panel__tools">
+                  <div class="seg" role="group" aria-label="Price tier">
+                    <button type="button" data-action="set-tier" data-tier="retail" id="tier-retail-btn" class="seg-btn is-active"
+                      aria-pressed="true" data-i18n-title="pos.tier_retail_tt" title="Retail pricing (Alt+T to toggle)">Retail</button>
+                    <button type="button" data-action="set-tier" data-tier="technician" id="tier-wholesale-btn" class="seg-btn"
+                      data-tone="tech" aria-pressed="false" data-i18n-title="pos.tier_wholesale_tt" title="Wholesale pricing (Alt+T to toggle)">Wholesale</button>
+                  </div>
+                </div>
+              </header>
+
+              <div class="panel__body">
+                <div class="parts-tools">
+                  <label class="sr-only" for="pos-search-input">Search parts</label>
+                  <span class="field-search">
+                    <i class="ph ph-magnifying-glass w-4 h-4"></i>
+                    <input type="text" id="pos-search-input" autocomplete="off"
+                      data-i18n-ph="pos.search_ph"
+                      placeholder="Scan barcode or type part (press Enter to add)">
+                  </span>
+                  <label class="sr-only" for="pos-category-filter">Filter parts by category</label>
+                  <select id="pos-category-filter" class="select-sm">
+                    <option value="">All categories</option>
+                  </select>
+                  <label class="check check--pill">
+                    <input type="checkbox" id="pos-instock-only" checked>
+                    <span>In stock only</span>
+                  </label>
+                </div>
+
+                <div class="brand-chips" id="pos-brand-chips" role="group" aria-label="Filter parts by brand">
+                  <button type="button" class="brand-chip is-active" data-action="pos-brand" data-brand="">All</button>
+                </div>
+
+                <div class="ptable-wrap">
+                  <table class="ptable">
+                    <thead>
+                      <tr>
+                        <th scope="col">Part Name</th>
+                        <th scope="col">Category</th>
+                        <th scope="col" class="is-num">Price</th>
+                        <th scope="col" class="is-mid">Stock</th>
+                        <th scope="col" class="is-mid">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="pos-parts-body"></tbody>
+                  </table>
+                </div>
+
+                <div class="parts-foot">
+                  <span class="foot-note" id="parts-count-note">Loading parts…</span>
+                  <button type="button" class="mini-link" data-action="open-add-part" data-manager-only title="Add new part to inventory (Alt+A)">+ Add new part to inventory</button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- RIGHT: the running job summary, then payment -->
+          <aside class="counter__side">
+            <section class="panel summary" aria-labelledby="h-summary">
+              <header class="summary__head">
+                <div>
+                  <h2 class="panel__title" id="h-summary">Repair summary</h2>
+                  <span class="summary__ref" id="repair-ref">RO-000000</span>
+                </div>
+                <button type="button" class="copy-btn" data-action="copy-ref" title="Copy the job reference"
+                  aria-label="Copy the job reference">
+                  <i class="ph ph-copy w-4 h-4"></i>
+                </button>
+              </header>
+
+              <div class="summary__scroll">
+                <div class="field mb-2" id="pos-customer-wrap">
+                  <div class="field__label field__label--split mb-1">
+                    <div class="flex items-center gap-1.5">
+                      <label for="pos-customer-name">Customer <span class="field__opt">optional</span></label>
+                      <span id="pos-cust-status-badge" class="tag hidden" role="status"></span>
+                    </div>
+                    <button type="button" class="linkish shrink-0" data-action="toggle-note" title="Toggle repair note (Alt+N)">
+                      <i class="ph ph-note-blank w-3 h-3"></i>
+                      <span id="note-toggle-label">Add note</span>
+                    </button>
+                  </div>
+                  <div class="field__wrap">
+                    <input type="text" id="pos-customer-name" autocomplete="off"
+                      data-i18n-ph="pos.cust_search_ph"
+                      placeholder="Customer name or phone (shows unpaid balance)" title="Customer name (Alt+C)" class="text-xs py-1">
+                    <label class="sr-only" for="pos-customer-phone">Customer phone (optional)</label>
+                    <input type="text" id="pos-customer-phone" class="field__side text-xs py-1" inputmode="tel" autocomplete="off"
+                      placeholder="Phone">
+                  </div>
+                </div>
+
+                <div class="unit unit--compact hidden">
+                  <div class="unit__body w-full">
+                    <div class="flex items-center justify-between gap-1">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span class="unit__icon-badge">
+                          <i class="ph ph-device-mobile w-3.5 h-3.5"></i>
+                        </span>
+                        <span class="unit__name text-xs font-semibold truncate" id="sum-device-name">No device chosen</span>
+                      </div>
+                    </div>
+                    <div class="unit__meta text-slate-400 truncate mt-0.5" id="sum-device-meta">Pick a unit above, or enter one by hand.</div>
+                  </div>
+                </div>
+
+                <div class="field hidden" id="repair-note-wrap">
+                  <label class="field__label" for="repair-note">Job note <span class="field__opt">prints on receipt</span></label>
+                  <div class="field__wrap">
+                    <textarea id="repair-note" rows="2"
+                      placeholder="Reported fault, unlock code, cosmetic condition..."></textarea>
+                  </div>
+                </div>
+
+
+                <div class="sumgroup flex-1 min-h-0 flex flex-col">
+                  <div class="sumgroup__head py-1">
+                    <span class="sumgroup__title text-xs">Parts <span class="sumline__q" id="sum-parts-count">(0)</span></span>
+                    <span class="sumgroup__amt text-xs" id="sum-parts-total">₱0.00</span>
+                  </div>
+                  <div id="sum-parts" class="flex-1 overflow-y-auto"></div>
+                </div>
+              </div>
+
+              <div class="totals">
+                <div class="trow py-0.5">
+                  <span class="text-xs">Subtotal</span>
+                  <span class="trow__v text-xs" id="pos-subtotal">₱0.00</span>
+                </div>
+                <div class="trow py-0.5">
+                  <label for="pos-discount" class="text-xs">Discount (₱)</label>
+                  <input type="number" id="pos-discount" min="0" step="1" value="0" class="py-0.5 px-2 text-xs">
+                </div>
+                <div class="tgrand pt-1 mt-1">
+                  <span class="tgrand__l text-xs">Total due</span>
+                  <span class="tgrand__v text-lg" id="pos-total">₱0.00</span>
+                </div>
+
+                <!-- Direct checkout panel: compact payment methods and action buttons -->
+                <div class="checkout-panel mt-2">
+                  <div class="pay-grid mb-2" role="group" aria-label="Payment method">
+                    <button type="button" data-action="set-payment" data-method="cash" id="pay-cash-btn" class="pay-btn is-active"
+                      aria-pressed="true" title="Cash payment (Alt+1)">Cash</button>
+                    <button type="button" data-action="set-payment" data-method="gcash" id="pay-gcash-btn" class="pay-btn"
+                      aria-pressed="false" title="GCash payment (Alt+2)">GCash</button>
+                    <button type="button" data-action="set-payment" data-method="credit" id="pay-credit-btn" class="pay-btn"
+                      aria-pressed="false" title="Credit / Utang payment (Alt+3)">Credit</button>
+                    <button type="button" data-action="set-payment" data-method="transfer" id="pay-transfer-btn" class="pay-btn"
+                      aria-pressed="false" title="Bank transfer (Alt+4)">Transfer</button>
+                  </div>
+
+                  <!-- 1. Cash panel -->
+                  <div class="paypanel" id="payment-panel-cash">
+                    <div class="tender-chips" role="group" aria-label="Quick tender amounts">
+                      <button type="button" class="tender-chip" data-action="fill-exact" title="Exact due (Alt+E)">Exact</button>
+                      <button type="button" class="tender-chip" data-action="tender-add" data-amount="100">+₱100</button>
+                      <button type="button" class="tender-chip" data-action="tender-add" data-amount="500">+₱500</button>
+                      <button type="button" class="tender-chip" data-action="tender-add" data-amount="1000">+₱1,000</button>
+                    </div>
+                    <div class="pay-cash-row">
+                      <div class="field mb-0">
+                        <div class="field__label field__label--split mb-0.5">
+                          <label for="pos-tendered">Tendered (₱)</label>
+                        </div>
+                        <div class="field__wrap">
+                          <input type="number" id="pos-tendered" min="0" step="1" placeholder="0.00" class="py-1 px-2 text-xs">
+                        </div>
+                      </div>
+                      <div class="kv kv--pos pay-change-box">
+                        <span class="text-xs">Change</span>
+                        <strong id="pos-change" class="text-xs">₱0.00</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 2. GCash panel -->
+                  <div class="paypanel hidden" id="payment-panel-gcash">
+                    <div class="qr-row py-1 px-2">
+                      <div class="pname flex items-center gap-2">
+                        <button type="button" class="qr-thumb w-8 h-8" data-action="open-qr" title="Enlarge the GCash QR">
+                          <img id="pos-gcash-qr-thumb"
+                            src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+                            alt="GCash QR" width="32" height="32">
+                        </button>
+                        <div>
+                          <div class="qr-name text-xs leading-tight" id="pos-gcash-shop-name">GCash payment</div>
+                          <div class="pname__s font-mono text-xs" id="pos-gcash-shop-number">09xx-xxx-xxxx</div>
+                        </div>
+                      </div>
+                      <div class="sumgroup__amt text-xs" id="pos-gcash-amount-badge">₱0.00</div>
+                    </div>
+                    <div class="field mb-0">
+                      <label class="field__label" for="pos-gcash-ref">GCash ref #</label>
+                      <div class="field__wrap">
+                        <input type="text" id="pos-gcash-ref" class="font-mono text-xs py-1" placeholder="Ref no.">
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 3. Credit (utang) panel -->
+                  <div class="paypanel hidden" id="payment-panel-credit">
+                    <div class="field mb-0">
+                      <label class="field__label" for="pos-credit-downpayment">Downpayment (₱)</label>
+                      <div class="field__wrap">
+                        <input type="number" id="pos-credit-downpayment" min="0" step="1" value="0" class="text-xs py-1">
+                      </div>
+                    </div>
+                    <div class="kv kv--danger py-1 px-2">
+                      <span class="text-xs">New utang balance</span>
+                      <strong id="pos-credit-balance-preview" class="text-xs">₱0.00</strong>
+                    </div>
+                  </div>
+
+                  <!-- 4. Bank transfer panel -->
+                  <div class="paypanel hidden" id="payment-panel-transfer">
+                    <div class="field mb-0">
+                      <label class="field__label" for="pos-transfer-ref">Transfer ref #</label>
+                      <div class="field__wrap">
+                        <input type="text" id="pos-transfer-ref" class="font-mono text-xs py-1"
+                          placeholder="Transfer ref / transaction ID">
+                      </div>
+                    </div>
+                  </div>
+
+                  <button type="button" class="btn-primary btn-primary--pos mt-2 py-2 text-xs" data-action="complete-sale">
+                    <i class="ph ph-check-circle w-3.5 h-3.5"></i>
+                    <span>Add items to checkout (F9)</span>
+                  </button>
+
+                  <div class="checkout-sub-actions mt-1.5 flex gap-2">
+                    <button type="button" class="btn-quiet flex-1 py-1 text-xs" data-action="hold-draft" title="Hold current job (Alt+H)">
+                      <i class="ph ph-floppy-disk w-3.5 h-3.5"></i>
+                      <span>Hold job</span>
+                    </button>
+                    <button type="button" class="btn-quiet flex-1 py-1 text-xs" data-action="print-claim-stub" data-i18n-title="pos.claim_stub_tt" title="Print claim stub before repair starts">
+                      <i class="ph ph-printer w-3.5 h-3.5"></i>
+                      <span>Claim stub</span>
+                    </button>
+                    <button type="button" class="btn-quiet flex-1 py-1 text-xs text-rose-400 hover:text-rose-300" data-action="clear-order" title="Clear order (Alt+X)">
+                      <i class="ph ph-trash w-3.5 h-3.5"></i>
+                      <span>Clear</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </aside>
+        </div>
+
+
+        <!-- 2. CUSTOMER CREDITS (UTANG) VIEW -->
+        <div id="view-credits" class="tab-view h-full flex flex-col gap-4 hidden">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 shrink-0 stagger">
+            <div class="stat stat--pos">
+              <span class="stat__label">Total customers</span>
+              <span id="customers-total-count" class="stat__value">0</span>
+              <span class="stat__meta">Unique customer profiles</span>
+            </div>
+            <div class="stat stat--warn">
+              <span class="stat__label">Active utang</span>
+              <span id="customers-active-utang" class="stat__value">0</span>
+              <span class="stat__meta">Customers with a remaining balance</span>
+            </div>
+            <div class="stat stat--danger">
+              <span class="stat__label">Outstanding utang</span>
+              <span id="credit-total-outstanding" class="stat__value">₱0.00</span>
+              <span class="stat__meta">Unpaid balance across all customers</span>
+            </div>
+          </div>
+
+          <!-- Toolbar -->
+          <section class="panel shrink-0">
+            <div class="parts-tools">
+              <label class="sr-only" for="credit-search">Search customer name or phone</label>
+              <span class="field-search">
+                <i class="ph ph-magnifying-glass w-4 h-4"></i>
+                <input type="text" id="credit-search" autocomplete="off"
+                  placeholder="Search customer name or phone…">
+              </span>
+              <label class="sr-only" for="credit-filter">Filter customers</label>
+              <select id="credit-filter" class="select-sm">
+                <option value="">All Customers</option>
+                <option value="credit">Has Active Utang Only</option>
+                <option value="clean">Clean / Fully Paid Only</option>
+              </select>
+              <button type="button" data-action="reload-customers" class="btn-mini">
+                <i class="ph ph-arrows-clockwise w-3.5 h-3.5"></i> Refresh List
+              </button>
+            </div>
+            <p id="credit-name-variants" class="foot-note hidden" role="status"></p>
+          </section>
+
+          <!-- Customers Table -->
+          <section class="panel flex-1 min-h-0">
+            <div class="overflow-y-auto flex-1 min-h-0">
+              <table class="ptable">
+                <thead>
+                  <tr>
+                    <th class="flex items-center justify-between">
+                      <span>Customer Profile</span>
+                      <span class="text-right">Balance / Status</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody id="customers-tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <!-- 3. INVENTORY VIEW -->
+        <div id="view-inventory" class="tab-view h-full flex flex-col gap-4 hidden">
+          <section class="panel shrink-0">
+            <div class="parts-tools">
+              <label class="sr-only" for="inv-search">Search phone model, part type, or SKU</label>
+              <span class="field-search">
+                <i class="ph ph-magnifying-glass w-4 h-4"></i>
+                <input type="text" id="inv-search" autocomplete="off"
+                  placeholder="Search phone model, part type, or SKU…">
+              </span>
+              <label class="sr-only" for="inv-brand-filter">Filter parts by brand</label>
+              <select id="inv-brand-filter" class="select-sm">
+                <option value="">All Brands</option>
+              </select>
+              <label class="check check--pill">
+                <input type="checkbox" id="inv-low-stock-check">
+                <span>Low Stock Alert</span>
+              </label>
+              <label class="check check--pill">
+                <input type="checkbox" id="inv-archived-check">
+                <span>Show archived</span>
+              </label>
+              <!-- Import/export on the toolbar; all three are manager-only
+                   and elevation-gated server-side. -->
+              <span class="flex gap-2">
+                <button type="button" class="btn-mini" data-action="import-template" data-manager-only
+                  data-i18n-title="inv.download_template" title="Download template">
+                  <i class="ph ph-download-simple w-3.5 h-3.5"></i> Template
+                </button>
+                <button type="button" class="btn-mini" data-action="export-inventory-csv" data-manager-only
+                  title="Export inventory to CSV">
+                  <i class="ph ph-download-simple w-3.5 h-3.5"></i> Export
+                </button>
+                <button type="button" class="btn-mini" data-action="import-csv" data-manager-only
+                  data-i18n-title="inv.import_tt" title="Import parts from Excel or CSV (uses markup from Settings > Store)">
+                  <i class="ph ph-upload-simple w-3.5 h-3.5"></i> <span data-i18n="inv.import">Import</span>
+                </button>
+                <input type="file" id="inv-import-file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
+              </span>
+              <button type="button" id="inv-add-part-btn" data-action="open-add-part" class="btn-primary" data-manager-only>
+                <i class="ph ph-plus-circle w-4 h-4"></i> <span data-i18n="inv.add_part">Add New Phone Part</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="panel flex-1 min-h-0">
+            <p class="foot-note mb-2" data-i18n="inv.bulk_hint">Check parts to edit prices, recalculate markup, or change location.</p>
+            <!-- Floating bulk action toolbar -->
+            <div id="inv-bulk-bar" class="inv-bulk-bar hidden" aria-live="polite">
+              <div class="flex items-center gap-2">
+                <span id="inv-bulk-count" class="font-bold">0 selected</span>
+                <button type="button" id="inv-bulk-clear-btn" data-action="bulk-clear" class="btn-quiet text-xs py-0.5 px-2" data-i18n="inv.clear">Clear</button>
+              </div>
+              <div class="flex items-center gap-2">
+                <button type="button" id="inv-bulk-edit-btn" data-action="bulk-edit" class="btn-primary text-xs py-1 px-3">
+                  <i class="ph ph-pencil-simple w-3.5 h-3.5"></i> <span data-i18n="inv.bulk_edit">Bulk Edit</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="overflow-y-auto flex-1 min-h-0">
+              <table class="ptable">
+                <thead>
+                  <tr>
+                    <th class="w-8 text-center">
+                      <input type="checkbox" id="inv-select-all" class="checkbox-sm cursor-pointer" title="Select all visible parts" aria-label="Select all visible parts">
+                    </th>
+                    <th data-i18n="inv.th_model">Brand / Model</th>
+                    <th data-i18n="inv.th_type">Part Type / Screen Tech</th>
+                    <th class="is-num" data-i18n="inv.th_cost">Capital (₱)</th>
+                    <th class="is-num" data-i18n="inv.th_retail">Retail (₱)</th>
+                    <th class="is-num" data-i18n="inv.th_wholesale">Wholesale (₱)</th>
+                    <th class="is-mid" data-i18n="inv.th_stock">Stock Qty</th>
+                    <th class="is-mid" data-i18n="inv.th_status">Status</th>
+                    <th class="is-mid" data-i18n="inv.th_actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="inventory-tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <!-- 4. WARRANTY & RETURNS VIEW -->
+        <div id="view-returns" class="tab-view h-full flex flex-col gap-4 hidden">
+          <section class="panel shrink-0">
+            <div class="parts-tools">
+              <label class="sr-only" for="returns-search">Search return code, customer, or part name</label>
+              <span class="field-search">
+                <i class="ph ph-magnifying-glass w-4 h-4"></i>
+                <input type="text" id="returns-search" autocomplete="off"
+                  data-i18n-ph="returns.search_ph"
+                  placeholder="Search by receipt number, customer name, or barcode">
+              </span>
+              <label class="sr-only" for="returns-type-filter">Filter return types</label>
+              <select id="returns-type-filter" class="select-sm">
+                <option value="">All Returns</option>
+                <option value="replacement">Part Replacements</option>
+                <option value="credit_refund">Credit Refunds</option>
+                <option value="cash_refund">Cash Refunds</option>
+              </select>
+              <button type="button" data-action="reload-returns" class="btn-mini">
+                <i class="ph ph-arrows-clockwise w-3.5 h-3.5"></i> Refresh Returns
+              </button>
+            </div>
+          </section>
+
+          <section class="panel flex-1 min-h-0">
+            <div class="overflow-y-auto flex-1 min-h-0">
+              <table class="ptable">
+                <thead>
+                  <tr>
+                    <th>Return Code</th>
+                    <th>Date / Time</th>
+                    <th>Customer Name</th>
+                    <th>Returned Item</th>
+                    <th>Defect Reason</th>
+                    <th class="is-mid">Action Taken</th>
+                    <th class="is-num">Refund / Value</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody id="returns-tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <!-- 5. SALES HISTORY VIEW -->
+        <div id="view-sales" class="tab-view h-full flex flex-col gap-4 hidden">
+          <section class="panel shrink-0">
+            <div class="parts-tools">
+              <label class="sr-only" for="sales-search">Search sale code, customer, or GCash ref</label>
+              <span class="field-search">
+                <i class="ph ph-magnifying-glass w-4 h-4"></i>
+                <input type="text" id="sales-search" autocomplete="off"
+                  placeholder="Search sale code, customer, or GCash ref…">
+              </span>
+              <label class="sr-only" for="sales-payment-filter">Filter by payment method</label>
+              <select id="sales-payment-filter" class="select-sm">
+                <option value="">All Payments</option>
+                <option value="cash">Cash</option>
+                <option value="gcash">GCash</option>
+                <option value="credit">Credit (Utang)</option>
+                <option value="transfer">Bank Transfer</option>
+              </select>
+              <button type="button" data-action="reload-sales" class="btn-mini">
+                <i class="ph ph-arrows-clockwise w-3.5 h-3.5"></i> Refresh
+              </button>
+            </div>
+          </section>
+
+          <section class="panel flex-1 min-h-0">
+            <div class="overflow-y-auto flex-1 min-h-0">
+              <table class="ptable">
+                <thead>
+                  <tr>
+                    <th>Sale Code</th>
+                    <th>Date / Time</th>
+                    <th>Customer Name</th>
+                    <th>Payment Method</th>
+                    <th class="is-num">Subtotal</th>
+                    <th class="is-num">Discount</th>
+                    <th class="is-num">Total (₱)</th>
+                    <th class="is-num">Credit Balance</th>
+                    <th class="is-mid">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="sales-tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <!-- 6. REPORTS & DASHBOARD VIEW -->
+        <div id="view-dashboard" class="tab-view h-full flex flex-col gap-4 overflow-y-auto pr-1 hidden">
+
+          <!-- Period bar: the window selector drives every panel below -->
+          <div id="dash-period-bar" class="dash-toolbar shrink-0">
+            <div class="seg" role="group" aria-label="Report period">
+              <button type="button" class="seg__btn is-active" data-period="day">Daily</button>
+              <button type="button" class="seg__btn" data-period="3d">3-Day</button>
+              <button type="button" class="seg__btn" data-period="7d">Weekly</button>
+              <button type="button" class="seg__btn" data-period="30d">Monthly</button>
+              <button type="button" class="seg__btn" data-period="365d">Yearly</button>
+              <button type="button" class="seg__btn" data-period="custom">Custom</button>
+            </div>
+            <label id="dash-date-from-wrap" class="dash-date hidden" for="dash-date-from">
+              <i class="ph ph-calendar-blank w-4 h-4"></i>
+              <span>Starting</span><input type="date" id="dash-date-from" aria-label="Custom range starting date">
+            </label>
+            <label id="dash-date-wrap" class="dash-date" for="dash-date">
+              <i class="ph ph-calendar-blank w-4 h-4"></i>
+              <span>Ending</span><input type="date" id="dash-date" aria-label="Report window ending date">
+            </label>
+            <span id="dash-range" class="foot-note font-mono" role="status"></span>
+            <span id="dash-freshness" class="tag font-mono text-xs" role="status" aria-live="polite" hidden></span>
+            <span class="flex-1"></span>
+            <button type="button" class="btn-mini" data-dash-action="print">
+              <i class="ph ph-printer w-3.5 h-3.5"></i> Print summary
+            </button>
+          </div>
+
+          <!-- Manager Live View prompt banner -->
+          <div id="dash-cloud-banner" class="p-3 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-2)] flex items-center justify-between gap-3 text-xs shrink-0">
+            <div class="flex items-center gap-2.5">
+              <span class="w-8 h-8 rounded-lg bg-[var(--accent-soft)] text-[var(--accent-hi)] flex items-center justify-center shrink-0">
+                <i class="ph ph-device-mobile w-4 h-4"></i>
+              </span>
+              <div>
+                <div class="flex items-center gap-2">
+                  <strong class="text-[var(--txt)] font-semibold">Manager Live View</strong>
+                  <span id="dash-cloud-badge" class="px-1.5 py-0.2 rounded text-[10px] font-mono border border-[var(--line)] bg-[var(--surface-3)] text-[var(--txt-3)]">Remote Access</span>
+                </div>
+                <span id="dash-cloud-text" class="text-[var(--txt-3)]">View live store sales and cash drawer from your phone anytime at <a href="https://repairsync.bot-keep.xyz/" target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 font-mono text-[var(--txt)]">repairsync.bot-keep.xyz</a>.</span>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button type="button" class="btn-mini btn-primary" data-action="open-cloud-settings">
+                <i class="ph ph-link w-3.5 h-3.5"></i> <span id="dash-cloud-btn-label">Pair Phone</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- KPI row: every figure reads against the previous equal window -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 shrink-0 stagger">
+            <div class="stat stat--pos">
+              <span class="stat__label">Revenue</span>
+              <span id="dash-revenue" class="stat__value">₱0.00</span>
+              <span class="stat__meta flex items-center gap-2">
+                <span id="dash-revenue-delta" class="tag">-</span>
+                <span id="dash-revenue-split" class="foot-note font-mono truncate"></span>
+              </span>
+            </div>
+            <div class="stat">
+              <span class="stat__label">Sales completed</span>
+              <span id="dash-sales" class="stat__value">0</span>
+              <span class="stat__meta flex items-center gap-2">
+                <span id="dash-sales-delta" class="tag">-</span>
+                <span id="dash-sales-meta" class="foot-note font-mono"></span>
+              </span>
+            </div>
+            <div class="stat">
+              <span class="stat__label">Average ticket</span>
+              <span id="dash-avg-ticket" class="stat__value">₱0.00</span>
+              <span class="stat__meta flex items-center gap-2">
+                <span id="dash-avg-delta" class="tag">-</span>
+                <span id="dash-avg-meta" class="foot-note font-mono truncate"></span>
+              </span>
+            </div>
+            <div class="stat stat--pos">
+              <span class="stat__label">Gross profit</span>
+              <span id="dash-profit" class="stat__value">₱0.00</span>
+              <span class="stat__meta flex items-center gap-2">
+                <span id="dash-profit-delta" class="tag">-</span>
+                <span id="dash-profit-meta" class="foot-note font-mono truncate"></span>
+              </span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 shrink-0">
+            <section class="panel lg:col-span-2">
+              <header class="panel__head">
+                <div>
+                  <h2 class="panel__title" id="dash-trend-title">Revenue trend</h2>
+                  <p class="panel__hint" id="dash-trend-hint">Per day, hover a bar for detail.</p>
+                </div>
+                <div class="seg seg--mini" id="dash-trend-mode" role="group" aria-label="Chart series">
+                  <button type="button" class="seg__btn is-active" data-mode="revenue">Revenue</button>
+                  <button type="button" class="seg__btn" data-mode="profit">After-refund profit</button>
+                </div>
+              </header>
+              <div id="dash-trend" class="panel__body"></div>
+            </section>
+
+            <section class="panel">
+              <header class="panel__head">
+                <div>
+                  <h2 class="panel__title">Collections</h2>
+                  <p class="panel__hint">Money in during this window.</p>
+                </div>
+                <div class="panel__tools foot-note"><i class="ph ph-wallet w-4 h-4"></i></div>
+              </header>
+              <div class="panel__body space-y-2">
+                <div id="dash-pmix" class="space-y-2"></div>
+                <div class="hairline"></div>
+                <div id="dash-standing" class="space-y-2"></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 shrink-0">
+            <section class="panel">
+              <header class="panel__head">
+                <div>
+                  <h2 class="panel__title">Top performing parts</h2>
+                  <p class="panel__hint">Best sellers this window.</p>
+                </div>
+                <div class="seg seg--mini" id="dash-top-sort" role="group" aria-label="Rank top parts by">
+                  <button type="button" class="seg__btn is-active" data-sort="revenue">Revenue</button>
+                  <button type="button" class="seg__btn" data-sort="units">Units</button>
+                  <button type="button" class="seg__btn" data-sort="profit">Profit</button>
+                </div>
+              </header>
+              <div id="dash-top-products" class="panel__body"></div>
+            </section>
+
+            <section class="panel">
+              <header class="panel__head">
+                <div>
+                  <h2 class="panel__title">Dead stock</h2>
+                  <p class="panel__hint">Zero sales this window, ranked by capital on the shelf.</p>
+                </div>
+                <div class="panel__tools foot-note"><i class="ph ph-package w-4 h-4"></i></div>
+              </header>
+              <div id="dash-dead-stock" class="panel__body"></div>
+            </section>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 shrink-0">
+            <section class="panel">
+              <header class="panel__head">
+                <div>
+                  <h2 class="panel__title">Reorder list</h2>
+                  <p class="panel__hint">Below minimum, or less than 14 days of cover left.</p>
+                </div>
+                <div class="panel__tools foot-note"><i class="ph ph-warning w-4 h-4"></i></div>
+              </header>
+              <div id="dash-reorder" class="panel__body space-y-2"></div>
+            </section>
+
+            <section class="panel">
+              <header class="panel__head">
+                <div>
+                  <h2 class="panel__title">Day close</h2>
+                  <p class="panel__hint">Count the drawer against the day's takings and sign the difference.</p>
+                </div>
+                <div class="panel__tools">
+                  <label class="sr-only" for="day-close-date">Day to reconcile</label>
+                  <input type="date" id="day-close-date" class="select-sm">
+                </div>
+              </header>
+              <div class="panel__body text-xs space-y-2" id="day-close-body">Loading…</div>
+            </section>
+
+            <section class="panel">
+              <header class="panel__head">
+                <div>
+                  <h2 class="panel__title">Exceptions</h2>
+                  <p class="panel__hint" id="dash-exceptions-hint">Voids, cash refunds, large discounts, drawer variances, audit chain.</p>
+                </div>
+                <div class="panel__tools foot-note"><i class="ph ph-warning-octagon w-4 h-4"></i></div>
+              </header>
+              <div class="panel__body text-xs space-y-2" id="exceptions-panel">Loading…</div>
+            </section>
+          </div>
+
+          <!-- Quick actions: the jobs a manager usually opens the reports view to do -->
+          <div class="qa-row shrink-0">
+            <button data-action="start-new-sale" class="qa">
+              <span class="qa__icon" data-tone="accent"><i class="ph ph-calculator w-4 h-4"></i></span>
+              <span class="block text-left">
+                <span class="qa__title block">Start a new sale</span>
+                <span class="qa__meta block">Back to the counter - F1</span>
+              </span>
+            </button>
+            <button data-action="open-add-part" class="qa">
+              <span class="qa__icon" data-tone="pos"><i class="ph ph-plus-circle w-4 h-4"></i></span>
+              <span class="block text-left">
+                <span class="qa__title block">Add a phone part</span>
+                <span class="qa__meta block">New model, pricing and stock</span>
+              </span>
+            </button>
+            <button data-action="switch-tab" data-tab="credits" class="qa">
+              <span class="qa__icon" data-tone="warn"><i class="ph ph-credit-card w-4 h-4"></i></span>
+              <span class="block text-left">
+                <span class="qa__title block">Chase utang</span>
+                <span class="qa__meta block">Open balances and settlements</span>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 7. AUDIT LOG VIEW (manager-only) -->
+        <div id="view-audit" class="tab-view h-full flex flex-col gap-3 hidden">
+          <section class="panel shrink-0">
+            <!-- Row 1: chain chip + actor search + time range + refresh -->
+            <div class="audit-toolbar-row">
+              <span id="audit-chain" class="chain-chip" title="Hash-chain integrity of the audit log">
+                <span class="chain-chip__dot"></span>Verifying…
+              </span>
+              <label class="sr-only" for="audit-filter-actor">Filter by staff name</label>
+              <span class="field-search audit-actor-search">
+                <i class="ph ph-magnifying-glass w-4 h-4"></i>
+                <input type="text" id="audit-filter-actor" autocomplete="off" placeholder="Filter by who…">
+              </span>
+              <span class="flex-1"></span>
+              <label class="sr-only" for="audit-filter-days">Filter by time range</label>
+              <select id="audit-filter-days" class="select-sm">
+                <option value="7">Last 7 days</option>
+                <option value="30" selected>Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="0">All time</option>
+              </select>
+              <button type="button" data-action="reload-audit" class="btn-mini">
+                <i class="ph ph-arrows-clockwise w-3.5 h-3.5"></i> Refresh
+              </button>
+            </div>
+            <!-- Row 2: category chips -->
+            <div class="audit-cats" data-audit-cats role="group" aria-label="Filter by category">
+              <button type="button" class="audit-cat-chip is-active" data-cat="">All</button>
+              <button type="button" class="audit-cat-chip audit-cat--security" data-cat="security">Security</button>
+              <button type="button" class="audit-cat-chip audit-cat--sale" data-cat="sale">Sales</button>
+              <button type="button" class="audit-cat-chip audit-cat--inventory" data-cat="inventory">Stock</button>
+              <button type="button" class="audit-cat-chip audit-cat--credit" data-cat="credit">Credits</button>
+              <button type="button" class="audit-cat-chip audit-cat--system" data-cat="system">System</button>
+            </div>
+          </section>
+
+          <section class="panel flex-1 min-h-0">
+            <div class="overflow-y-auto flex-1 min-h-0">
+              <table class="ptable audit-table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Who</th>
+                    <th>What</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody id="audit-tbody"></tbody>
+              </table>
+            </div>
+            <div class="audit-foot">
+              <span class="foot-note" id="audit-count">-</span>
+              <button type="button" id="audit-more" class="btn-quiet hidden">Load more</button>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ==================== MODALS ==================== -->
+
+  <!-- 1. Add Part Modal -->
+  <div id="modal-add-part"
+    class="fixed inset-0 modal-backdrop z-50 flex items-center justify-center hidden p-4 no-print">
+    <div class="modal-card w-full max-w-md">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title" id="add-part-title"><i class="ph ph-package w-4 h-4"></i> <span data-i18n="part.add_title">Add Phone Part</span></h3>
+        <button type="button" data-action="close-modal" data-modal="modal-add-part" class="modal-card__x" aria-label="Close">
+          <i class="ph ph-x w-4 h-4"></i>
+        </button>
+      </div>
+      <form id="form-add-part" class="modal-card__body space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="field">
+            <label class="field__label" for="part-brand" data-i18n="part.brand">Brand *</label>
+            <select id="part-brand" required class="w-full px-3 py-2 text-xs">
+              <option value="Apple">Apple</option>
+              <option value="Samsung">Samsung</option>
+              <option value="Xiaomi">Xiaomi</option>
+              <option value="Infinix">Infinix</option>
+              <option value="Tecno">Tecno</option>
+              <option value="Realme">Realme</option>
+              <option value="Oppo">Oppo</option>
+              <option value="Vivo">Vivo</option>
+              <option value="Huawei">Huawei</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="part-model" data-i18n="part.model">Model Name *</label>
+            <input type="text" id="part-model" required placeholder="e.g. iPhone 11 / A12"
+              class="w-full px-3 py-2 text-xs">
+          </div>
+        </div>
+        <div class="field">
+          <label class="field__label" for="part-type" data-i18n="part.type">Part Type / Screen Spec *</label>
+          <input type="text" id="part-type" required placeholder="e.g. LCD (OLED), LCD (Incell), Battery 4000mAh"
+            class="w-full px-3 py-2 text-xs" autocomplete="off">
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div class="field">
+            <label class="field__label" for="part-sku" data-i18n="part.sku">SKU / Barcode</label>
+            <input type="text" id="part-sku" placeholder="e.g. AP-LCD-11" autocomplete="off"
+              class="w-full px-3 py-1.5 text-xs font-mono">
+            <p id="part-sku-warn" class="foot-note hidden" style="color:#f59e0b;margin:4px 0 0;">This SKU is already assigned to another part.</p>
+          </div>
+          <div class="field">
+            <label class="field__label" for="part-supplier" data-i18n="part.supplier">Supplier</label>
+            <input type="text" id="part-supplier" placeholder="e.g. Greenleaf" autocomplete="off"
+              class="w-full px-3 py-1.5 text-xs">
+          </div>
+          <div class="field">
+            <label class="field__label" for="part-location" data-i18n="part.location">Location</label>
+            <input type="text" id="part-location" placeholder="e.g. Drawer B2" autocomplete="off"
+              class="w-full px-3 py-1.5 text-xs">
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div class="field">
+            <label class="field__label" for="part-cost" data-i18n="part.cost">Capital (₱) *</label>
+            <input type="number" id="part-cost" required min="0" step="1" placeholder="450"
+              class="w-full px-2.5 py-1.5 text-xs font-mono">
+          </div>
+          <div class="field">
+            <label class="field__label" for="part-retail" data-i18n="part.retail">Retail (₱) *</label>
+            <input type="number" id="part-retail" required min="0" step="1" placeholder="1100"
+              class="w-full px-2.5 py-1.5 text-xs font-mono">
+          </div>
+          <div class="field">
+            <label class="field__label" for="part-tech" data-i18n="part.wholesale">Wholesale (₱) *</label>
+            <input type="number" id="part-tech" required min="0" step="1" placeholder="850"
+              class="w-full px-2.5 py-1.5 text-xs font-mono">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="field">
+            <label class="field__label" for="part-stock" data-i18n="part.stock">Stock Qty *</label>
+            <input type="number" id="part-stock" required min="0" value="5"
+              class="w-full px-3 py-1.5 text-xs font-mono">
+          </div>
+          <div class="field">
+            <label class="field__label" for="part-min-alert" data-i18n="part.min_alert">Min Stock Alert</label>
+            <input type="number" id="part-min-alert" min="1" value="2" class="w-full px-3 py-1.5 text-xs font-mono">
+          </div>
+        </div>
+        <div class="modal-card__foot">
+          <button type="button" data-action="close-modal" data-modal="modal-add-part" class="btn-quiet" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn-primary" data-i18n="part.save">Save Part</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+
+  <!-- 3. Customer 360 Drawer (slide-over; opens from anywhere a customer name appears) -->
+  <div id="modal-customer-ledger"
+    class="drawer-backdrop modal-backdrop fixed inset-0 z-50 hidden no-print">
+    <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="ledger-customer-name">
+      <div class="modal-card__head">
+        <div class="flex items-center gap-3 min-w-0">
+          <span class="pname__icon"><i class="ph ph-user-check w-5 h-5" aria-hidden="true"></i></span>
+          <div class="min-w-0">
+            <h3 class="modal-card__title truncate" id="ledger-customer-name">Customer Name</h3>
+            <div class="foot-note font-mono truncate" id="ledger-customer-phone">Phone: 0917-xxx-xxxx</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-4 shrink-0">
+          <div class="text-right">
+            <div class="stat__label">Outstanding / Limit</div>
+            <div class="flex items-center justify-end gap-1.5">
+              <span class="stat__value stat--danger font-mono" id="ledger-credit-balance">₱0.00</span>
+              <span class="text-xs text-[var(--txt-3)] font-mono">/</span>
+              <span class="text-xs font-mono font-bold text-[var(--txt-2)]" id="ledger-credit-limit">No limit</span>
+              <button type="button" class="btn-mini text-xs py-0.5 px-1.5 ml-1" data-action="edit-credit-limit" title="Set credit limit">Limit</button>
+            </div>
+          </div>
+          <button type="button" data-action="close-modal" data-modal="modal-customer-ledger" class="modal-card__x" aria-label="Close customer panel">
+            <i class="ph ph-x w-4 h-4" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="drawer__actions">
+        <button type="button" class="btn-primary" data-action="start-sale-for-customer">
+          <i class="ph ph-shopping-bag-open w-3.5 h-3.5" aria-hidden="true"></i>
+          <span>Start sale for this customer</span>
+        </button>
+      </div>
+
+      <div class="drawer-stats">
+        <div class="drawer-stat">
+          <div class="stat__label">Orders</div>
+          <div class="stat__v" id="ledger-orders-count">0</div>
+        </div>
+        <div class="drawer-stat">
+          <div class="stat__label">Total purchases</div>
+          <div class="stat__v" id="ledger-total-purchases">₱0.00</div>
+        </div>
+        <div class="drawer-stat">
+          <div class="stat__label">Total paid</div>
+          <div class="stat__v" id="ledger-total-paid">₱0.00</div>
+        </div>
+        <div class="drawer-stat">
+          <div class="stat__label">Status</div>
+          <div class="flex items-center gap-1.5 mt-1 min-h-[22px]" id="ledger-credit-status"></div>
+        </div>
+      </div>
+
+      <form id="form-settle-credit" class="settle-panel" autocomplete="off">
+        <div class="field">
+          <label class="field__label" for="settle-amount">Amount to pay</label>
+          <div class="settle-field-wrap">
+            <span class="settle-currency">₱</span>
+            <input type="number" id="settle-amount" required min="1" step="any" placeholder="0.00" class="settle-amount-input" inputmode="decimal">
+            <button type="button" class="settle-full-btn" data-action="fill-full-settlement" title="Fill full outstanding balance">Full</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field__label" for="settle-method">Payment via</label>
+          <div class="field__wrap">
+            <select id="settle-method" class="settle-method-select text-xs">
+              <option value="cash">Cash</option>
+              <option value="gcash">GCash</option>
+              <option value="transfer">Bank</option>
+            </select>
+          </div>
+        </div>
+        <div id="settle-ref-container" class="field hidden">
+          <label class="field__label" for="settle-ref">Ref # / proof</label>
+          <div class="field__wrap">
+            <input type="text" id="settle-ref" placeholder="Reference #" class="settle-ref-input text-xs font-mono">
+          </div>
+        </div>
+        <div class="shrink-0">
+          <button type="submit" id="btn-submit-settlement" class="settle-submit">
+            <i class="ph ph-check w-3.5 h-3.5" aria-hidden="true"></i>
+            <span>Settle payment</span>
+          </button>
+        </div>
+      </form>
+
+      <div class="flex-1 min-h-0 flex flex-col p-4 bg-[var(--surface)]">
+        <div class="ledger-tabs-row shrink-0">
+          <div class="inline-flex p-1 rounded-lg bg-[var(--surface-2)] border border-[var(--line-soft)]" role="tablist">
+            <button type="button" data-action="ledger-tab" data-tab="sales" id="ledger-tab-btn-sales" class="ledger-pill is-active" role="tab" aria-selected="true">
+              <i class="ph ph-tote-simple w-3.5 h-3.5" aria-hidden="true"></i>
+              <span>Purchase History</span>
+              <span id="ledger-sales-count" class="ledger-pill-count">0</span>
+            </button>
+            <button type="button" data-action="ledger-tab" data-tab="payments" id="ledger-tab-btn-payments" class="ledger-pill" role="tab" aria-selected="false">
+              <i class="ph ph-receipt w-3.5 h-3.5" aria-hidden="true"></i>
+              <span>Payment Receipts</span>
+              <span id="ledger-payments-count" class="ledger-pill-count">0</span>
+            </button>
+            <button type="button" data-action="ledger-tab" data-tab="returns" id="ledger-tab-btn-returns" class="ledger-pill" role="tab" aria-selected="false">
+              <i class="ph ph-shield-warning w-3.5 h-3.5" aria-hidden="true"></i>
+              <span>Returns / RMA</span>
+              <span id="ledger-returns-count" class="ledger-pill-count">0</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="ledger-tab-sales" class="flex-1 overflow-y-auto space-y-2 pr-1" role="tabpanel"></div>
+        <div id="ledger-tab-payments" class="flex-1 overflow-y-auto space-y-2 pr-1 hidden" role="tabpanel"></div>
+        <div id="ledger-tab-returns" class="flex-1 overflow-y-auto space-y-2 pr-1 hidden" role="tabpanel"></div>
+        <div class="ledger-end">Full history is kept on this workstation. Sales history has the searchable record.</div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- GLOBAL SEARCH PALETTE (Ctrl+K) -->
+  <div id="modal-search" class="fixed inset-0 modal-backdrop z-[70] flex items-start justify-center hidden pt-[10vh] no-print">
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Global search">
+      <div class="palette__input-row">
+        <i class="ph ph-magnifying-glass w-4 h-4"></i>
+        <input type="text" id="palette-input" autocomplete="off" spellcheck="false"
+          placeholder="Search customers or parts…" aria-label="Search customers or parts">
+        <kbd>Esc</kbd>
+      </div>
+      <div id="palette-results" class="palette__results" role="listbox"></div>
+    </div>
+  </div>
+
+  <!-- 4. Warranty & Return Action Modal -->
+  <div id="modal-warranty-return"
+    class="fixed inset-0 modal-backdrop z-50 flex items-center justify-center hidden p-4 no-print">
+    <div class="modal-card w-full max-w-md">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title" id="warranty-return-title"><i class="ph ph-shield-warning w-4 h-4"></i> Warranty &amp; Return Claim</h3>
+        <button type="button" data-action="close-modal" data-modal="modal-warranty-return" class="modal-card__x" aria-label="Close">
+          <i class="ph ph-x w-4 h-4"></i>
+        </button>
+      </div>
+      <form id="form-warranty-return" class="modal-card__body space-y-3.5">
+        <input type="hidden" id="return-sale-id">
+        <div class="space-y-1">
+          <div class="kv"><span>Sale code</span><strong id="return-modal-sale-code">--</strong></div>
+          <div class="kv"><span>Date</span><strong id="return-modal-sale-date">--</strong></div>
+          <div class="kv"><span>Customer</span><span class="font-bold" id="return-modal-customer">--</span></div>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="return-item-select">Select item to return / replace *</label>
+          <select id="return-item-select" required class="w-full px-3 py-2 text-xs"></select>
+        </div>
+
+        <div class="field" id="return-qty-field">
+          <label class="field__label" for="return-quantity">Quantity to return *</label>
+          <div class="flex items-center gap-2">
+            <input type="number" id="return-quantity" min="1" max="1" value="1" required
+              class="w-24 px-3 py-2 text-xs font-mono font-bold" inputmode="numeric">
+            <span class="text-xs text-[var(--txt-3)]" id="return-quantity-hint"></span>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="return-reason">Defect issue / reason *</label>
+          <select id="return-reason" required class="w-full px-3 py-2 text-xs">
+            <option value="ghost_touch">Ghost Touch / Auto-touching</option>
+            <option value="touch_dead_spots">Touch Screen Dead Spots</option>
+            <option value="no_display">No Display / Black Screen</option>
+            <option value="lines_flickering">Display Lines / Flickering</option>
+            <option value="battery_drain">Fast Drain / Not Charging (Battery)</option>
+            <option value="wrong_item">Wrong Part Ordered</option>
+            <option value="other">Other Defect / Reason</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="return-action">Warranty action *</label>
+          <select id="return-action" required class="w-full px-3 py-2 text-xs font-bold">
+            <option value="replacement">Replace with fresh part (deduct stock)</option>
+            <option value="credit_refund">Void / deduct from credit (utang)</option>
+            <option value="cash_refund">Cash / GCash refund payout</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="return-notes">Diagnosis / problem notes</label>
+          <input type="text" id="return-notes" placeholder="e.g. Tested flex intact, warranty sticker verified"
+            class="w-full px-3 py-2 text-xs">
+        </div>
+
+        <div class="modal-card__foot">
+          <button type="button" data-action="close-modal" data-modal="modal-warranty-return" class="btn-quiet">Cancel</button>
+          <button type="submit" class="btn-primary btn-primary--danger">Process Return &amp; Print Slip</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 5. Settings: one tabbed home for every configuration (manager-gated) -->
+  <div id="modal-settings"
+    class="fixed inset-0 modal-backdrop z-50 flex items-center justify-center hidden p-4 no-print">
+    <div class="modal-card w-full modal-card--settings">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title" id="settings-title"><i class="ph ph-gear w-4 h-4"></i> Settings</h3>
+        <button type="button" data-action="close-modal" data-modal="modal-settings" class="modal-card__x" aria-label="Close">
+          <i class="ph ph-x w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="settings-layout">
+        <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button type="button" id="settings-tab-btn-store" class="settings-tab is-active" role="tab"
+            aria-selected="true" data-action="settings-tab" data-tab="store">
+            <i class="ph ph-storefront w-4 h-4"></i><span>Store</span>
+          </button>
+          <button type="button" id="settings-tab-btn-staff" class="settings-tab" role="tab"
+            aria-selected="false" data-action="settings-tab" data-tab="staff">
+            <i class="ph ph-shield-check w-4 h-4"></i><span>Staff &amp; Security</span>
+          </button>
+          <button type="button" id="settings-tab-btn-printing" class="settings-tab" role="tab"
+            aria-selected="false" data-action="settings-tab" data-tab="printing">
+            <i class="ph ph-printer w-4 h-4"></i><span>Printing</span>
+          </button>
+          <button type="button" id="settings-tab-btn-appearance" class="settings-tab" role="tab"
+            aria-selected="false" data-action="settings-tab" data-tab="appearance">
+            <i class="ph ph-sliders-horizontal w-4 h-4"></i><span>Appearance</span>
+          </button>
+          <button type="button" id="settings-tab-btn-cloud" class="settings-tab" role="tab"
+            aria-selected="false" data-action="settings-tab" data-tab="cloud">
+            <i class="ph ph-cloud-arrow-up w-4 h-4"></i><span>Cloud Sync</span>
+          </button>
+          <button type="button" id="settings-tab-btn-data" class="settings-tab" role="tab"
+            aria-selected="false" data-action="settings-tab" data-tab="data">
+            <i class="ph ph-database w-4 h-4"></i><span>Data</span>
+          </button>
+        </nav>
+
+        <form id="form-settings" class="settings-panes">
+          <!-- STORE: shop identity, GCash, receipt footer, warranty, markups, and counter thresholds -->
+          <section class="settings-pane" data-settings-pane="store" role="tabpanel" aria-labelledby="settings-tab-btn-store">
+            <div class="settings-pane__body space-y-3">
+              <div class="grid grid-cols-2 gap-3">
+                <div class="field">
+                  <label class="field__label" for="settings-gcash-name">Shop / GCash name *</label>
+                  <input type="text" id="settings-gcash-name" required placeholder="TechParts Repair &amp; POS"
+                    class="w-full px-3 py-2 text-xs font-medium">
+                </div>
+                <div class="field">
+                  <label class="field__label" for="settings-gcash-number">GCash mobile number *</label>
+                  <input type="text" id="settings-gcash-number" required placeholder="0917-123-4567"
+                    class="w-full px-3 py-2 text-xs font-mono">
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div class="field">
+                  <label class="field__label" for="settings-owner-name">Owner / Manager name</label>
+                  <input type="text" id="settings-owner-name" placeholder="e.g. Alex Santos"
+                    class="w-full px-3 py-2 text-xs font-medium">
+                </div>
+                <div class="field">
+                  <label class="field__label" for="settings-shop-address">Shop address / branch <span class="field__opt">on receipts</span></label>
+                  <input type="text" id="settings-shop-address" placeholder="e.g. Level 2 Cyberzone, SM Megamall"
+                    class="w-full px-3 py-2 text-xs">
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3 items-start">
+                <div class="field">
+                  <label class="field__label" for="settings-qr-file">GCash QR code</label>
+                  <div class="flex items-center gap-3 mt-1">
+                    <div class="w-12 h-12 bg-white rounded-lg p-1 shrink-0 flex items-center justify-center border border-slate-200">
+                      <img id="settings-qr-preview"
+                        src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+                        alt="QR Preview" class="w-full h-full object-contain">
+                    </div>
+                    <div class="flex-1 space-y-1">
+                      <div class="flex items-center gap-1.5">
+                        <label class="btn-quiet cursor-pointer inline-flex w-auto px-2.5 py-1.5 text-xs">
+                          <i class="ph ph-upload-simple w-3.5 h-3.5"></i> Upload QR image
+                          <input type="file" id="settings-qr-file" accept="image/*" class="sr-only">
+                        </label>
+                        <button type="button" id="settings-qr-clear" data-action="clear-qr" class="btn-quiet px-2.5 py-1.5 text-xs hidden">Clear</button>
+                      </div>
+                      <input type="hidden" id="settings-gcash-qr">
+                      <p id="settings-qr-status" class="foot-note">No custom QR uploaded.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label class="field__label" for="settings-footer-note">Receipt footer note <span
+                      class="field__opt">last line of slip</span></label>
+                  <input type="text" id="settings-footer-note" maxlength="160"
+                    placeholder="Thank you for your business!" class="w-full px-3 py-2 text-xs mt-1">
+                </div>
+              </div>
+
+              <div class="pt-3 border-t border-[var(--line-soft)] space-y-3">
+                <div class="grid grid-cols-3 gap-3">
+                  <div class="field">
+                    <label class="field__label" for="settings-warranty-days">Warranty (days)</label>
+                    <input type="number" id="settings-warranty-days" min="0" max="365" value="7"
+                      class="w-full px-3 py-1.5 text-xs font-mono">
+                  </div>
+                  <div class="field">
+                    <label class="field__label" for="settings-default-retail-markup">Retail markup (%)</label>
+                    <input type="number" id="settings-default-retail-markup" min="0" max="500" value="50"
+                      class="w-full px-3 py-1.5 text-xs font-mono">
+                  </div>
+                  <div class="field">
+                    <label class="field__label" for="settings-default-wholesale-markup">Wholesale markup (%)</label>
+                    <input type="number" id="settings-default-wholesale-markup" min="0" max="500" value="20"
+                      class="w-full px-3 py-1.5 text-xs font-mono">
+                  </div>
+                </div>
+                <p class="foot-note" data-i18n="settings.markup_note">Markup applied when importing parts with blank prices or recalculating in bulk.</p>
+
+                <div class="field">
+                  <label class="field__label" for="settings-warranty-policy">Warranty policy text <span
+                      class="field__opt">printed on slips</span></label>
+                  <textarea id="settings-warranty-policy" rows="2" class="w-full p-2 text-xs font-mono"></textarea>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3 pt-1">
+                  <div class="field">
+                    <label class="field__label" for="settings-settle-threshold">Utang manager threshold <span class="field__opt">peso</span></label>
+                    <input type="number" id="settings-settle-threshold" min="0" step="1" value="500"
+                      class="w-full px-3 py-1.5 text-xs font-mono">
+                    <p class="foot-note">Collections above this require manager PIN.</p>
+                  </div>
+                  <div class="field">
+                    <label class="field__label" for="settings-shift-variance">Shift cash difference alert <span class="field__opt">peso</span></label>
+                    <input type="number" id="settings-shift-variance" min="0" step="1" value="50"
+                      class="w-full px-3 py-1.5 text-xs font-mono">
+                    <p class="foot-note">Drawer differences above this appear on Exceptions.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-pane__foot">
+              <span class="foot-note mr-auto">Applies to the whole shop.</span>
+              <button type="button" data-action="close-modal" data-modal="modal-settings" class="btn-quiet">Cancel</button>
+              <button type="submit" class="btn-primary">Save changes</button>
+            </div>
+          </section>
+
+          <!-- STAFF & SECURITY: manager PIN and cashier accounts -->
+          <section class="settings-pane hidden" data-settings-pane="staff" role="tabpanel" aria-labelledby="settings-tab-btn-staff">
+            <div class="settings-pane__body space-y-4">
+              <div id="settings-pin-setup-banner" class="p-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 flex items-center justify-between text-xs hidden">
+                <span class="text-amber-300 font-medium"><i class="ph ph-warning-circle mr-1"></i> Factory PIN (1234) is active</span>
+                <button type="button" data-action="open-pin-setup" class="btn-mini btn-warn">Set Up Shop</button>
+              </div>
+
+              <div class="space-y-2 pb-3 border-b border-[var(--line-soft)]">
+                <span class="field__label"><i class="ph ph-lock w-3.5 h-3.5"></i> Manager PIN</span>
+                <div class="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                  <input type="text" inputmode="numeric" id="settings-current-pin" maxlength="8" placeholder="Current PIN"
+                    aria-label="Current manager PIN"
+                    class="w-full px-3 py-1.5 text-xs font-mono pin-masked" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+                  <input type="text" inputmode="numeric" id="settings-new-pin" maxlength="8" placeholder="New PIN (min 4)"
+                    aria-label="New manager PIN"
+                    class="w-full px-3 py-1.5 text-xs font-mono pin-masked" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+                  <button type="button" id="settings-pin-btn" class="btn-mini">
+                    <i class="ph ph-lock w-3.5 h-3.5"></i> Update PIN
+                  </button>
+                </div>
+                <p id="settings-pin-msg" class="text-xs stock--out hidden" role="status"></p>
+              </div>
+
+              <div class="space-y-2">
+                <div class="space-y-0.5">
+                  <span class="field__label"><i class="ph ph-users-three w-3.5 h-3.5"></i> Cashier accounts</span>
+                  <p class="foot-note">Each cashier signs in with their own PIN so sales and returns are logged under their name.</p>
+                </div>
+                <div id="staff-list" class="space-y-1 max-h-48 overflow-y-auto pr-1"></div>
+                <div class="pt-1 space-y-1">
+                  <span class="field__label"><i class="ph ph-user-plus w-3.5 h-3.5"></i> Add cashier</span>
+                  <div class="grid grid-cols-[1fr_110px_auto] gap-2 items-center mt-1">
+                    <input type="text" id="staff-new-name" placeholder="Name (e.g. Jun)" aria-label="New staff name" class="w-full px-3 py-1.5 text-xs" autocomplete="off">
+                    <input type="text" inputmode="numeric" id="staff-new-pin" maxlength="8" placeholder="PIN (min 4)" aria-label="New staff PIN" class="w-full px-3 py-1.5 text-xs font-mono pin-masked" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+                    <button type="button" id="staff-add-btn" class="btn-mini">Add</button>
+                  </div>
+                  <p id="staff-msg" class="text-xs stock--out hidden" role="status"></p>
+                </div>
+              </div>
+            </div>
+            <div class="settings-pane__foot">
+              <span class="foot-note mr-auto">PIN and staff changes apply immediately.</span>
+              <button type="button" data-action="close-modal" data-modal="modal-settings" class="btn-quiet">Done</button>
+            </div>
+          </section>
+
+          <!-- PRINTING: paper width + auto-print (shared with the receipt slip) -->
+          <section class="settings-pane hidden" data-settings-pane="printing" role="tabpanel" aria-labelledby="settings-tab-btn-printing">
+            <div class="settings-pane__body space-y-4">
+              <div class="field">
+                <label class="field__label" for="settings-printer">Receipt printer</label>
+                <select id="settings-printer" class="w-full px-3 py-1.5 text-xs" disabled>
+                  <option value="">Detecting printers...</option>
+                </select>
+                <p id="settings-printer-note" class="foot-note" role="status"></p>
+                <button type="button" class="btn-mini mt-1" data-action="refresh-printers">Refresh list</button>
+                <p class="foot-note">Receipts print straight to this queue, no dialog. If nothing is listed,
+                  check the cable and click Refresh.</p>
+              </div>
+              <div class="field">
+                <label class="field__label" for="settings-paper-width">Thermal printer width</label>
+                <select id="settings-paper-width" class="w-full px-3 py-1.5 text-xs">
+                  <option value="80mm">80mm Desktop POS (Default)</option>
+                  <option value="58mm">58mm Mobile / Pocket POS</option>
+                </select>
+                <p class="foot-note">Applies to the whole shop. Receipts reformat to match the roll.</p>
+              </div>
+              <div class="field">
+                <label class="field__label">Auto-print after sale</label>
+                <div class="seg" role="group" aria-label="Auto-print after sale">
+                  <button type="button" class="seg-btn" data-action="autoprint-set" data-on="1">On</button>
+                  <button type="button" class="seg-btn" data-action="autoprint-set" data-on="0">Off</button>
+                </div>
+                <p class="foot-note">Prints the slip as soon as a sale is taken. The Auto-print checkbox on the
+                  receipt slip flips the same switch.</p>
+              </div>
+              <div class="field">
+                <label class="field__label">Silent printing check</label>
+                <p id="kiosk-status" class="foot-note" role="status">Checking this window...</p>
+                <button type="button" class="btn-mini mt-1" data-action="print-test">
+                  <i class="ph ph-printer w-3.5 h-3.5"></i> Print test receipt
+                </button>
+                <p class="foot-note">Prints a sample slip with no sale attached, so you can confirm the
+                  printer feeds and the width matches before the first customer.</p>
+              </div>
+            </div>
+            <div class="settings-pane__foot">
+              <button type="submit" class="btn-primary">Save changes</button>
+            </div>
+          </section>
+
+          <!-- APPEARANCE: workstation-local, applied instantly -->
+          <section class="settings-pane hidden" data-settings-pane="appearance" role="tabpanel" aria-labelledby="settings-tab-btn-appearance">
+            <div class="settings-pane__body">
+              <p class="foot-note">Saved on this computer only. Staff can also flip light or dark mode from the top bar.</p>
+
+              <div class="apgrid">
+                <div class="apcard">
+                  <span class="apcard__label">Base theme</span>
+                  <div class="apcard__row" role="group" aria-label="Base theme">
+                    <button type="button" class="apchoice" data-action="theme-mode" data-mode="dark">
+                      <span class="apmock apmock--dark" aria-hidden="true"><span class="apmock__bar"></span><span
+                          class="apmock__line"></span><span class="apmock__line apmock__line--short"></span></span>
+                      <span class="apchoice__name">Dark</span>
+                    </button>
+                    <button type="button" class="apchoice" data-action="theme-mode" data-mode="light">
+                      <span class="apmock apmock--light" aria-hidden="true"><span class="apmock__bar"></span><span
+                          class="apmock__line"></span><span class="apmock__line apmock__line--short"></span></span>
+                      <span class="apchoice__name">Light</span>
+                    </button>
+                    <button type="button" class="apchoice" data-action="theme-mode" data-mode="auto">
+                      <span class="apmock apmock--auto" aria-hidden="true"><span class="apmock__bar"></span><span
+                          class="apmock__line"></span><span class="apmock__line apmock__line--short"></span></span>
+                      <span class="apchoice__name">Auto</span>
+                    </button>
+                  </div>
+                  <span class="apcard__hint">Auto follows this computer's day/night setting</span>
+                </div>
+
+                <div class="apcard">
+                  <span class="apcard__label">Table density</span>
+                  <div class="apcard__row" role="group" aria-label="Table density">
+                    <button type="button" class="apchoice" data-action="set-density" data-density="compact">
+                      <span class="aprows" aria-hidden="true"><span></span><span></span><span></span></span>
+                      <span class="apchoice__name">Compact</span>
+                    </button>
+                    <button type="button" class="apchoice" data-action="set-density" data-density="cozy">
+                      <span class="aprows" aria-hidden="true"><span></span><span></span><span></span></span>
+                      <span class="apchoice__name">Cozy</span>
+                    </button>
+                    <button type="button" class="apchoice" data-action="set-density" data-density="roomy">
+                      <span class="aprows" aria-hidden="true"><span></span><span></span><span></span></span>
+                      <span class="apchoice__name">Roomy</span>
+                    </button>
+                  </div>
+                  <span class="apcard__hint">Adjusts row spacing across parts and sales tables</span>
+                </div>
+
+                <div class="apcard">
+                  <span class="apcard__label">Brand accent</span>
+                  <div class="accent-row" role="group" aria-label="Brand accent">
+                    <button type="button" class="accent-dot" data-action="set-accent" data-accent="blue" style="--dot:#5b86f5" title="Blue (default)" aria-label="Blue (default)"></button>
+                    <button type="button" class="accent-dot" data-action="set-accent" data-accent="emerald" style="--dot:#63cf90" title="Emerald" aria-label="Emerald"></button>
+                    <button type="button" class="accent-dot" data-action="set-accent" data-accent="amber" style="--dot:#e6b671" title="Amber" aria-label="Amber"></button>
+                    <button type="button" class="accent-dot" data-action="set-accent" data-accent="teal" style="--dot:#5cbcda" title="Teal" aria-label="Teal"></button>
+                    <button type="button" class="accent-dot" data-action="set-accent" data-accent="graphite" style="--dot:#8a8a8a" title="Graphite" aria-label="Graphite"></button>
+                  </div>
+                  <span class="apcard__hint">Highlights active tabs, buttons, and focus rings</span>
+                </div>
+
+                <div class="apcard">
+                  <span class="apcard__label">Text size <span class="field__opt">whole workstation</span></span>
+                  <div class="apcard__row" role="group" aria-label="Text size">
+                    <button type="button" class="apchoice" data-action="set-font-scale" data-scale="0.9">
+                      <span class="apaa" style="font-size:12px" aria-hidden="true">Aa</span>
+                      <span class="apchoice__name">S</span>
+                    </button>
+                    <button type="button" class="apchoice" data-action="set-font-scale" data-scale="1">
+                      <span class="apaa" style="font-size:13px" aria-hidden="true">Aa</span>
+                      <span class="apchoice__name">M</span>
+                    </button>
+                    <button type="button" class="apchoice" data-action="set-font-scale" data-scale="1.1">
+                      <span class="apaa" style="font-size:15px" aria-hidden="true">Aa</span>
+                      <span class="apchoice__name">L</span>
+                    </button>
+                    <button type="button" class="apchoice" data-action="set-font-scale" data-scale="1.25">
+                      <span class="apaa" style="font-size:17px" aria-hidden="true">Aa</span>
+                      <span class="apchoice__name">XL</span>
+                    </button>
+                  </div>
+                  <span class="apcard__hint">Tabular monospace figures stay locked for money alignment</span>
+                </div>
+              </div>
+            </div>
+            <div class="settings-pane__foot">
+              <button type="button" class="btn-quiet" data-action="appearance-reset">Reset to defaults</button>
+              <span class="foot-note">Changes apply instantly</span>
+            </div>
+          </section>
+
+          <!-- CLOUD SYNC: remote manager live view & real-time telemetry -->
+          <section class="settings-pane hidden" data-settings-pane="cloud" role="tabpanel" aria-labelledby="settings-tab-btn-cloud">
+            <div class="settings-pane__body space-y-4">
+              <div class="flex items-center justify-between pb-3 border-b border-[var(--line-soft)]">
+                <div>
+                  <span class="field__label flex items-center gap-1.5 text-xs font-semibold">
+                    <i class="ph ph-cloud-arrow-up text-emerald-400 w-4 h-4"></i> Manager Live View
+                  </span>
+                  <p class="foot-note mt-0.5">View today's live sales, cash drawer, and inventory from your phone anywhere.</p>
+                </div>
+                <span id="settings-sync-status-badge" class="px-2 py-0.5 rounded text-xs font-mono border border-[var(--line)] bg-[var(--surface-2)] text-[var(--txt-3)]">
+                  Not connected
+                </span>
+              </div>
+
+              <!-- Uneditable service URL with direct link -->
+              <div class="space-y-1.5">
+                <div class="flex items-center justify-between">
+                  <label class="field__label" for="settings-sync-url">Telemetry service link (uneditable)</label>
+                  <a href="https://repairsync.bot-keep.xyz/" target="_blank" rel="noopener noreferrer" class="linkish text-xs inline-flex items-center gap-1">
+                    <span>Open Live View</span> <i class="ph ph-arrow-square-out w-3.5 h-3.5"></i>
+                  </a>
+                </div>
+                <div class="grid grid-cols-[1fr_auto] gap-2 items-center">
+                  <input type="url" id="settings-sync-url" value="https://repairsync.bot-keep.xyz" readonly
+                    class="w-full px-3 py-1.5 text-xs font-mono bg-[var(--surface-2)] text-[var(--txt-2)] border border-[var(--line-soft)] rounded cursor-default select-all"
+                    aria-label="Cloud service URL">
+                  <a href="https://repairsync.bot-keep.xyz/" target="_blank" rel="noopener noreferrer" class="btn-mini inline-flex items-center gap-1">
+                    <i class="ph ph-globe w-3.5 h-3.5"></i> Visit
+                  </a>
+                </div>
+                <p class="foot-note">Locked to official service. You do not need to configure or edit this address.</p>
+              </div>
+
+              <!-- Local Wi-Fi vs Cloud Live Comparison -->
+              <div id="settings-cloud-comparison" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                <div class="p-3 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-2)] space-y-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <strong class="text-[var(--txt)] font-semibold">Local Wi-Fi (/report)</strong>
+                    <a href="/report.html" target="_blank" rel="noopener noreferrer" class="linkish font-mono whitespace-nowrap">Open local</a>
+                  </div>
+                  <div id="local-report-url" class="px-2 py-1 rounded bg-[var(--surface)] border border-[var(--line-soft)] font-mono text-[11px] text-[var(--txt-2)] select-all break-all">localhost:3000/report.html</div>
+                  <ul class="text-[var(--txt-3)] space-y-1 pl-4 list-disc">
+                    <li>Works inside shop on same Wi-Fi (while PC is on)</li>
+                    <li>Today's sales, cash/GCash &amp; last 20 tickets</li>
+                    <li>Stored on local PC disk only</li>
+                  </ul>
+                </div>
+                <div class="p-3 rounded-lg border border-[var(--accent-line)] bg-[var(--accent-soft)] space-y-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <strong class="text-[var(--txt)] font-semibold">TechParts Live Cloud</strong>
+                    <span class="px-1.5 py-0.5 rounded font-mono border border-[var(--line)] bg-[var(--surface)] text-[var(--txt-2)] whitespace-nowrap">24/7 Remote</span>
+                  </div>
+                  <div class="px-2 py-1 rounded bg-[var(--surface)] border border-[var(--line-soft)] font-mono text-[11px] text-[var(--txt)]">6-digit code &middot; Zero IP setup</div>
+                  <ul class="text-[var(--txt-2)] space-y-1 pl-4 list-disc">
+                    <li>Works anywhere on mobile data (even when PC is off)</li>
+                    <li>7d/30d trends, Parts/Labor split &amp; Restock budget</li>
+                    <li>Cashier Audit (drawer shortages, voids, RMA) + Backup</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Simple 3-step pairing guide -->
+              <div class="p-3 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-2)] space-y-2">
+                <span class="text-xs font-semibold text-[var(--txt)] flex items-center gap-1.5">
+                  <i class="ph ph-device-mobile w-4 h-4 text-[var(--accent-hi)]"></i> How to connect your phone in 3 steps
+                </span>
+                <ol class="text-xs text-[var(--txt-3)] space-y-1.5 pl-4 list-decimal">
+                  <li>Open <a href="https://repairsync.bot-keep.xyz/" target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 font-mono text-[var(--txt)]">repairsync.bot-keep.xyz</a> on your phone.</li>
+                  <li>Click <strong>Pair Device</strong> on the website to generate a 6-digit code.</li>
+                  <li>Enter the 6-digit code below and click <strong>Connect</strong>.</li>
+                </ol>
+              </div>
+
+              <!-- 6-digit code pairing entry -->
+              <div class="space-y-1.5">
+                <label class="field__label" for="settings-pair-code">
+                  Enter 6-digit pairing code from phone
+                </label>
+                <div class="grid grid-cols-[1fr_auto_auto] gap-2 items-center">
+                  <input type="text" id="settings-pair-code" maxlength="7" placeholder="e.g. 582 194"
+                    class="w-full px-3 py-2 text-base font-mono font-bold tracking-widest text-center"
+                    autocomplete="off">
+                  <button type="button" id="btn-pair-cloud" class="btn-primary px-4 py-2 text-xs">
+                    <i class="ph ph-link w-3.5 h-3.5"></i> Connect
+                  </button>
+                  <button type="button" id="btn-disconnect-cloud" data-action="disconnect-cloud" class="btn-mini btn-mini--danger hidden">
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+
+              <details class="text-xs text-[var(--txt-3)] group pt-1">
+                <summary class="cursor-pointer font-medium hover:text-[var(--txt)] flex items-center gap-1 select-none">
+                  <i class="ph ph-caret-right transition-transform group-open:rotate-90"></i>
+                  Advanced: Manual sync token
+                </summary>
+                <div class="mt-1.5 space-y-1">
+                  <input type="text" id="settings-sync-token" placeholder="Leave blank unless replacing manually"
+                    class="w-full px-3 py-1.5 text-xs font-mono" autocomplete="off">
+                </div>
+              </details>
+            </div>
+            <div class="settings-pane__foot">
+              <span class="foot-note mr-auto">Real-time outbox sync pushes sales and drawer status as they happen.</span>
+              <button type="button" data-action="close-modal" data-modal="modal-settings" class="btn-quiet">Done</button>
+            </div>
+          </section>
+
+          <!-- DATA: backups, accounting CSV exports, license, updates -->
+          <section class="settings-pane hidden" data-settings-pane="data" role="tabpanel" aria-labelledby="settings-tab-btn-data">
+            <div class="settings-pane__body space-y-4">
+              <div class="space-y-1.5">
+                <span class="field__label"><i class="ph ph-download-simple w-3.5 h-3.5"></i> Database backups</span>
+                <div class="flex flex-wrap gap-2">
+                  <button type="button" class="btn-mini" data-action="trigger-backup">
+                    <i class="ph ph-download-simple w-3.5 h-3.5"></i> Back up now
+                  </button>
+                  <button type="button" class="btn-mini" data-action="restore-backup">
+                    <i class="ph ph-clock-counter-clockwise w-3.5 h-3.5"></i> Restore from backup
+                  </button>
+                </div>
+                <p class="foot-note">Writes a dated copy of the database to the backups folder. Restore loads a snapshot back in after saving a safety copy of current data.</p>
+              </div>
+
+              <div class="space-y-1.5">
+                <span class="field__label"><i class="ph ph-file-csv w-3.5 h-3.5"></i> Accounting CSV exports</span>
+                <div class="flex flex-wrap gap-2">
+                  <button type="button" class="btn-mini" data-action="export-sales-csv">
+                    <i class="ph ph-download-simple w-3.5 h-3.5"></i> Export sales
+                  </button>
+                  <button type="button" class="btn-mini" data-action="export-customers-csv">
+                    <i class="ph ph-download-simple w-3.5 h-3.5"></i> Export customers
+                  </button>
+                  <button type="button" class="btn-mini" data-action="export-inventory-csv">
+                    <i class="ph ph-download-simple w-3.5 h-3.5"></i> Export inventory
+                  </button>
+                </div>
+                <p class="foot-note">Download CSV spreadsheets for bookkeeping. To import or update parts in bulk, use the Import button on the Parts Inventory toolbar.</p>
+              </div>
+
+              <div class="space-y-1.5">
+                <span class="field__label"><i class="ph ph-shield-check w-3.5 h-3.5"></i> Workstation license</span>
+                <div class="space-y-1">
+                  <div class="kv"><span>Machine ID</span><strong id="license-card-machine-id" class="font-mono select-all">-</strong></div>
+                  <div class="kv"><span>Status</span><strong id="license-card-status">-</strong></div>
+                  <div class="kv"><span>Licensed to</span><strong id="license-card-customer">-</strong></div>
+                </div>
+                <p class="foot-note">Read-only. Click the trial chip in the top bar to activate or renew.</p>
+              </div>
+
+              <div class="space-y-2 p-3.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)]">
+                <div class="flex items-center justify-between">
+                  <span class="field__label text-[var(--txt)] font-medium flex items-center gap-1.5">
+                    <i class="ph ph-git-branch text-[var(--pos)] w-4 h-4"></i> Software Updates
+                  </span>
+                  <span id="update-current-version" class="px-2 py-0.5 rounded text-xs font-mono border border-[var(--line)] bg-[var(--surface-3)] text-[var(--txt-2)]">
+                    v1.0.0
+                  </span>
+                </div>
+                <p id="update-status-msg" class="foot-note text-[var(--txt-3)]" aria-live="polite">
+                  GitHub Releases: katalepsis69/PHONEPOS
+                </p>
+                <div class="flex flex-wrap items-center gap-2 pt-1">
+                  <button type="button" class="btn-mini" data-action="check-updates" id="btn-check-updates">
+                    <i class="ph ph-arrows-clockwise w-3.5 h-3.5"></i> <span>Check for updates</span>
+                  </button>
+                  <button type="button" class="btn-mini btn-primary hidden" data-action="apply-update" id="btn-apply-update">
+                    <i class="ph ph-download-simple w-3.5 h-3.5"></i> <span>Update Now</span>
+                  </button>
+                  <a id="update-release-link" href="https://github.com/katalepsis69/PHONEPOS/releases" target="_blank" rel="noopener noreferrer" class="linkish text-xs hidden">
+                    View Release Notes
+                  </a>
+                </div>
+              </div>
+            </div>
+            <div class="settings-pane__foot">
+              <span class="foot-note mr-auto">Every action here is written to the audit log.</span>
+              <button type="submit" class="btn-primary">Save changes</button>
+            </div>
+          </section>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. GCash QR Large View Modal -->
+  <div id="modal-gcash-qr"
+    class="fixed inset-0 modal-backdrop z-50 flex items-center justify-center hidden p-4 no-print">
+    <div class="modal-card w-full max-w-sm text-center">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title" id="gcash-qr-title"><i class="ph ph-qr-code w-4 h-4"></i> Scan to Pay with GCash</h3>
+        <button type="button" data-action="close-modal" data-modal="modal-gcash-qr" class="modal-card__x" aria-label="Close">
+          <i class="ph ph-x w-4 h-4"></i>
+        </button>
+      </div>
+      <div class="modal-card__body space-y-4">
+        <div class="bg-white rounded-2xl p-4 inline-block mx-auto">
+          <img id="large-gcash-qr-img"
+            src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+            alt="GCash QR Code" class="w-64 h-64 object-contain mx-auto">
+        </div>
+        <div class="space-y-1">
+          <div class="text-sm font-bold" id="modal-gcash-name">TechParts Repair &amp; POS</div>
+          <div class="text-xs font-mono font-semibold stock--low" id="modal-gcash-number">0917-123-4567</div>
+          <div class="pt-2">
+            <span class="foot-note">Amount due: </span>
+            <span class="stock font-bold" style="font-size:18px" id="modal-gcash-amount">₱0.00</span>
+          </div>
+        </div>
+        <button type="button" data-action="close-modal" data-modal="modal-gcash-qr" class="btn-quiet w-full">Done / Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. Itemized Receipt Modal -->
+  <div id="modal-receipt"
+    class="fixed inset-0 modal-backdrop z-[60] flex items-center justify-center hidden p-4 no-print">
+    <div class="modal-card w-full max-w-sm">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title" id="receipt-title"><i class="ph ph-receipt w-4 h-4"></i> Counter Receipt</h3>
+        <button type="button" data-action="close-modal" data-modal="modal-receipt" class="modal-card__x" aria-label="Close">
+          <i class="ph ph-x w-4 h-4"></i>
+        </button>
+      </div>
+      <div id="receipt-content" class="modal-card__body space-y-3 font-mono text-xs">
+      </div>
+      <div class="modal-card__foot">
+        <button type="button" data-action="close-modal" data-modal="modal-receipt" class="btn-quiet">Close</button>
+        <button type="button" data-action="print-slip" class="btn-primary">
+          <i class="ph ph-printer w-3.5 h-3.5"></i> Print Slip
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- NATIVE THERMAL PRINT CONTAINER (Visible only in @media print) -->
+  <div id="printable-receipt" class="hidden"></div>
+
+  <!-- ADJUST STOCK MODAL -->
+  <div id="modal-adjust-stock" class="modal-backdrop fixed inset-0 z-50 flex items-center justify-center hidden p-4 no-print">
+    <div class="modal-card w-full max-w-sm">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title" id="adjust-stock-title"><i class="ph ph-plus-circle w-4 h-4"></i> <span data-i18n="stock.adjust_title">Adjust / Receive Stock</span></h3>
+        <button type="button" data-action="close-modal" data-modal="modal-adjust-stock" class="modal-card__x" aria-label="Close">
+          <i class="ph ph-x w-4 h-4"></i>
+        </button>
+      </div>
+      <form id="form-adjust-stock" class="modal-card__body space-y-3">
+        <input type="hidden" id="adjust-part-id">
+        <p id="adjust-part-name" class="confirm-msg"></p>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="field">
+            <label class="field__label" for="adjust-delta" data-i18n="stock.delta">Amount (+/-) *</label>
+            <input type="number" id="adjust-delta" required step="1" placeholder="e.g. 10 or -2"
+              class="w-full px-3 py-2 text-xs font-mono">
+          </div>
+          <div class="field">
+            <label class="field__label" for="adjust-reason" data-i18n="stock.reason">Reason *</label>
+            <select id="adjust-reason" class="w-full px-3 py-2 text-xs">
+              <option value="receive" data-i18n="stock.reason_receive">Receive stock</option>
+              <option value="correction" data-i18n="stock.reason_correction">Correction (stock count)</option>
+              <option value="damage" data-i18n="stock.reason_damage">Damage</option>
+              <option value="loss" data-i18n="stock.reason_loss">Loss</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field__label" for="adjust-note" data-i18n="stock.note">Note</label>
+          <input type="text" id="adjust-note" placeholder="e.g. Delivery from Greenleaf"
+            class="w-full px-3 py-2 text-xs">
+        </div>
+        <div class="modal-card__foot">
+          <button type="button" data-action="close-modal" data-modal="modal-adjust-stock" class="btn-quiet" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn-primary" data-i18n="common.apply">Apply</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- STOCK MOVEMENT HISTORY MODAL -->
+  <div id="modal-movement-history" class="modal-backdrop fixed inset-0 z-50 flex items-center justify-center hidden p-4 no-print">
+    <div class="modal-card w-full max-w-md">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title" id="movement-history-title"><i class="ph ph-receipt w-4 h-4"></i> Stock History</h3>
+        <button type="button" data-action="close-modal" data-modal="modal-movement-history" class="modal-card__x" aria-label="Close">
+          <i class="ph ph-x w-4 h-4"></i>
+        </button>
+      </div>
+      <div class="modal-card__body">
+        <p id="history-part-name" class="confirm-msg"></p>
+        <div id="history-body" style="max-height:22rem;overflow-y:auto;"></div>
+      </div>
+      <div class="modal-card__foot">
+        <button type="button" data-action="close-modal" data-modal="modal-movement-history" class="btn-quiet">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDIT PART MODAL -->
+  <div id="modal-edit-part" class="modal-backdrop fixed inset-0 z-50 flex items-center justify-center hidden p-4 no-print">
+    <div class="modal-card w-full max-w-md">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title" id="edit-part-title"><i class="ph ph-pencil w-4 h-4"></i> <span data-i18n="part.edit_title">Edit Part</span></h3>
+        <button type="button" data-action="close-modal" data-modal="modal-edit-part" class="modal-card__x" aria-label="Close">
+          <i class="ph ph-x w-4 h-4"></i>
+        </button>
+      </div>
+      <form id="form-edit-part" class="modal-card__body space-y-3">
+        <input type="hidden" id="edit-part-id">
+        <div class="grid grid-cols-2 gap-3">
+          <div class="field">
+            <label class="field__label" for="edit-part-brand" data-i18n="part.brand">Brand *</label>
+            <select id="edit-part-brand" required class="w-full px-3 py-2 text-xs"></select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="edit-part-model" data-i18n="part.model">Model Name *</label>
+            <input type="text" id="edit-part-model" required class="w-full px-3 py-2 text-xs">
+          </div>
+        </div>
+        <div class="field">
+          <label class="field__label" for="edit-part-type" data-i18n="part.type">Part Type / Screen Spec *</label>
+          <input type="text" id="edit-part-type" required class="w-full px-3 py-2 text-xs" autocomplete="off">
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div class="field">
+            <label class="field__label" for="edit-part-sku" data-i18n="part.sku">SKU / Barcode</label>
+            <input type="text" id="edit-part-sku" autocomplete="off" class="w-full px-2.5 py-1.5 text-xs font-mono">
+            <p id="edit-part-sku-warn" class="foot-note hidden" style="color:#f59e0b;margin:4px 0 0;">This SKU is already assigned to another part.</p>
+          </div>
+          <div class="field">
+            <label class="field__label" for="edit-part-supplier" data-i18n="part.supplier">Supplier</label>
+            <input type="text" id="edit-part-supplier" autocomplete="off" class="w-full px-2.5 py-1.5 text-xs">
+          </div>
+          <div class="field">
+            <label class="field__label" for="edit-part-location" data-i18n="part.location">Location</label>
+            <input type="text" id="edit-part-location" placeholder="e.g. Drawer B2" autocomplete="off" class="w-full px-2.5 py-1.5 text-xs">
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div class="field">
+            <label class="field__label" for="edit-part-cost" data-i18n="part.cost">Capital (₱) *</label>
+            <input type="number" id="edit-part-cost" required min="0" step="1" class="w-full px-2.5 py-1.5 text-xs font-mono">
+          </div>
+          <div class="field">
+            <label class="field__label" for="edit-part-retail" data-i18n="part.retail">Retail (₱) *</label>
+            <input type="number" id="edit-part-retail" required min="0" step="1" class="w-full px-2.5 py-1.5 text-xs font-mono">
+          </div>
+          <div class="field">
+            <label class="field__label" for="edit-part-tech" data-i18n="part.wholesale">Wholesale (₱) *</label>
+            <input type="number" id="edit-part-tech" required min="0" step="1" class="w-full px-2.5 py-1.5 text-xs font-mono">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="field">
+            <label class="field__label" for="edit-part-stock" data-i18n="part.set_stock">Set stock to *</label>
+            <input type="number" id="edit-part-stock" required min="0" step="1" class="w-full px-3 py-1.5 text-xs font-mono">
+          </div>
+          <div class="field">
+            <label class="field__label" for="edit-part-min-alert" data-i18n="part.min_alert">Min Stock Alert</label>
+            <input type="number" id="edit-part-min-alert" min="1" class="w-full px-3 py-1.5 text-xs font-mono">
+          </div>
+        </div>
+        <div class="modal-card__foot">
+          <button type="button" data-action="close-modal" data-modal="modal-edit-part" class="btn-quiet" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn-primary" data-i18n="common.save_changes">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- BULK EDIT MODAL -->
+  <div id="modal-bulk-edit" class="modal-backdrop fixed inset-0 z-[92] flex items-center justify-center hidden"
+    role="dialog" aria-modal="true" aria-labelledby="bulk-edit-title">
+    <div class="modal-card w-full max-w-lg">
+      <div class="modal-card__head flex items-center justify-between">
+        <h3 id="bulk-edit-title" class="modal-card__title" data-i18n="bulk.title">Bulk Edit Selected Parts</h3>
+        <span id="bulk-edit-badge" class="tag tag--info font-semibold text-xs px-2 py-0.5">0 selected</span>
+      </div>
+      <form id="form-bulk-edit" class="modal-card__body space-y-4">
+        <div class="field">
+          <label class="field__label" for="bulk-action-type" data-i18n="bulk.action_label">Action to perform</label>
+          <select id="bulk-action-type" class="w-full px-2.5 py-1.5 text-xs">
+            <option value="adjust_price" data-i18n="bulk.opt_adjust_price">Adjust prices (+/- amount or %)</option>
+            <option value="recalculate_markup" data-i18n="bulk.opt_recalculate">Recalculate prices from capital (% markup)</option>
+            <option value="update_fields" data-i18n="bulk.opt_update_fields">Update details (supplier, location, min alert)</option>
+            <option value="archive" data-i18n="bulk.opt_archive">Archive selected parts</option>
+            <option value="unarchive" data-i18n="bulk.opt_unarchive">Restore / unarchive selected parts</option>
+          </select>
+        </div>
+
+        <!-- 1. Adjust price panel -->
+        <div id="bulk-panel-adjust-price" class="space-y-3">
+          <div class="grid grid-cols-2 gap-2">
+            <div class="field">
+              <label class="field__label" for="bulk-price-target" data-i18n="bulk.price_target">Price target</label>
+              <select id="bulk-price-target" class="w-full px-2 py-1.5 text-xs">
+                <option value="both" data-i18n="bulk.target_both">Both Retail & Wholesale</option>
+                <option value="retail" data-i18n="bulk.target_retail">Retail only</option>
+                <option value="wholesale" data-i18n="bulk.target_wholesale">Wholesale only</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="bulk-price-mode" data-i18n="bulk.adj_mode">Adjustment mode</label>
+              <select id="bulk-price-mode" class="w-full px-2 py-1.5 text-xs">
+                <option value="amount" data-i18n="bulk.mode_amount">Fixed amount (+/- PHP)</option>
+                <option value="pct" data-i18n="bulk.mode_pct">Percentage (+/- %)</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label class="field__label" for="bulk-price-val" data-i18n="bulk.adj_value">Adjustment value</label>
+            <input type="number" id="bulk-price-val" step="any" placeholder="e.g. 50, -20, or 10" data-i18n-ph="bulk.adj_val_ph" class="w-full px-2.5 py-1.5 text-xs font-mono">
+            <p class="foot-note" id="bulk-price-note" data-i18n="bulk.adj_note">Use positive numbers to increase (e.g. 50) and negative to discount (e.g. -20).</p>
+          </div>
+        </div>
+
+        <!-- 2. Recalculate markup panel -->
+        <div id="bulk-panel-recalculate" class="space-y-3 hidden">
+          <p class="foot-note" data-i18n="bulk.recalc_note">Recalculates selling prices from each selected part's Capital.</p>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="field">
+              <label class="field__label" for="bulk-retail-markup" data-i18n="bulk.retail_markup">Retail Markup (%)</label>
+              <input type="number" id="bulk-retail-markup" min="0" max="500" step="1" value="50" class="w-full px-2.5 py-1.5 text-xs font-mono">
+              <p class="foot-note" data-i18n="bulk.retail_formula">Retail = Capital + Retail %</p>
+            </div>
+            <div class="field">
+              <label class="field__label" for="bulk-wholesale-markup" data-i18n="bulk.wholesale_markup">Wholesale Markup (%)</label>
+              <input type="number" id="bulk-wholesale-markup" min="0" max="500" step="1" value="20" class="w-full px-2.5 py-1.5 text-xs font-mono">
+              <p class="foot-note" data-i18n="bulk.wholesale_formula">Wholesale = Capital + Wholesale %</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Update fields panel -->
+        <div id="bulk-panel-fields" class="space-y-3 hidden">
+          <p class="foot-note" data-i18n="bulk.fields_note">Leave blank any fields you do not wish to change.</p>
+          <div class="field">
+            <label class="field__label" for="bulk-supplier" data-i18n="bulk.supplier">Supplier</label>
+            <input type="text" id="bulk-supplier" placeholder="Leave blank to keep unchanged" data-i18n-ph="bulk.unchanged_ph" class="w-full px-2.5 py-1.5 text-xs">
+          </div>
+          <div class="field">
+            <label class="field__label" for="bulk-location" data-i18n="bulk.location">Storage location / Shelf</label>
+            <input type="text" id="bulk-location" placeholder="Leave blank to keep unchanged" data-i18n-ph="bulk.unchanged_ph" class="w-full px-2.5 py-1.5 text-xs">
+          </div>
+          <div class="field">
+            <label class="field__label" for="bulk-min-alert" data-i18n="bulk.min_alert">Min stock alert</label>
+            <input type="number" id="bulk-min-alert" min="0" placeholder="Leave blank to keep unchanged" data-i18n-ph="bulk.unchanged_ph" class="w-full px-2.5 py-1.5 text-xs font-mono">
+          </div>
+        </div>
+
+        <!-- 4. Archive/unarchive panel -->
+        <div id="bulk-panel-archive" class="space-y-2 hidden">
+          <p id="bulk-archive-info" class="foot-note" data-i18n="bulk.archive_info">Selected parts will be hidden from the active catalog and POS. Stock quantity and ledger history will be preserved.</p>
+        </div>
+
+        <div class="modal-card__foot">
+          <button type="button" id="bulk-edit-cancel" class="btn-quiet" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" id="bulk-edit-submit" class="btn-primary" data-i18n="bulk.apply">Apply Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- UPDATE MODAL -->
+  <div id="modal-update" class="modal-backdrop fixed inset-0 z-[92] flex items-center justify-center hidden p-4 no-print">
+    <div class="modal-card w-full max-w-sm">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title flex items-center gap-2">
+          <i class="ph ph-arrow-circle-up text-[var(--pos)] w-4 h-4"></i>
+          <span>Software Update</span>
+        </h3>
+        <button type="button" data-action="close-modal" data-modal="modal-update" class="modal-card__x" aria-label="Close">
+          <i class="ph ph-x w-4 h-4"></i>
+        </button>
+      </div>
+      <div class="modal-card__body space-y-3">
+        <div class="flex items-center justify-between p-2.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)]">
+          <div>
+            <div class="font-medium text-[var(--txt)] text-sm" id="modal-update-version">Update available</div>
+            <div class="foot-note text-[var(--txt-3)]" id="modal-update-current">Checking current version...</div>
+          </div>
+          <span class="px-2 py-0.5 rounded text-xs font-mono border border-[var(--line)] bg-[var(--surface-3)] text-[var(--pos)] font-semibold">Ready</span>
+        </div>
+        <p class="foot-note text-[var(--txt-3)]" id="modal-update-desc">
+          A new version of TechParts POS is ready to install from GitHub Releases. The POS will replace the executable and restart automatically.
+        </p>
+      </div>
+      <div class="modal-card__foot flex items-center justify-between">
+        <a id="modal-update-notes-link" href="https://github.com/katalepsis69/PHONEPOS/releases" target="_blank" rel="noopener noreferrer" class="linkish text-xs">
+          View release notes
+        </a>
+        <div class="flex items-center gap-2">
+          <button type="button" class="btn-quiet" data-action="close-modal" data-modal="modal-update">Later</button>
+          <button type="button" class="btn-primary" id="btn-modal-apply-update">
+            <i class="ph ph-download-simple w-3.5 h-3.5"></i> <span>Update Now</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONFIRM MODAL -->
+  <div id="modal-confirm" class="modal-backdrop fixed inset-0 z-[92] flex items-center justify-center hidden">
+    <div class="modal-card w-full max-w-sm">
+      <div class="modal-card__head">
+        <h3 class="modal-card__title" id="confirm-title">Are you sure?</h3>
+      </div>
+      <div class="modal-card__body">
+        <p id="confirm-msg" class="confirm-msg"></p>
+      </div>
+      <div class="modal-card__foot">
+        <button type="button" id="confirm-cancel" class="btn-quiet">Cancel</button>
+        <button type="button" id="confirm-ok" class="btn-primary">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- INPUT MODAL -->
+  <div id="modal-input" class="modal-backdrop fixed inset-0 z-[92] flex items-center justify-center hidden">
+    <div class="modal-card w-full max-w-sm">
+      <div class="modal-card__head"><h3 class="modal-card__title" id="input-title">Enter a value</h3></div>
+      <div class="modal-card__body">
+        <label class="sr-only" for="input-value" id="input-value-label">Value</label>
+        <input type="text" id="input-value" class="w-full px-3 py-1.5 text-xs font-mono" autocomplete="off">
+      </div>
+      <div class="modal-card__foot">
+        <button type="button" id="input-cancel" class="btn-quiet">Cancel</button>
+        <button type="button" id="input-ok" class="btn-primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. LICENSE ACTIVATION OVERLAY (blocks app until activated) -->
+  <div id="license-overlay" class="gate z-[100] hidden" role="alertdialog" aria-modal="true"
+    aria-labelledby="license-gate-title">
+    <div class="gate__card">
+      <button type="button" id="license-close-x" data-action="dismiss-license" class="gate__close hidden" aria-label="Close" title="Close">
+        <i class="ph ph-x"></i>
+      </button>
+      <div
+        class="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center text-slate-950 shadow-lg shadow-emerald-500/30">
+        <i class="ph ph-shield-check w-8 h-8"></i>
+      </div>
+      <h2 id="license-gate-title">Activate TechParts POS</h2>
+      <p>Enter your license key to activate this workstation.</p>
+      <p class="gate__hint">Your sales, customer ledger and inventory are safe on this computer. Activating restores
+        full access immediately.</p>
+      <div class="gate__box">
+        <p class="gate__label">Machine ID (give this to vendor)</p>
+        <p id="license-machine-id" class="gate__value select-all">Loading...</p>
+      </div>
+      <label class="sr-only" for="license-key-input">License key</label>
+      <textarea id="license-key-input" rows="3" class="gate__key" placeholder="Paste license key here..."></textarea>
+      <p id="license-error" class="gate__err hidden"></p>
+      <button type="button" data-action="activate-license" class="gate__btn">Activate License</button>
+      <button type="button" id="license-dismiss"
+        data-action="dismiss-license" class="gate__link hidden">
+        Not now, continue with the trial
+      </button>
+      <p class="gate__hint">Contact your vendor for a license key</p>
+    </div>
+  </div>
+
+  <!-- 8b. QUICK SHOP SETUP OVERLAY (First-time shop configuration & PIN change) -->
+  <div id="pin-setup-overlay" class="gate z-[95] hidden" role="dialog" aria-modal="true" aria-labelledby="pin-setup-title" aria-describedby="pin-setup-desc">
+    <div class="gate__card" style="max-width: 440px;">
+      <div
+        class="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-400 flex items-center justify-center text-slate-950 shadow-lg shadow-amber-500/30 mb-1">
+        <i class="ph ph-storefront w-7 h-7"></i>
+      </div>
+      <h2 id="pin-setup-title" class="text-lg font-bold">Set Up Your Shop</h2>
+      <p id="pin-setup-desc" class="text-xs text-slate-400 text-center -mt-1 mb-2">
+        Customize your shop details, secure your manager PIN, and get ready for sales.
+      </p>
+
+      <div class="w-full space-y-2 text-left">
+        <div class="grid grid-cols-2 gap-2">
+          <div class="field">
+            <label class="field__label" for="setup-shop-name">Shop Name *</label>
+            <input type="text" id="setup-shop-name" required placeholder="e.g. FixZone Phone Repair"
+              class="w-full px-2.5 py-1.5 text-xs font-medium gate__input">
+          </div>
+          <div class="field">
+            <label class="field__label" for="setup-owner-name">Owner / Manager Name</label>
+            <input type="text" id="setup-owner-name" placeholder="e.g. Alex Santos"
+              class="w-full px-2.5 py-1.5 text-xs font-medium gate__input">
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="setup-shop-address">Shop Address / Branch <span class="field__opt">on receipts</span></label>
+          <input type="text" id="setup-shop-address" placeholder="e.g. Level 2 Cyberzone, SM Megamall"
+            class="w-full px-2.5 py-1.5 text-xs gate__input">
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div class="field">
+            <label class="field__label" for="setup-shop-phone">Contact / GCash No.</label>
+            <input type="text" id="setup-shop-phone" placeholder="0917-123-4567"
+              class="w-full px-2.5 py-1.5 text-xs font-mono gate__input">
+          </div>
+          <div class="field">
+            <label class="field__label" for="setup-footer-note">Receipt Footer Note</label>
+            <input type="text" id="setup-footer-note" placeholder="Thank you for your business!" maxlength="160"
+              class="w-full px-2.5 py-1.5 text-xs gate__input">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div class="field">
+            <label class="field__label" id="setup-width-label">Receipt Width</label>
+            <div class="seg w-full grid grid-cols-2 mt-0.5" role="group" aria-labelledby="setup-width-label">
+              <button type="button" class="seg-btn is-active text-xs" data-action="setup-width" data-setup-width="80mm" aria-pressed="true">80mm</button>
+              <button type="button" class="seg-btn text-xs" data-action="setup-width" data-setup-width="58mm" aria-pressed="false">58mm</button>
+            </div>
+          </div>
+          <div class="field">
+            <label class="field__label" for="setup-warranty-days">Warranty (days)</label>
+            <input type="number" id="setup-warranty-days" min="0" max="365" value="7"
+              class="w-full px-2.5 py-1.5 text-xs font-mono gate__input">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div class="field">
+            <label class="field__label" for="pin-setup-new">Manager PIN *</label>
+            <input type="text" id="pin-setup-new" maxlength="8" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+              required aria-required="true" aria-describedby="pin-setup-error" class="w-full px-2.5 py-1.5 text-xs gate__input pin-masked" placeholder="••••">
+          </div>
+          <div class="field">
+            <label class="field__label" for="pin-setup-confirm">Confirm PIN *</label>
+            <input type="text" id="pin-setup-confirm" maxlength="8" inputmode="numeric" pattern="[0-9]*" autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+              required aria-required="true" aria-describedby="pin-setup-error" class="w-full px-2.5 py-1.5 text-xs gate__input pin-masked" placeholder="Confirm">
+          </div>
+        </div>
+
+        <label class="flex items-start gap-2.5 p-2.5 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] cursor-pointer select-none">
+          <input type="checkbox" id="setup-seed-parts" checked class="mt-0.5 rounded border-slate-700 text-amber-500 focus-visible:ring-2 focus-visible:ring-amber-500/50">
+          <div class="text-xs">
+            <div class="font-medium text-slate-200">Load 17 standard phone repair parts</div>
+            <div class="text-xs text-slate-400">Common iPhone, Samsung &amp; Xiaomi LCDs and batteries with 0 initial stock, ready to price and receive.</div>
+          </div>
+        </label>
+
+        <p id="pin-setup-error" class="gate__err hidden text-center" role="alert"></p>
+
+        <button type="button" data-action="save-pin-setup" class="gate__btn gate__btn--warn w-full mt-1">Save &amp; Launch Shop</button>
+        <button type="button" data-action="skip-pin-setup" class="gate__link w-full text-center" style="margin-top: 4px;">
+          Keep factory PIN (1234) / Skip
+        </button>
+        <p class="text-xs text-slate-500 text-center mt-1"><i class="ph ph-info mr-1"></i> Add cashiers anytime in Settings > Cashiers after launch.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8c. LOGIN GATE ("Who's on shift?" : mandatory session start). -->
+  <div id="login-gate" class="gate z-[85] hidden" role="alertdialog" aria-modal="true"
+    aria-labelledby="login-gate-title">
+    <div class="gate__card" style="max-width: 400px;">
+      <div class="flex flex-col items-center gap-1.5">
+        <div class="gate__icon">
+          <i class="ph ph-user-check"></i>
+        </div>
+        <h2 id="login-gate-title">Who's on shift?</h2>
+        <div id="login-gate-shop-name" class="text-xs font-semibold text-amber-400 text-center -mt-1 mb-0.5 hidden"></div>
+        <p id="login-gate-sub" class="gate__hint">Pick your role, then enter your PIN. Actions are logged under it.</p>
+      </div>
+
+      <div id="login-gate-role-picker" class="w-full">
+        <div class="gate__roles">
+          <button type="button" class="gate__role gate__role--manager" data-login-role="manager">
+            <span class="gate__role-icon"><i class="ph ph-shield-check"></i></span>
+            <span class="gate__role-title">Manager</span>
+            <span class="gate__role-desc">Full access · Inventory · Settings · Audit log</span>
+          </button>
+          <button type="button" class="gate__role gate__role--cashier" data-login-role="cashier">
+            <span class="gate__role-icon"><i class="ph ph-barcode"></i></span>
+            <span class="gate__role-title">Cashier</span>
+            <span class="gate__role-desc">POS sales · Returns · Shift tracking</span>
+          </button>
+        </div>
+        <button type="button" class="gate__link gate__staff-toggle" data-login-manual="true">
+          Staff login (enter name)
+        </button>
+      </div>
+
+      <!-- Cashier staff picker -->
+      <div id="login-gate-staff-picker" class="hidden w-full">
+        <p class="gate__hint" style="text-align:left;margin-bottom:8px;">Select your account:</p>
+        <div id="cashier-staff-list" class="w-full space-y-2"></div>
+        <button type="button" class="gate__link" data-action="login-back" style="margin-top:10px;width:100%;text-align:center;">Back to roles</button>
+      </div>
+
+      <div id="login-gate-pin-row" class="hidden w-full">
+        <div id="login-gate-who" class="gate__who"></div>
+        <input type="text" id="login-gate-name-input" class="gate__input hidden mb-2" placeholder="Staff Name (e.g. Jun)" aria-label="Staff name" autocomplete="off">
+        <input type="text" id="login-gate-pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" class="gate__input pin-masked" placeholder="••••" aria-label="PIN" aria-describedby="login-gate-error" autocomplete="off" data-lpignore="true" data-1p-ignore="true" spellcheck="false">
+        <p id="login-gate-error" class="gate__err hidden" role="alert"></p>
+        <div class="flex gap-2 w-full mt-2">
+          <button type="button" data-action="login-back" class="gate__btn gate__btn--quiet">Back</button>
+          <button type="button" data-action="login-submit" class="gate__btn">Log in</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8d. SERVER DOWN OVERLAY (page loaded but the API never answers) -->
+  <div id="server-down-overlay" class="gate z-[120] hidden" role="alertdialog" aria-modal="true"
+    aria-labelledby="server-down-title">
+    <div class="gate__card" style="max-width: 420px;">
+      <div
+        class="w-16 h-16 rounded-2xl bg-gradient-to-tr from-rose-500 to-red-400 flex items-center justify-center text-slate-950 shadow-lg shadow-rose-500/30">
+        <i class="ph ph-warning-octagon w-8 h-8"></i>
+      </div>
+      <h2 id="server-down-title">Cannot Reach the POS Server</h2>
+      <p id="server-down-detail" class="gate__hint">The interface loaded, but the POS server is not answering. It may
+        have stopped.</p>
+      <button type="button" data-action="server-retry" class="gate__btn">Retry Connection</button>
+      <p class="gate__hint">If retrying fails: close this window, start TechPartsPOS again, and open the app via
+        <span class="font-mono">http://localhost:3000</span> (or the port printed in pos-server.log).</p>
+    </div>
+  </div>
+
+  <!-- 9. MANAGER PIN MODAL -->
+  <div id="modal-pin" class="modal-backdrop gate z-[110] hidden">
+    <div class="gate__card" style="max-width: 340px;">
+      <div class="gate__icon">
+        <i class="ph ph-lock"></i>
+      </div>
+      <h3 id="pin-gate-title">Manager PIN Required</h3>
+      <p id="pin-prompt-reason" class="gate__hint">Enter manager PIN to continue</p>
+      <input type="text" id="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="8" class="gate__input my-1 pin-masked" placeholder="••••" aria-label="Manager PIN" aria-describedby="pin-error" autocomplete="off" data-lpignore="true" data-1p-ignore="true" spellcheck="false">
+      <p id="pin-error" class="gate__err hidden" role="alert"></p>
+      <div class="flex gap-2 w-full mt-2">
+        <button type="button" data-action="close-pin" class="gate__btn gate__btn--quiet">Cancel</button>
+        <button type="button" data-action="verify-pin" class="gate__btn">Verify</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+
+</html>

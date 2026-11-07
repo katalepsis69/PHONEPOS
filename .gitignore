@@ -1,21 +1,7 @@
-# Source code, dev tools, and project configs (commercial app - binaries published to Releases)
-src/
-public/
-tests/
-scripts/
-cloud/
-docs/
-installer/
-package.json
-package-lock.json
-publish.bat
-publish-release.bat
-start.bat
-
 # Node dependencies
 node_modules/
 
-# Vendor signing keys & private assets
+# Vendor signing keys & private assets (never commit, never ship)
 vendor-private-key.pem
 *.pem
 
@@ -40,6 +26,7 @@ pos-server.log
 pos-server.log.*
 browser-profile/
 gui-test-screenshots/
+cloud/data/
 
 # In-app updater staging files
 apply_update.cmd
@@ -53,11 +40,14 @@ TechPartsPOS_update.exe
 .zcodeignore
 .claude/
 .qoder/
+.freebuff/
 skills-lock.json
 scratch/
-REMEDIATION_PLAN.md
-SECURITY-SETUP.md
-AUDIT_*.md
+.vs/
+.vscode/
+.idea/
+.editorconfig
+.gitattributes
 
 # Temporary, log, and OS files
 *.tmp
@@ -66,8 +56,3 @@ AUDIT_*.md
 Thumbs.db
 Desktop.ini
 .DS_Store
-.vs/
-.vscode/
-.idea/
-.editorconfig
-.gitattributes

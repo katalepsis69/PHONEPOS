@@ -1,0 +1,30 @@
+{
+  "name": "phone-repair-pos",
+  "version": "2.4",
+  "description": "Offline Phone Parts POS & Repair Management (0 runtime dependencies)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/*.test.js",
+    "build:css": "tailwindcss -i public/tailwind.css -o public/tailwind.build.css --minify",
+    "seed": "node src/seed.js",
+    "license": "node scripts/generate-license.js",
+    "build:exe": "npm run build:css && npm run build:exe:artifacts && npm run verify:exe && npm run release:customer",
+    "build:exe:artifacts": "node scripts/build-artifacts.js",
+    "build:license-exe": "node scripts/build-license-exe.js",
+    "verify:exe": "node scripts/verify-exe.js",
+    "release:customer": "node scripts/release-customer.js",
+    "build:installer": "npm run build:exe && node scripts/build-installer.js",
+    "changelog": "node scripts/generate-changelog.js",
+    "publish:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-release.ps1",
+    "deploy:cloud": "node scripts/deploy-cloud.js",
+    "test:verifier": "node --test tests/verify-exe.test.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
+    "postject": "1.0.0-alpha.6"
+  }
+}

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#020617" />
+    </linearGradient>
+    <linearGradient id="primaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#14b8a6" />
+    </linearGradient>
+  </defs>
+  <!-- Background with rounded squircles -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="8"/>
+  
+  <!-- Smartphone Frame -->
+  <rect x="146" y="86" width="220" height="340" rx="36" fill="#1e293b" stroke="#334155" stroke-width="8"/>
+  <rect x="166" y="126" width="180" height="250" rx="12" fill="#0f172a"/>
+  
+  <!-- Phone details (Speaker notch & Home indicator) -->
+  <rect x="226" y="102" width="60" height="8" rx="4" fill="#475569"/>
+  <rect x="226" y="396" width="60" height="6" rx="3" fill="#475569"/>
+  
+  <!-- Circuit / Repair Badge in Center -->
+  <circle cx="256" cy="245" r="54" fill="url(#primaryGrad)"/>
+  <!-- Wrench / Tool / Check inside -->
+  <path d="M240 245 L252 257 L274 233" stroke="#020617" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Signal / POS Wave bars -->
+  <path d="M210 180 A65 65 0 0 1 302 180" stroke="#10b981" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <path d="M194 160 A85 85 0 0 1 318 160" stroke="#10b981" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.4"/>
+</svg>

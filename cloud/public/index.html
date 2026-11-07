@@ -1,0 +1,1295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TechParts Live: Owner Telemetry &amp; Audit Ledger</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d0f12;
+      --surface: #14181f;
+      --surface-elevated: #1c222b;
+      --surface-interactive: #252d3a;
+      --border: rgba(255, 255, 255, 0.09);
+      --border-strong: rgba(255, 255, 255, 0.16);
+      --border-focus: #38bdf8;
+      --text: #f2f0ea;
+      --text-muted: #a0aab8;
+      --text-dim: #8c98a8;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.12);
+      --cash: #34d399;
+      --cash-soft: rgba(52, 211, 153, 0.12);
+      --gcash: #38bdf8;
+      --gcash-soft: rgba(56, 189, 248, 0.12);
+      --alert: #fb7185;
+      --alert-soft: rgba(251, 113, 133, 0.12);
+      --warn: #fbbf24;
+      --warn-soft: rgba(251, 191, 36, 0.12);
+      --card-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+      --focus-ring: 0 0 0 2px #0d0f12, 0 0 0 4px #38bdf8;
+      --display: "Newsreader", Georgia, "Times New Roman", serif;
+      --sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+    }
+    :root.light {
+      color-scheme: light;
+      --bg: #f0efea;
+      --surface: #faf9f5;
+      --surface-elevated: #e8e6df;
+      --surface-interactive: #dddad0;
+      --border: rgba(20, 23, 26, 0.11);
+      --border-strong: rgba(20, 23, 26, 0.22);
+      --border-focus: #0369a1;
+      --text: #14171a;
+      --text-muted: #4a5056;
+      --text-dim: #5c636a;
+      --accent: #0369a1;
+      --accent-soft: rgba(3, 105, 161, 0.1);
+      --cash: #047857;
+      --cash-soft: rgba(4, 120, 87, 0.1);
+      --gcash: #0369a1;
+      --gcash-soft: rgba(3, 105, 161, 0.1);
+      --alert: #b91c1c;
+      --alert-soft: rgba(185, 28, 28, 0.1);
+      --warn: #92400e;
+      --warn-soft: rgba(146, 64, 14, 0.1);
+      --card-shadow: 0 0 0 1px rgba(20, 23, 26, 0.08), 0 1px 2px -1px rgba(20, 23, 26, 0.06), 0 4px 10px -2px rgba(20, 23, 26, 0.04);
+      --focus-ring: 0 0 0 2px #faf9f5, 0 0 0 4px #0369a1;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100dvh;
+      display: flex;
+      justify-content: center;
+    }
+    .phone-frame {
+      width: 100%;
+      max-width: 520px;
+      min-height: 100dvh;
+      background: var(--bg);
+      padding: 14px 14px 88px;
+      position: relative;
+    }
+    .ph {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 16;
+      display: inline-block;
+      vertical-align: middle;
+      flex-shrink: 0;
+    }
+    .ph-sm { width: 16px; height: 16px; }
+    .ph-lg { width: 28px; height: 28px; }
+    .ph-xl { width: 48px; height: 48px; }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 25;
+      background: var(--bg);
+      padding: 8px 0 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 44px;
+      flex-wrap: wrap;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .beacon {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--cash);
+      flex-shrink: 0;
+    }
+    .beacon.warn { background: var(--warn); }
+    .beacon.off { background: var(--alert); }
+    .brand-title {
+      font-family: var(--display);
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+    .status-badge {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--surface-elevated);
+      color: var(--cash);
+      border: 1px solid var(--border);
+      font-variant-numeric: tabular-nums;
+    }
+    .status-badge.warn {
+      color: var(--warn);
+      border-color: var(--warn);
+    }
+    .status-badge.off {
+      color: var(--alert);
+      border-color: var(--alert);
+    }
+    .header-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .shop-select {
+      min-height: 44px;
+      border-radius: 10px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 0 10px;
+      cursor: pointer;
+    }
+    .icon-btn, .action-btn {
+      min-height: 44px;
+      min-width: 44px;
+      border-radius: 10px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 11px;
+      transition-property: transform, background-color, border-color, color;
+      transition-duration: 120ms;
+      transition-timing-function: ease-out;
+    }
+    .icon-btn:hover, .action-btn:hover, .shop-select:hover {
+      background: var(--surface-interactive);
+      border-color: var(--border-focus);
+    }
+    .icon-btn:active, .action-btn:active, .period-tab:active, .desk-tab:active, .chip-btn:active, .primary-btn:active, .secondary-btn:active, .key-btn:active {
+      transform: scale(0.96);
+    }
+    .icon-btn:focus-visible, .action-btn:focus-visible, .shop-select:focus-visible, button:focus-visible, a:focus-visible, input:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+
+    /* Concentric radius: outer 12px = inner 9px + 3px padding */
+    .period-bar {
+      display: flex;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 3px;
+      margin-top: 10px;
+      gap: 4px;
+      box-shadow: var(--card-shadow);
+    }
+    .period-tab {
+      flex: 1;
+      min-height: 44px;
+      border: 0;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 9px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition-property: transform, background-color, color;
+      transition-duration: 120ms;
+    }
+    .period-tab.active {
+      background: var(--surface-interactive);
+      color: var(--text);
+    }
+
+    /* Cards: outer 16px radius, inner nested boxes 10px radius */
+    .hero-card, .trend-card, .feed-container {
+      background: var(--surface);
+      border-radius: 16px;
+      box-shadow: var(--card-shadow);
+      margin-bottom: 12px;
+    }
+    .hero-card, .trend-card {
+      padding: 16px;
+    }
+    .hero-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .hero-sublabel {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-dim);
+      text-transform: none;
+      letter-spacing: normal;
+    }
+    .hero-revenue {
+      font-family: var(--mono);
+      font-size: clamp(26px, 7.5vw, 34px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--text);
+      margin: 6px 0 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .hero-meta-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .meta-pill {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .split-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    .split-box {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .split-title {
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .split-title.cash { color: var(--cash); }
+    .split-title.gcash { color: var(--gcash); }
+    .split-val {
+      font-family: var(--mono);
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .split-sub {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 2px;
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Revenue Anatomy & Trend Card */
+    .section-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .section-title {
+      font-family: var(--display);
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: -0.015em;
+      color: var(--text);
+    }
+    .section-sub {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+    }
+    .mix-bar-track {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--surface-elevated);
+      overflow: hidden;
+      display: flex;
+      margin-bottom: 8px;
+      border: 1px solid var(--border);
+    }
+    .mix-bar-parts {
+      background: var(--gcash);
+      height: 100%;
+    }
+    .mix-bar-labor {
+      background: var(--cash);
+      height: 100%;
+    }
+    .mix-legend {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 12px;
+    }
+    .mix-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .trend-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 68px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+    .trend-col {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 4px;
+    }
+    .trend-bar {
+      width: 100%;
+      max-width: 28px;
+      min-height: 4px;
+      border-radius: 4px 4px 2px 2px;
+      background: var(--accent);
+      opacity: 0.72;
+    }
+    .trend-col.peak .trend-bar {
+      background: var(--cash);
+      opacity: 1;
+    }
+    .trend-lbl {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 2x2 Secondary KPI Matrix */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .metric-card {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 13px;
+      box-shadow: var(--card-shadow);
+    }
+    .metric-card .label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 700;
+    }
+    .metric-card .val {
+      font-family: var(--mono);
+      font-size: 18px;
+      font-weight: 700;
+      margin-top: 4px;
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-card .val.alert { color: var(--alert); }
+    .metric-card .val.warn { color: var(--warn); }
+    .metric-card .sub {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Cashier Watch / Anti-Theft Audit Strip */
+    .audit-banner {
+      width: 100%;
+      min-height: 48px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      cursor: pointer;
+      text-align: left;
+      color: var(--text);
+      box-shadow: var(--card-shadow);
+      transition-property: transform, background-color, border-color;
+      transition-duration: 120ms;
+    }
+    .audit-banner:hover {
+      background: var(--surface-elevated);
+      border-color: var(--border-focus);
+    }
+    .audit-banner-left {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .audit-banner-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    .audit-banner-summary {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .audit-banner-cta {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+
+    /* Feed Container & Docked Desktop Workspace Switcher */
+    .feed-container {
+      overflow: hidden;
+    }
+    .desktop-tabs {
+      display: none;
+      background: var(--surface-elevated);
+      border-bottom: 1px solid var(--border);
+      padding: 6px;
+      gap: 4px;
+    }
+    .desk-tab {
+      flex: 1;
+      min-height: 44px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: var(--sans);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition-property: transform, background-color, color;
+      transition-duration: 120ms;
+    }
+    .desk-tab.active {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--card-shadow);
+    }
+    .feed-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 48px;
+      gap: 8px;
+    }
+    .feed-title {
+      font-family: var(--display);
+      font-size: 16px;
+      font-weight: 650;
+      letter-spacing: -0.015em;
+      color: var(--text);
+    }
+    .feed-count {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .feed-toolbar {
+      padding: 10px 14px;
+      background: var(--surface-elevated);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .feed-search {
+      width: 100%;
+      min-height: 44px;
+      padding: 8px 12px;
+      border-radius: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 13px;
+    }
+    .feed-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .chip-btn {
+      min-height: 44px;
+      padding: 0 11px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-variant-numeric: tabular-nums;
+      transition-property: transform, background-color, border-color, color;
+      transition-duration: 120ms;
+    }
+    .chip-btn.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    .feed-list {
+      display: flex;
+      flex-direction: column;
+    }
+    .feed-item {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      min-height: 54px;
+    }
+    .feed-item:last-child { border-bottom: 0; }
+    .feed-left { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .feed-code-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .feed-code { font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--text); }
+    .badge {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      border: 1px solid transparent;
+      font-variant-numeric: tabular-nums;
+    }
+    .badge.cash { background: var(--cash-soft); color: var(--cash); border-color: var(--cash); }
+    .badge.gcash { background: var(--gcash-soft); color: var(--gcash); border-color: var(--gcash); }
+    .badge.transfer { background: var(--gcash-soft); color: var(--gcash); border-color: var(--gcash); }
+    .badge.utang { background: var(--alert-soft); color: var(--alert); border-color: var(--alert); }
+    .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+    .feed-meta { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .feed-right { text-align: right; flex-shrink: 0; }
+    .feed-amt {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--cash);
+      font-variant-numeric: tabular-nums;
+    }
+    .feed-amt.debt { color: var(--alert); }
+    .feed-amt.warn { color: var(--warn); }
+    .feed-time { font-family: var(--mono); font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+    /* Mobile Bottom Navigation (< 760px) */
+    nav.bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      max-width: 520px;
+      margin: 0 auto;
+      height: 64px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      padding: 0 6px;
+      z-index: 30;
+    }
+    .nav-btn {
+      flex: 1;
+      min-height: 48px;
+      background: transparent;
+      border: 0;
+      color: var(--text-muted);
+      font-family: var(--sans);
+      font-size: 11px;
+      font-weight: 600;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      cursor: pointer;
+      border-radius: 8px;
+      transition-property: color, background-color;
+      transition-duration: 120ms;
+    }
+    .nav-btn.active { color: var(--accent); }
+
+    /* Modals */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.72);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 16px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal-box {
+      width: 100%;
+      max-width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 20px;
+      padding: 24px;
+      text-align: center;
+      box-shadow: var(--card-shadow);
+    }
+    .modal-title {
+      font-family: var(--display);
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0 0 6px;
+    }
+    .modal-sub { font-size: 12px; color: var(--text-muted); margin: 0 0 16px; }
+    .code-display {
+      background: var(--surface-elevated);
+      border: 2px dashed var(--accent);
+      border-radius: 12px;
+      padding: 18px 12px;
+      margin-bottom: 12px;
+    }
+    .code-digits {
+      font-family: var(--mono);
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: 0.18em;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .code-timer {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-top: 6px;
+      font-family: var(--mono);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .instruction-list {
+      text-align: left;
+      font-size: 12px;
+      color: var(--text-muted);
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .instruction-list ol { margin: 0; padding-left: 18px; }
+    .instruction-list li { margin-bottom: 6px; }
+    .instruction-list li:last-child { margin-bottom: 0; }
+    .sub-perks {
+      text-align: left;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 16px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .modal-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .primary-btn {
+      width: 100%;
+      min-height: 48px;
+      border-radius: 12px;
+      border: 0;
+      background: var(--accent);
+      color: #090d14;
+      font-family: var(--sans);
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition-property: transform, opacity;
+      transition-duration: 120ms;
+    }
+    :root.light .primary-btn { color: #ffffff; }
+    .secondary-btn {
+      width: 100%;
+      min-height: 48px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--surface-elevated);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition-property: transform, background-color, border-color;
+      transition-duration: 120ms;
+    }
+    .toast {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--cash);
+      color: #090d14;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      z-index: 200;
+      display: none;
+    }
+    :root.light .toast { color: #ffffff; }
+    .pin-dots {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin: 16px 0 20px;
+    }
+    .pin-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      border: 2px solid var(--border-strong);
+      background: transparent;
+      transition-property: background-color, border-color;
+      transition-duration: 120ms;
+    }
+    .pin-dot.filled {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .keypad-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .key-btn {
+      min-height: 52px;
+      border-radius: 12px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition-property: transform, background-color, border-color;
+      transition-duration: 120ms;
+    }
+    .key-btn:hover { background: var(--surface-interactive); border-color: var(--border-focus); }
+    .form-input {
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 16px;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+    .hidden { display: none !important; }
+    .empty-state {
+      padding: 32px 16px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    /* Desktop & Tablet Executive Workspace (>= 760px) */
+    @media (min-width: 760px) {
+      .phone-frame {
+        max-width: 1120px;
+        padding: 20px 24px 40px;
+      }
+      header {
+        position: relative;
+        top: auto;
+      }
+      nav.bottom-nav {
+        display: none;
+      }
+      .desktop-tabs {
+        display: flex;
+      }
+      .cloud-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
+        gap: 20px;
+        align-items: start;
+      }
+      .cloud-col-left {
+        position: sticky;
+        top: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <!-- Manager PIN Setup Modal (First Visit) -->
+  <div class="modal-backdrop" id="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-modal-title">
+    <div class="modal-box">
+      <h3 class="modal-title" id="setup-modal-title">Create Store Account</h3>
+      <p class="modal-sub">Register your store to get a private live manager dashboard</p>
+      <input type="text" id="setup-store-name" class="form-input" placeholder="Store Name (e.g. QuickFix Manila)" autocomplete="organization" style="margin-bottom: 8px;">
+      <input type="password" id="setup-pin-input" class="form-input" placeholder="Create Owner PIN (4 to 12 chars)" autocomplete="new-password" style="margin-bottom: 8px;">
+      <input type="password" id="setup-pin-confirm" class="form-input" placeholder="Confirm Owner PIN" autocomplete="new-password">
+      <p id="setup-err" style="color: var(--alert); font-size: 12px; min-height: 18px; margin: 0 0 10px;"></p>
+      <button class="primary-btn" id="setup-submit-btn">Create Store and Enter</button>
+      <div style="margin-top: 14px; text-align: center;">
+        <button type="button" id="toggle-to-login-btn" style="background: none; border: none; color: var(--accent); font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: underline; min-height: 44px;">
+          Already registered? Sign in
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manager PIN Keypad Modal (Returning Visit) -->
+  <div class="modal-backdrop" id="login-modal" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+    <div class="modal-box">
+      <h3 class="modal-title" id="login-modal-title">Owner Telemetry Access</h3>
+      <p class="modal-sub">Enter your 4-digit PIN (or type on keyboard)</p>
+
+      <div class="pin-dots">
+        <div class="pin-dot" id="dot-0"></div>
+        <div class="pin-dot" id="dot-1"></div>
+        <div class="pin-dot" id="dot-2"></div>
+        <div class="pin-dot" id="dot-3"></div>
+      </div>
+      <div id="pin-mask" aria-live="polite" style="text-align:center;font-size:16px;letter-spacing:3px;min-height:20px;color:var(--text);margin-bottom:4px;">&nbsp;</div>
+      <button class="key-btn" data-key="go" style="width:100%;padding:12px;font-weight:600;">Sign in</button>
+      <p id="login-err" style="color: var(--alert); font-size: 12px; min-height: 18px; margin: 0 0 10px;"></p>
+
+      <div class="keypad-grid">
+        <button class="key-btn" data-key="1">1</button>
+        <button class="key-btn" data-key="2">2</button>
+        <button class="key-btn" data-key="3">3</button>
+        <button class="key-btn" data-key="4">4</button>
+        <button class="key-btn" data-key="5">5</button>
+        <button class="key-btn" data-key="6">6</button>
+        <button class="key-btn" data-key="7">7</button>
+        <button class="key-btn" data-key="8">8</button>
+        <button class="key-btn" data-key="9">9</button>
+        <button class="key-btn" data-key="clear" style="font-size: 13px;">Clear</button>
+        <button class="key-btn" data-key="0">0</button>
+        <button class="key-btn" data-key="back" aria-label="Backspace">
+          <svg class="ph ph-sm" viewBox="0 0 256 256" aria-hidden="true">
+            <path d="M61.67,204.12,16,128,61.67,51.88A8,8,0,0,1,68.53,48H216a8,8,0,0,1,8,8V200a8,8,0,0,1-8,8H68.53A8,8,0,0,1,61.67,204.12Z"/>
+            <line x1="160" y1="104" x2="112" y2="152"/>
+            <line x1="160" y1="152" x2="112" y2="104"/>
+          </svg>
+        </button>
+      </div>
+
+      <details style="margin-top: 12px; text-align: left;">
+        <summary style="font-size: 12px; color: var(--text-muted); cursor: pointer; text-align: center; padding: 6px 0;">Alphanumeric PIN or Multi-Store Name</summary>
+        <div style="margin-top: 8px;">
+          <input type="text" id="login-store-name" class="form-input" placeholder="Optional: Store Name (leave blank for Main Store)" autocomplete="organization" style="font-family: var(--sans); font-size: 13px; margin-bottom: 8px;">
+          <input type="password" id="pin-text-input" class="form-input" placeholder="Or type alphanumeric PIN" style="margin-bottom: 8px;">
+          <button class="secondary-btn" id="login-text-btn">Log in with Text</button>
+        </div>
+      </details>
+
+      <div style="margin-top: 14px; text-align: center;">
+        <button type="button" id="login-reset-btn" style="background: none; border: none; color: var(--accent); font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: underline; min-height: 44px;">
+          + Register New Store Account
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main App Frame -->
+  <div class="phone-frame hidden" id="app">
+    <header>
+      <div class="header-row">
+        <div class="brand">
+          <div class="beacon" id="conn-beacon" aria-hidden="true"></div>
+          <span class="brand-title">TechParts Live</span>
+          <span class="status-badge" id="store-badge" style="display: none; background: var(--accent-soft); color: var(--accent); font-weight: 600;"></span>
+          <span class="status-badge" id="shops-badge">0 shops</span>
+          <span class="status-badge hidden" id="stale-badge" role="status">Data: stale</span>
+        </div>
+        <div class="header-actions">
+          <select id="shop-filter" class="shop-select hidden" aria-label="Filter by shop register">
+            <option value="">All Registers</option>
+          </select>
+          <button class="icon-btn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+            <svg class="ph" id="theme-icon-sun" viewBox="0 0 256 256" aria-hidden="true">
+              <circle cx="128" cy="128" r="60"/>
+              <line x1="128" y1="36" x2="128" y2="12"/>
+              <line x1="128" y1="244" x2="128" y2="220"/>
+              <line x1="62.94" y1="62.94" x2="45.97" y2="45.97"/>
+              <line x1="210.03" y1="210.03" x2="193.06" y2="193.06"/>
+              <line x1="36" y1="128" x2="12" y2="128"/>
+              <line x1="244" y1="128" x2="220" y2="128"/>
+              <line x1="62.94" y1="193.06" x2="45.97" y2="210.03"/>
+              <line x1="210.03" y1="45.97" x2="193.06" y2="62.94"/>
+            </svg>
+            <svg class="ph" id="theme-icon-moon" viewBox="0 0 256 256" style="display: none;" aria-hidden="true">
+              <path d="M108.11,28.11A96.09,96.09,0,0,0,227.89,147.89,96,96,0,1,1,108.11,28.11Z"/>
+            </svg>
+          </button>
+          <button class="icon-btn" id="logout-btn" title="Log out" aria-label="Log out">
+            <svg class="ph" viewBox="0 0 256 256" aria-hidden="true">
+              <circle cx="128" cy="140" r="20"/>
+              <line x1="128" y1="160" x2="128" y2="184"/>
+              <rect x="40" y="88" width="176" height="128" rx="8"/>
+              <path d="M88,88V56a40,40,0,0,1,80,0V88"/>
+            </svg>
+          </button>
+          <button class="action-btn" id="open-pair-modal">
+            <svg class="ph ph-sm" viewBox="0 0 256 256" aria-hidden="true">
+              <line x1="40" y1="128" x2="216" y2="128"/>
+              <line x1="128" y1="40" x2="128" y2="216"/>
+            </svg>
+            <span>Pair Register</span>
+          </button>
+        </div>
+      </div>
+      <div class="period-bar" role="tablist" aria-label="Reporting period">
+        <button class="period-tab active" data-period="day" role="tab" aria-selected="true">Today</button>
+        <button class="period-tab" data-period="7d" role="tab" aria-selected="false">7 Days</button>
+        <button class="period-tab" data-period="30d" role="tab" aria-selected="false">30 Days</button>
+      </div>
+    </header>
+
+    <div class="cloud-body">
+      <div class="cloud-col cloud-col-left">
+        <!-- Closing Drawer Reconciliation Card -->
+        <div class="hero-card">
+          <div class="hero-label">
+            <span id="hero-label-title">Takings (Today)</span>
+            <span class="hero-sublabel" id="backup-badge">Backup: checking</span>
+          </div>
+          <div class="hero-revenue" id="hero-revenue">₱0.00</div>
+          <div class="hero-meta-strip">
+            <span class="meta-pill" id="hero-avg-ticket">Avg ticket ₱0.00</span>
+            <span class="meta-pill" id="hero-collected-total">Collected ₱0.00</span>
+            <span class="meta-pill" id="hero-utang-settled">Utang paid ₱0.00</span>
+          </div>
+          
+          <div class="split-grid">
+            <div class="split-box">
+              <div class="split-title cash">
+                <svg class="ph ph-sm" viewBox="0 0 256 256" aria-hidden="true">
+                  <circle cx="128" cy="128" r="32"/>
+                  <rect x="16" y="64" width="224" height="128"/>
+                  <path d="M240,104a48.85,48.85,0,0,1-40-40"/>
+                  <path d="M200,192a48.85,48.85,0,0,1,40-40"/>
+                  <path d="M16,152a48.85,48.85,0,0,1,40,40"/>
+                  <path d="M56,64a48.85,48.85,0,0,1-40,40"/>
+                </svg>
+                <span>Cash in Drawer</span>
+              </div>
+              <div class="split-val" id="hero-cash">₱0.00</div>
+              <div class="split-sub" id="hero-cash-sub">0 sales in period</div>
+            </div>
+            <div class="split-box">
+              <div class="split-title gcash">
+                <svg class="ph ph-sm" viewBox="0 0 256 256" aria-hidden="true">
+                  <rect x="64" y="24" width="128" height="208" rx="16"/>
+                  <line x1="64" y1="56" x2="192" y2="56"/>
+                  <line x1="64" y1="200" x2="192" y2="200"/>
+                </svg>
+                <span>GCash Account</span>
+              </div>
+              <div class="split-val" id="hero-gcash">₱0.00</div>
+              <div class="split-sub" id="hero-gcash-sub">₱0.00 transfers</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Revenue Mix & Daily Trend Card -->
+        <div class="trend-card" id="trend-card">
+          <div class="section-head">
+            <span class="section-title">Revenue Mix &amp; Pace</span>
+            <span class="section-sub" id="trend-peak-label">Daily buckets</span>
+          </div>
+          <div class="mix-bar-track" aria-hidden="true">
+            <div class="mix-bar-parts" id="mix-bar-parts" style="width: 50%;"></div>
+            <div class="mix-bar-labor" id="mix-bar-labor" style="width: 50%;"></div>
+          </div>
+          <div class="mix-legend">
+            <span id="mix-parts-label"><i class="mix-dot" style="background: var(--gcash);"></i>Parts ₱0.00 (0%)</span>
+            <span id="mix-labor-label"><i class="mix-dot" style="background: var(--cash);"></i>Repair Labor ₱0.00 (0%)</span>
+          </div>
+          <div class="trend-bars" id="trend-bars" role="img" aria-label="Daily revenue trend"></div>
+        </div>
+
+        <!-- Secondary Metrics 2x2 -->
+        <div class="metric-grid">
+          <div class="metric-card">
+            <div class="label">Utang Uncollected</div>
+            <div class="val alert" id="card-utang">₱0.00</div>
+            <div class="sub" id="card-utang-sub">0 open debtors</div>
+          </div>
+          <div class="metric-card">
+            <div class="label">Low Stock Alerts</div>
+            <div class="val warn" id="card-stock">0 parts</div>
+            <div class="sub" id="card-stock-sub">Items at or below alert</div>
+          </div>
+          <div class="metric-card">
+            <div class="label">Profit After Returns</div>
+            <div class="val" id="card-profit">₱0.00</div>
+            <div class="sub" id="card-margin">0.0% margin</div>
+          </div>
+          <div class="metric-card">
+            <div class="label">Stock Retail Value</div>
+            <div class="val" id="card-inventory">₱0.00</div>
+            <div class="sub" id="card-inventory-sub">Catalog value</div>
+          </div>
+        </div>
+
+        <!-- Anti-Theft Cashier Watch Banner -->
+        <button type="button" class="audit-banner" id="audit-banner" aria-label="Open cashier audit and returns log">
+          <div class="audit-banner-left">
+            <span class="audit-banner-title">Cashier &amp; Drawer Watch</span>
+            <span class="audit-banner-summary" id="audit-banner-summary">No drawer shortages, voids, or returns logged</span>
+          </div>
+          <span class="audit-banner-cta">Inspect Audit &rarr;</span>
+        </button>
+      </div>
+
+      <div class="cloud-col cloud-col-right">
+        <!-- Live Feed Container -->
+        <div class="feed-container">
+          <!-- Docked Desktop Workspace Tabs (>= 760px) -->
+          <div class="desktop-tabs" role="tablist" aria-label="Telemetry views">
+            <button type="button" class="desk-tab active" data-tab="sales" role="tab" aria-selected="true">Sales</button>
+            <button type="button" class="desk-tab" data-tab="utang" role="tab" aria-selected="false">Utang</button>
+            <button type="button" class="desk-tab" data-tab="stock" role="tab" aria-selected="false">Stock</button>
+            <button type="button" class="desk-tab" data-tab="reports" role="tab" aria-selected="false">Top Parts</button>
+            <button type="button" class="desk-tab" data-tab="audit" role="tab" aria-selected="false">Audit</button>
+          </div>
+          <div class="feed-header">
+            <span class="feed-title" id="feed-title">Live Sales Stream</span>
+            <span class="feed-count" id="feed-count"></span>
+          </div>
+          <div class="feed-toolbar">
+            <input type="search" id="feed-search" class="feed-search" placeholder="Search ticket, customer, or part..." aria-label="Search current feed" autocomplete="off">
+            <div class="feed-chips" id="feed-chips" role="group" aria-label="Feed filter"></div>
+          </div>
+          <div class="feed-list" id="rows">
+            <div class="empty-state">Waiting for synchronized data...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sticky Mobile Navigation (< 760px) -->
+    <nav class="bottom-nav" aria-label="Main Navigation">
+      <button class="nav-btn active" data-tab="sales">
+        <svg class="ph" viewBox="0 0 256 256" aria-hidden="true">
+          <polyline points="224 208 32 208 32 48"/>
+          <polyline points="200 72 128 144 96 112 32 176"/>
+          <polyline points="200 112 200 72 160 72"/>
+        </svg>
+        <span>Sales</span>
+      </button>
+      <button class="nav-btn" data-tab="utang">
+        <svg class="ph" viewBox="0 0 256 256" aria-hidden="true">
+          <line x1="80" y1="104" x2="176" y2="104"/>
+          <line x1="80" y1="136" x2="176" y2="136"/>
+          <path d="M32,208V56a8,8,0,0,1,8-8H216a8,8,0,0,1,8,8V208l-32-16-32,16-32-16L96,208,64,192Z"/>
+        </svg>
+        <span>Utang</span>
+      </button>
+      <button class="nav-btn" data-tab="stock">
+        <svg class="ph" viewBox="0 0 256 256" aria-hidden="true">
+          <line x1="128" y1="129.09" x2="128" y2="231.97"/>
+          <polyline points="32.7 76.92 128 129.08 223.3 76.92"/>
+          <path d="M219.84,182.84l-88,48.18a8,8,0,0,1-7.68,0l-88-48.18a8,8,0,0,1-4.16-7V80.18a8,8,0,0,1,4.16-7l88-48.18a8,8,0,0,1,7.68,0l88,48.18a8,8,0,0,1,4.16,7v95.64A8,8,0,0,1,219.84,182.84Z"/>
+          <polyline points="81.56 48.31 176 100 176 152"/>
+        </svg>
+        <span>Stock</span>
+      </button>
+      <button class="nav-btn" data-tab="reports">
+        <svg class="ph" viewBox="0 0 256 256" aria-hidden="true">
+          <path d="M104,126.94a64,64,0,0,1,80-90.29L144,80l5.66,26.34L176,112l43.35-40a64,64,0,0,1-90.29,80L73,217A24,24,0,0,1,39,183Z"/>
+        </svg>
+        <span>Top Parts</span>
+      </button>
+      <button class="nav-btn" data-tab="audit">
+        <svg class="ph" viewBox="0 0 256 256" aria-hidden="true">
+          <path d="M40,114.79V56a8,8,0,0,1,8-8H208a8,8,0,0,1,8,8v58.79c0,84.08-71.31,111.82-85.54,116.57a7.54,7.54,0,0,1-4.92,0C111.31,226.61,40,198.87,40,114.79Z"/>
+          <polyline points="88 136 112 160 168 104"/>
+        </svg>
+        <span>Audit</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- 6-Digit Register Pairing Modal -->
+  <div class="modal-backdrop" id="pair-modal" role="dialog" aria-modal="true" aria-labelledby="pair-modal-title">
+    <div class="modal-box">
+      <div id="pair-unpaired-state">
+        <h3 class="modal-title" id="pair-modal-title">Pair Shop Register</h3>
+        <p class="modal-sub">6-digit sync pairing code</p>
+        
+        <div class="code-display">
+          <div class="code-digits" id="pairing-code">------</div>
+          <div class="code-timer" id="pairing-timer">
+            <svg class="ph ph-sm" viewBox="0 0 256 256" aria-hidden="true">
+              <circle cx="128" cy="136" r="88"/>
+              <line x1="128" y1="136" x2="168" y2="96"/>
+              <line x1="104" y1="16" x2="152" y2="16"/>
+            </svg>
+            <span id="timer-text">Code expires in 10:00</span>
+          </div>
+        </div>
+
+        <div class="instruction-list">
+          <ol>
+            <li>On shop register, open <strong>Settings &rarr; Cloud Sync</strong></li>
+            <li>Enter this 6-digit code and tap Connect</li>
+            <li>Register pairs automatically without manual token setup</li>
+          </ol>
+        </div>
+
+        <div class="sub-perks" aria-label="Cloud Live capabilities">
+          <span>&#10003; 24/7 Off-Site Backup</span>
+          <span>&#10003; Drawer &amp; Void Audit</span>
+          <span>&#10003; Restock Budget Radar</span>
+          <span>&#10003; 7d / 30d Margin Trends</span>
+        </div>
+
+        <div class="modal-actions">
+          <button class="primary-btn" id="copy-code-btn">
+            <svg class="ph ph-sm" viewBox="0 0 256 256" aria-hidden="true">
+              <polyline points="168 168 216 168 216 40 88 40 88 88"/>
+              <rect x="40" y="88" width="128" height="128"/>
+            </svg>
+            <span>Copy 6-Digit Code</span>
+          </button>
+          <button class="secondary-btn" id="close-pair-modal">Close</button>
+        </div>
+
+        <div id="paired-shops-container" style="margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; text-align: left;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-size: 12px; font-weight: 700; color: var(--text);">Paired Registers</span>
+            <span id="paired-shops-count" style="font-family: var(--mono); font-size: 11px; color: var(--text-muted);">0 paired</span>
+          </div>
+          <div id="paired-shops-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow-y: auto;">
+          </div>
+        </div>
+      </div>
+
+      <div id="pair-paired-state" style="display: none;">
+        <svg class="ph ph-xl" viewBox="0 0 256 256" style="color: var(--cash); margin-bottom: 8px;" aria-hidden="true">
+          <polyline points="88 136 112 160 168 104"/>
+          <circle cx="128" cy="128" r="96"/>
+        </svg>
+        <h3 class="modal-title" style="color: var(--cash);">Shop Register Connected</h3>
+        <p class="modal-sub" id="pair-success-desc">Shop register has been verified and permanently paired via SSE handshake.</p>
+        <button class="primary-btn" id="close-pair-success">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

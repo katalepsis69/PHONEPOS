@@ -1,0 +1,10 @@
+/* Tailwind source. Build with: npm run build:css */
+/* source(none): there is no .git here, so auto-detect ignores .gitignore and walks browser-profile/ + dist/ (~1GB), hanging build:exe */
+@import "tailwindcss" source(none);
+
+@variant dark (&:where(.dark, .dark *));
+
+@source "./index.html";
+@source "./js/**/*.js";
+@source "./report.html";
+
