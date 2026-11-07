@@ -3,6 +3,7 @@
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
+- LicenseGenerator builds again: no db import inside the SEA bundle
 - Cloud test harness proves readiness before the first request
 - Bring the source tree under version control; audit v7 fix batch
 - Thermal Receipt Printing: Reliable 58mm and 80mm ESC/POS receipt generation, claim stubs, and automated cash drawer kick.
