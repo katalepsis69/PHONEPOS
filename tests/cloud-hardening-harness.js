@@ -28,14 +28,23 @@ function waitForServer(child) {
     // Keep the child's whole stdout/stderr on the child object too: tests
     // asserting on boot-time log lines need output from before "listening".
     child.outputTail = '';
-    const timer = setTimeout(() => reject(new Error(`cloud server timeout: ${output}`)), 8000);
+    let base = null;
+    const timer = setTimeout(() => reject(new Error(`cloud server timeout: ${output}`)), 15000);
     const onData = chunk => {
       output += chunk;
       child.outputTail += String(chunk);
       const m = output.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/);
-      if (output.includes('Cloud sync service listening') && m) {
-        clearTimeout(timer);
-        resolve(`http://127.0.0.1:${m[1]}`);
+      if (!base && output.includes('Cloud sync service listening') && m) {
+        // The boot line prints inside the listen callback, but on Windows the
+        // first connection right after can still be refused while the fresh
+        // process finishes coming up (measured: a release run's disk load made
+        // one first POST die with a connection reset). Prove readiness with a
+        // real request instead of trusting the line.
+        base = `http://127.0.0.1:${m[1]}`;
+        probe(base, 20, output).then(
+          () => { clearTimeout(timer); resolve(base); },
+          err => { clearTimeout(timer); reject(err); }
+        );
       }
     };
     child.stdout.on('data', onData);
@@ -45,6 +54,20 @@ function waitForServer(child) {
       reject(new Error(`cloud server exited ${code}: ${output}`));
     });
   });
+}
+
+// GET /api/auth-state until it answers anything at all (401/200 both prove the
+// HTTP stack is live). One attempt per 150ms, then give up.
+async function probe(base, attempts, output) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await fetch(`${base}/api/auth-state`);
+      return;
+    } catch (_) {
+      await new Promise(r => setTimeout(r, 150));
+    }
+  }
+  throw new Error(`cloud server never answered a readiness probe: ${output.slice(-300)}`);
 }
 
 async function startCloud(dataDir, extraEnv = {}) {
@@ -85,7 +108,7 @@ async function sync(base, token, shopId, events) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': token },
     body: JSON.stringify({ shop_id: shopId, events }),
-  }).catch(err => { throw new Error(`sync to ${base}/sync failed: ${err.cause ? err.cause.code : err.message}`); });
+  }).catch(err => { throw new Error(`sync to ${base}/sync failed: ${JSON.stringify(err.cause || err.message)}`); });
 }
 
 async function login(base, pin = '2468', forwardedFor = '198.51.100.10') {
