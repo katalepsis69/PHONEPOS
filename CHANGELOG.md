@@ -7,8 +7,10 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 ## [v2.5] - 2026-11-07
 
 ### Highlights & Changes
+- Cloud test harness proves readiness before the first request
 - Bring the source tree under version control; audit v7 fix batch
 - Thermal Receipt Printing: Reliable 58mm and 80mm ESC/POS receipt generation, claim stubs, and automated cash drawer kick.
+
 
 ## [v2.4] - 2026-11-05
 
