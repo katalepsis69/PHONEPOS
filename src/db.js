@@ -38,14 +38,6 @@ function isDirWritable(dir) {
 // valid bases, as they did before.
 const isReleaseShaped = dir => /(^|[\\/])(?:release|publish)([\\/]|$)/i.test(String(dir || ''));
 
-// Handle -> file path, for consumers that need OS-level evidence about the
-// database file (license.js floors the trial clock at its birth time) and
-// cannot get the path from the node:sqlite handle itself.
-const DB_FILES = new WeakMap();
-function getDbFile(db) {
-  return DB_FILES.get(db) || null;
-}
-
 function getBaseDir() {
   if (cachedBaseDir) return cachedBaseDir;
   let base = (process.execPath && !process.execPath.toLowerCase().endsWith('node.exe'))
@@ -73,7 +65,11 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
   }
 
   const db = new DatabaseSync(dbFilePath);
-  DB_FILES.set(db, dbFilePath);
+  // Consumers that need OS-level evidence about the database file (license.js
+  // floors the trial clock at its birth time) read it off the handle. A direct
+  // property, not an import: license.js is bundled into the vendor
+  // LicenseGenerator exe, whose SEA loader cannot follow a require('./db').
+  db.shopDbPath = dbFilePath;
   // Close the handle we opened if anything below throws, so temp dbs
   // (tests, failed migrations) stay deletable on Windows.
   try {
@@ -424,4 +420,4 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
   }
 }
 
-module.exports = { initDb, DEFAULT_DB_PATH, getBaseDir, isReleaseShaped, getDbFile };
+module.exports = { initDb, DEFAULT_DB_PATH, getBaseDir, isReleaseShaped };

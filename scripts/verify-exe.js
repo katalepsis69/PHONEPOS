@@ -217,11 +217,15 @@ async function main() {
     pass('isolation', `db=${dbPath} backup=${backupDir} loopback=127.0.0.1 port=${port}`);
 
     const cliTemp = fs.mkdtempSync(path.join(tempDir, 'license-cli-'));
+    // 30s, not 5s: the first run of a freshly built 92MB unsigned exe can sit
+    // in Windows Defender's scan for tens of seconds, which killed this smoke
+    // step on every release build until the timeout learned that.
     const cli = await runBounded(path.join(DIST_DIR, 'LicenseGenerator.exe'), ['--help'], {
       cwd: cliTemp,
       env: { ...process.env, TP_LICENSE_KEY_FILE: path.join(cliTemp, 'missing-private-key.pem') }
-    });
-    assert(cli.code === 0 && /Usage: LicenseGenerator\.exe/.test(cli.stdout), 'LicenseGenerator.exe --help failed');
+    }, 30000);
+    assert(cli.code === 0 && /Usage: LicenseGenerator\.exe/.test(cli.stdout),
+      `LicenseGenerator.exe --help failed: exit=${cli.code} stdout=${JSON.stringify(cli.stdout.slice(0, 200))} stderr=${JSON.stringify(cli.stderr.slice(0, 200))}`);
     assert(!fs.existsSync(path.join(cliTemp, 'missing-private-key.pem')), 'license help created a private key');
     pass('license-cli', '--help exit=0 private-key-read=false private-key-created=false');
   } catch (error) {

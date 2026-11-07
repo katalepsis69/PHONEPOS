@@ -3,7 +3,6 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { getDbFile } = require('./db');
 
 // Ed25519 vendor PUBLIC key (SPKI DER, base64). Safe to ship: it can only verify,
 // never sign. The matching PRIVATE key stays on the vendor's machine and is the
@@ -203,7 +202,7 @@ function getTrialState(db) {
     // audit log plus a moved database file is beyond the casual bypass this
     // closes.
     const evidence = [];
-    const dbFile = getDbFile(db);
+    const dbFile = db.shopDbPath || null;
     if (dbFile) { try { evidence.push(fs.statSync(dbFile).birthtimeMs); } catch (_) {} }
     try {
       const row = db.prepare('SELECT MIN(created_at) AS m FROM audit_log').get();
