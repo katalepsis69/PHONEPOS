@@ -1,11 +1,10 @@
-# What is New in TechParts POS (v2.4)
+﻿# What is New in TechParts POS (v2.5)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- Update v2.4 release notes with inventory capital and empty template highlights
-- Inventory Capital & Blank Template: Standardized cost price to Capital across all screens and exports; download template is now completely empty with zero dummy rows.
-- Wholesale Pricing & Catalog Transfer: Fixed CSV exports to use friendly Capital and Wholesale Price headers for clean multi-PC catalog updates.
+- Bring the source tree under version control; audit v7 fix batch
+- Thermal Receipt Printing: Reliable 58mm and 80mm ESC/POS receipt generation, claim stubs, and automated cash drawer kick.
 
 ---
 
@@ -105,6 +104,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-v2.4.zip` below.
+  1. Download `TechPartsPOS-v2.5.zip` below.
   2. Extract the folder to your computer (e.g. `C:\TechPartsPOS`).
   3. Double-click `TechPartsPOS.exe` to start.
