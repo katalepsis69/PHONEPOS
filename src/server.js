@@ -1948,15 +1948,23 @@ function startServer(preferredPort = process.env.PORT ? parseInt(process.env.POR
   // Fresh installs start with a completely clean database (no demo data auto-seeded)
 
   server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE' && currentPort <= preferredPort + 20) {
-      console.log(`[!] Port ${currentPort} is busy, retrying on port ${currentPort + 1}...`);
-      logLine(`[!] Port ${currentPort} is busy, retrying on port ${currentPort + 1}...`);
+    // Windows reports "port already held" as EACCES at least as often as
+    // EADDRINUSE: another app bound on 0.0.0.0 blocks a 127.0.0.1 bind, and
+    // Hyper-V/WSL reserve whole port ranges. Treating only EADDRINUSE as busy
+    // made the app die instantly whenever anything else owned port 3000.
+    if ((err.code === 'EADDRINUSE' || err.code === 'EACCES') && currentPort < preferredPort + 20) {
+      console.log(`[!] Port ${currentPort} is busy or blocked (${err.code}), retrying on port ${currentPort + 1}...`);
+      logLine(`[!] Port ${currentPort} is busy or blocked (${err.code}), retrying on port ${currentPort + 1}...`);
       currentPort += 1;
       setTimeout(() => server.listen(currentPort, host), 100);
       return;
     }
     logLine(`Fatal Server Error: ${err.message}`);
     console.error('Fatal Server Error:', err.message);
+    if (err.code === 'EADDRINUSE' || err.code === 'EACCES') {
+      console.error(`Ports ${preferredPort}-${currentPort} are all held or blocked by another program.`);
+      console.error(`Find the owner with:  netstat -ano | findstr :${preferredPort}   then:  tasklist /fi "PID eq <pid>"`);
+    }
     releaseInstanceLock();
     process.exit(1); // lingering unlistening helps nobody; start.bat surfaces the code
   });
