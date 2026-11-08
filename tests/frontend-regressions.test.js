@@ -39,6 +39,20 @@ test('report authentication is scoped to session storage', () => {
   assert.doesNotMatch(reportJs, /localStorage\.(?:setItem|getItem|removeItem)\(TOKEN_KEY/);
 });
 
+test('manager elevation survives F5 but not logout or expiry', () => {
+  const auth = source('public/js/auth.js');
+  const main = source('public/js/main.js');
+
+  // setElevation mirrors the token into sessionStorage next to pos_session
+  assert.match(auth, /sessionStorage\.setItem\('pos_elevation', JSON\.stringify\(\{ t: S\.elevationToken, e: S\.elevationExpiresAt \}\)\)/);
+  // expiry timer and logout both drop the stored token
+  assert.match(auth, /setElevation\(null, 0\)/);
+  assert.match(auth, /sessionStorage\.removeItem\('pos_session'\); sessionStorage\.removeItem\('pos_elevation'\)/);
+  // boot restore only revives an unexpired token
+  assert.match(main, /sessionStorage\.getItem\('pos_elevation'\)/);
+  assert.match(main, /Number\(savedElevation\.e\) > Date\.now\(\)/);
+});
+
 test('filtered frontend loaders discard stale responses', () => {
   const inventory = source('public/js/views/inventory.js');
   const backoffice = source('public/js/views/backoffice.js');
@@ -239,4 +253,51 @@ test('remediation batch: idempotency keys wired, dead dispatcher entries gone, l
   assert.match(auth, /'inventory adjust_stock':/,);
   assert.doesNotMatch(auth, /'security staff_add'/, 'drifted key removed');
   assert.doesNotMatch(auth, /'credit utang':/, 'dead key removed');
+});
+
+test('audit feed: sentence-first, outcome-only color, repeat collapse', () => {
+  const auth = source('public/js/auth.js');
+  assert.match(auth, /function auditSentence\(r, d\)/);
+  assert.match(auth, /audit-line__sentence--neg/);
+  assert.match(auth, /audit-line__sentence--pos/);
+  assert.match(auth, /details class="audit-repeat"/);
+  assert.match(auth, /auditCategoryLabel\(group\.category\)/);
+  // Categories are plain words now; the colored category badges are gone.
+  assert.doesNotMatch(auth, /audit-tag--/);
+  assert.doesNotMatch(auth, /audit-narrative/);
+  // The raw payload stays reachable one Details click away.
+  assert.match(auth, /Inspect payload|>Details</);
+  const html = source('public/index.html');
+  assert.match(html, /<ol id="audit-tbody" class="audit-feed"/);
+  assert.doesNotMatch(html, /audit-table/);
+});
+
+test('receipt templates ship with a paper preview wired to the print builder', () => {
+  const auth = source('public/js/auth.js');
+  assert.match(auth, /loadReceiptPreview/);
+  assert.match(auth, /\/api\/receipt\/preview/);
+  const printer = source('src/printer.js');
+  for (const t of ['saleSlipStandard', 'saleSlipCompact', 'saleSlipBoxed', 'saleSlipAiry', 'saleSlipGrid']) {
+    assert.match(printer, new RegExp(`function ${t}[\\(]`));
+  }
+  assert.match(printer, /SALE_TEMPLATES\.has\(settings\.receipt_template\)/);
+  const server = source('src/server.js');
+  assert.match(server, /\/api\/receipt\/preview/);
+  assert.match(server, /if \(!elevated\) return elevationDenied\(\);[\s\S]*?const overrides = await parseBody\(req\);/);
+  const html = source('public/index.html');
+  for (const id of ['settings-template', 'settings-item-rows', 'settings-receipt-preview']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+});
+
+test('feedback dialog composes a pre-filled report with no backend', () => {
+  const main = source('public/js/main.js');
+  assert.match(main, /bfffpt@gmail\.com/);
+  assert.match(main, /mailto:\$\{FEEDBACK_EMAIL\}/);
+  assert.match(main, /mail\.google\.com\/mail\/\?view=cm/);
+  assert.match(main, /compose\.mail\.yahoo\.com/);
+  assert.match(main, /navigator\.clipboard\.writeText/);
+  const html = source('public/index.html');
+  assert.match(html, /id="modal-feedback"/);
+  assert.match(html, /data-action="open-feedback"/);
 });

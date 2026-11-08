@@ -5,8 +5,9 @@ import { syncAppearanceModal } from './theme.js';
 import { loadPosCatalog } from './views/pos.js';
 
 // Session / role state. Token lives in memory + sessionStorage (survives F5,
-// dies on tab close). Elevation is memory-only with a 15-min TTL; a manager
-// session restored after F5 re-elevates on first use.
+// dies on tab close). Elevation rides the same storage with a 15-min TTL
+// (verified server-side on every privileged call), so a manager session
+// restored after F5 stays unlocked until the TTL runs out.
 // initialized in state.js: S.sessionToken
 // initialized in state.js: S.sessionActor
 // initialized in state.js: S.elevationToken
@@ -26,11 +27,15 @@ export function setElevation(token, expiresAt) {
   S.elevationExpiresAt = Number(expiresAt) || 0;
   S.isManagerUnlocked = hasElevation();
   clearTimeout(window._pinLockTimer);
+  // Mirror the session token: lives in sessionStorage so an F5 restores it
+  // (still 15-min TTL, still verified server-side on every privileged call).
+  try {
+    if (S.elevationToken) sessionStorage.setItem('pos_elevation', JSON.stringify({ t: S.elevationToken, e: S.elevationExpiresAt }));
+    else sessionStorage.removeItem('pos_elevation');
+  } catch (_) {}
   if (S.elevationToken) {
     window._pinLockTimer = setTimeout(() => {
-      S.elevationToken = null;
-      S.elevationExpiresAt = 0;
-      S.isManagerUnlocked = false;
+      setElevation(null, 0);
       S.costPricesRevealed = false;
       // Re-render so manager-only controls disappear with the elevation.
       if (S.currentTab === 'inventory') loadInventoryTable();
@@ -46,7 +51,7 @@ export function clearSession() {
   S.isManagerUnlocked = false;
   S.costPricesRevealed = false;
   clearTimeout(window._pinLockTimer);
-  try { sessionStorage.removeItem('pos_session'); } catch (_) {}
+  try { sessionStorage.removeItem('pos_session'); sessionStorage.removeItem('pos_elevation'); } catch (_) {}
 }
 
 // -------------------------------------------------------------
@@ -454,6 +459,8 @@ export function updateShopBrandUi() {
     'settings-warranty-days': S.shopSettings.warranty_days,
     'settings-warranty-policy': S.shopSettings.warranty_policy_text,
     'settings-paper-width': S.shopSettings.receipt_paper_width || '80mm',
+    'settings-template': S.shopSettings.receipt_template || 'standard',
+    'settings-item-rows': S.shopSettings.receipt_item_rows || 'auto',
     'settings-sync-url': S.shopSettings.sync_url || DEFAULT_CLOUD_URL,
     'settings-settle-threshold': S.shopSettings.settle_elevation_threshold,
     'settings-shift-variance': S.shopSettings.shift_variance_threshold,
@@ -654,6 +661,37 @@ export async function loadPrinters() {
   if (missing) note.textContent = `Saved printer "${saved}" is not installed here. Pick one and save.`;
 }
 
+// Paper preview in Settings > Printing: the server renders the same slip
+// builder the print queue feeds to encode(), so the preview cannot drift from
+// what the roll outputs. Re-fetched whenever template, width or item rows move.
+export async function loadReceiptPreview() {
+  const pre = document.getElementById('settings-receipt-preview');
+  if (!pre) return;
+  const body = {
+    template: document.getElementById('settings-template')?.value || 'standard',
+    item_rows: document.getElementById('settings-item-rows')?.value || 'auto',
+    paper_width: document.getElementById('settings-paper-width')?.value || '80mm',
+  };
+  try {
+    const res = await fetch('/api/receipt/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Preview failed');
+    }
+    const { lines } = await res.json();
+    pre.innerHTML = (lines || []).map((l) => {
+      const cls = `${l.centered ? 'rp-c ' : ''}${l.wide ? 'rp-w' : ''}`.trim();
+      return `<span class="${cls}">${escHtml(l.text)}</span>`;
+    }).join('\n');
+  } catch (err) {
+    pre.textContent = err.message;
+  }
+}
+
 export function openSettingsModal(targetTab = 'store') {
   if (!S.isManagerUnlocked) {
     requireManagerPin('Enter manager PIN to open Settings', () => {
@@ -664,6 +702,7 @@ export function openSettingsModal(targetTab = 'store') {
 
   switchSettingsTab(targetTab);
   updateShopBrandUi();
+  loadReceiptPreview();
 
   // Native ESC/POS goes to the queue named in Settings whatever opened the
   // window, so the launcher's #kiosk=1 marker (per-tab sessionStorage) now only
@@ -761,6 +800,8 @@ export async function saveShopSettings(e) {
   let gcash_qr_url = document.getElementById('settings-gcash-qr').value.trim();
   gcash_qr_url = cleanQrPath(gcash_qr_url);
   const receipt_paper_width = document.getElementById('settings-paper-width').value;
+  const receipt_template = document.getElementById('settings-template')?.value || 'standard';
+  const receipt_item_rows = document.getElementById('settings-item-rows')?.value || 'auto';
   // Reads '' while the picker is loading, failed or found nothing. The spread
   // below drops the field entirely unless the operator actually moved the
   // selection, so an unrelated save never pays for a queue enumeration.
@@ -788,6 +829,8 @@ export async function saveShopSettings(e) {
         gcash_number,
         gcash_qr_url,
         receipt_paper_width,
+        receipt_template,
+        receipt_item_rows,
         warranty_days,
         settle_elevation_threshold,
         shift_variance_threshold,
@@ -1517,31 +1560,30 @@ const ACTION_LABELS = {
   'system update_apply':         'App update applied',
 };
 
-// ---- Category → tag color class -----------------------------------------
-const CATEGORY_TONE = {
-  security:  'audit-tag--security',
-  sale:      'audit-tag--sale',
-  receipt:   'audit-tag--sale',
-  print:     'audit-tag--system',
-  credit:    'audit-tag--credit',
-  return:    'audit-tag--return',
-  inventory: 'audit-tag--inventory',
-  settings:  'audit-tag--settings',
-  shift:     'audit-tag--system',
-  day_close: 'audit-tag--system',
-  system:    'audit-tag--system',
+// ---- Category → quiet text label ------------------------------------------
+// The feed colors outcomes, not categories, so a category is a plain word in
+// the meta line, never a colored badge.
+const CATEGORY_LABELS = {
+  security:  'Security',
+  sale:      'Sales',
+  receipt:   'Sales',
+  print:     'Printer',
+  credit:    'Credits',
+  return:    'Returns',
+  inventory: 'Stock',
+  settings:  'Settings',
+  shift:     'Shift',
+  day_close: 'Day close',
+  system:    'System',
 };
 
-// Keys that are worth showing inline as pill chips
-const INLINE_KEYS = new Set(['note', 'reason', 'amount', 'ref', 'sku', 'variance', 'tier', 'method', 'staff_id']);
+function auditCategoryLabel(category) {
+  return CATEGORY_LABELS[category] || category;
+}
 
 function auditLabel(r) {
   const key = `${r.category} ${r.action}`;
   return ACTION_LABELS[key] || r.action.replace(/_/g, ' ');
-}
-
-function auditTagClass(category) {
-  return CATEGORY_TONE[category] || 'audit-tag--system';
 }
 
 function formatReason(r) {
@@ -1561,211 +1603,129 @@ function formatReason(r) {
   return map[r] || String(r).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-// ---- Detail cell: human narrative + discreet raw payload inspect ----------
-function auditDetailCell(r) {
-  let d = null;
+// ---- Sentence feed: one human line per entry -------------------------------
+// parseAuditDetail: the raw detail JSON, or null when the row carries none.
+// A malformed payload surfaces as { raw }, so broken JSON is inspectable
+// instead of silently blank.
+function parseAuditDetail(r) {
   try {
-    d = r.detail ? JSON.parse(r.detail) : null;
+    const d = r.detail ? JSON.parse(r.detail) : null;
+    return d && typeof d === 'object' && Object.keys(d).length ? d : null;
   } catch (_) {
-    d = r.detail ? { raw: r.detail } : null;
+    return { raw: String(r.detail) };
   }
+}
 
-  if (!d || typeof d !== 'object' || Object.keys(d).length === 0) {
-    return '<span class="audit-empty">-</span>';
-  }
-
-  let narrativeHtml = '';
-  const cat = r.category;
-  const act = r.action;
-
-  // 1. Inventory stock adjust (Image 2's exact use-case)
-  if (cat === 'inventory' && (act === 'adjust_stock' || act === 'adjust')) {
-    const partName = d.part || (d.id ? `Part #${d.id}` : 'Inventory item');
-    const delta = Number(d.delta) || 0;
-    const deltaBadge = delta < 0
-      ? `<span class="audit-narrative__badge is-neg">${delta} units</span>`
-      : `<span class="audit-narrative__badge is-pos">+${delta} units</span>`;
-    const beforeVal = d.before !== undefined ? d.before : '?';
-    const afterVal = d.after !== undefined ? d.after : '?';
-    const reasonStr = d.reason ? formatReason(d.reason) : '';
-
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">${escHtml(partName)}</span>
-        <span class="audit-narrative__sub">
-          Stock <span class="audit-narrative__qty">${beforeVal} &rarr; ${afterVal}</span>
-          (${deltaBadge})
-          ${reasonStr ? `<span class="audit-narrative__sep">&middot;</span> <span class="audit-narrative__reason">Reason: <b>${escHtml(reasonStr)}</b></span>` : ''}
-        </span>
-      </div>`;
-  }
-  // 2. Inventory create
-  else if (cat === 'inventory' && act === 'create') {
-    const partName = d.part || 'New part';
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">${escHtml(partName)}</span>
-        <span class="audit-narrative__sub">
-          Stock: <b class="audit-num">${d.stock || 0}</b>
-          ${d.price !== undefined ? `<span class="audit-narrative__sep">&middot;</span> Price: <b class="audit-num">${fmtMoney(d.price)}</b>` : ''}
-          ${d.sku ? `<span class="audit-narrative__sep">&middot;</span> SKU: <span class="font-mono">${escHtml(d.sku)}</span>` : ''}
-        </span>
-      </div>`;
-  }
-  // 3. Inventory update / archive / unarchive
-  else if (cat === 'inventory' && (act === 'archive' || act === 'unarchive')) {
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">${escHtml(d.part || `Part #${d.id}`)}</span>
-        <span class="audit-narrative__sub">${act === 'archive' ? 'Archived from catalog' : 'Restored to active catalog'}</span>
-      </div>`;
-  }
-  // 4. Inventory CSV import
-  else if (cat === 'inventory' && act === 'import') {
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">Bulk CSV Catalog Import</span>
-        <span class="audit-narrative__sub">
-          <b class="audit-num">${d.created || 0}</b> created
-          <span class="audit-narrative__sep">&middot;</span>
-          <b class="audit-num">${d.updated || 0}</b> stock updated
-        </span>
-      </div>`;
-  }
-  // 5. Sale create
-  else if (cat === 'sale' && act === 'create') {
-    const total = d.total !== undefined ? fmtMoney(d.total) : '';
-    const method = d.payment_method ? d.payment_method.toUpperCase() : 'Cash';
-    const items = d.items ? `${d.items} item${d.items > 1 ? 's' : ''}` : '';
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">${escHtml(d.sale_code || 'Sale')}</span>
-        <span class="audit-narrative__sub">
-          ${total ? `<b class="audit-num">${total}</b>` : ''}
-          ${method ? `<span class="audit-narrative__badge">${escHtml(method)}</span>` : ''}
-          ${items ? `<span class="audit-narrative__sep">&middot;</span> ${escHtml(items)}` : ''}
-          ${d.customer ? `<span class="audit-narrative__sep">&middot;</span> ${escHtml(d.customer)}` : ''}
-        </span>
-      </div>`;
-  }
-  // 6. Sale void
-  else if (cat === 'sale' && act === 'void') {
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">Sale ${escHtml(d.sale_code || '')} voided</span>
-        <span class="audit-narrative__sub">
-          ${d.total !== undefined ? `<span class="audit-narrative__badge is-neg">Void ${fmtMoney(d.total)}</span>` : ''}
-          ${d.restored ? `<span class="audit-narrative__sep">&middot;</span> Stock restored` : ''}
-          ${d.reason ? `<span class="audit-narrative__sep">&middot;</span> ${escHtml(d.reason)}` : ''}
-        </span>
-      </div>`;
-  }
-  // 7. Receipt reprint
-  else if (cat === 'receipt' && act === 'reprint') {
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">Receipt reprinted</span>
-        <span class="audit-narrative__sub">Sale code: <span class="font-mono">${escHtml(d.sale_code || '—')}</span></span>
-      </div>`;
-  }
-  // 8. Credit settle
-  else if (cat === 'credit' && act === 'settle') {
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">${escHtml(d.customer || d.customer_name || 'Customer')}</span>
-        <span class="audit-narrative__sub">
-          Payment <b class="audit-num">${fmtMoney(d.amount)}</b>
-          ${d.method ? `<span class="audit-narrative__badge">${escHtml(d.method)}</span>` : ''}
-          ${d.reference ? `<span class="audit-narrative__sep">&middot;</span> Ref: <span class="font-mono">${escHtml(d.reference)}</span>` : ''}
-        </span>
-      </div>`;
-  }
-  // 8b. Credit limit
-  else if (cat === 'credit' && act === 'set_limit') {
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">${escHtml(d.customer || d.customer_name || 'Customer')}</span>
-        <span class="audit-narrative__sub">
-          Credit limit set to <b class="audit-num">${d.credit_limit > 0 ? fmtMoney(d.credit_limit) : 'No limit'}</b>
-        </span>
-      </div>`;
-  }
-  // 9. Warranty return
-  else if (cat === 'return' && act === 'create') {
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">${escHtml(d.return_code || 'Warranty Return')}</span>
-        <span class="audit-narrative__sub">
-          Sale: <span class="font-mono">${escHtml(d.sale_code || '—')}</span>
-          <span class="audit-narrative__sep">&middot;</span>
-          ${d.type === 'replacement' ? 'Part replacement' : `Refund: <b class="audit-num">${fmtMoney(d.amount)}</b>`}
-        </span>
-      </div>`;
-  }
-  // 10. Shift or day close
-  else if ((cat === 'shift' || cat === 'day_close') && act === 'close') {
-    const variance = Number(d.variance) || 0;
-    const balanced = Math.abs(variance) < 0.01;
-    const title = cat === 'day_close' ? `Day ${d.day || ''} closed` : `Shift #${d.shift_id || '1'} closed`;
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">${escHtml(title)}</span>
-        <span class="audit-narrative__sub">
-          Counted: <b class="audit-num">${fmtMoney(d.counted_cash)}</b>
-          <span class="audit-narrative__sep">&middot;</span>
-          Expected: <b class="audit-num">${fmtMoney(d.expected_cash)}</b>
-          <span class="audit-narrative__sep">&middot;</span>
-          ${balanced ? '<span class="audit-narrative__badge is-pos">Balanced</span>' : `<span class="audit-narrative__badge is-neg">Variance: ${fmtMoney(variance)}</span>`}
-        </span>
-      </div>`;
-  }
-  // 10b. Inventory bulk edit
-  else if (cat === 'inventory' && act === 'bulk_edit') {
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title">Bulk Catalog Edit</span>
-        <span class="audit-narrative__sub">
-          <b class="audit-num">${d.count || 0}</b> part(s) updated
-          ${d.action ? `<span class="audit-narrative__sep">&middot;</span> ${escHtml(String(d.action).replace(/_/g, ' '))}` : ''}
-        </span>
-      </div>`;
-  }
-  // 11. Security failures
-  else if (cat === 'security' && (act === 'login_failed' || act === 'report_login_failed')) {
-    narrativeHtml = `
-      <div class="audit-narrative">
-        <span class="audit-narrative__title" style="color:var(--danger)">Incorrect PIN entered</span>
-        <span class="audit-narrative__sub">Authentication rejected by workstation security</span>
-      </div>`;
-  }
-  // 12. Generic / Fallback
-  else {
-    const entries = Object.entries(d).filter(([k]) => !['id', 'staff_id', 'customer_id', 'hold_id'].includes(k));
-    if (entries.length === 0) {
-      narrativeHtml = `<span class="audit-empty">-</span>`;
-    } else {
-      const pills = entries.slice(0, 3).map(([k, v]) => {
-        const keyLabel = k.replace(/_/g, ' ');
-        const valStr = typeof v === 'object' ? JSON.stringify(v) : String(v);
-        return `<span class="audit-pill"><span class="audit-pill__key">${escHtml(keyLabel)}</span><span class="audit-pill__val">${escHtml(valStr)}</span></span>`;
-      }).join(' ');
-      narrativeHtml = `<div class="audit-narrative"><span class="audit-pills">${pills}</span></div>`;
-    }
-  }
-
-  // Raw payload inspect accordion (compact, unobtrusive)
-  const fullRows = Object.entries(d).map(([k, v]) => {
+function auditPayloadHtml(d) {
+  const rows = Object.entries(d).map(([k, v]) => {
     const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
     return `<div><dt>${escHtml(k)}</dt><dd>${escHtml(val)}</dd></div>`;
   }).join('');
+  return `<details class="audit-raw-toggle"><summary class="audit-raw-toggle__summary">Details</summary><dl class="audit-detail__dl">${rows}</dl></details>`;
+}
 
-  const rawDisclosure = `
-    <details class="audit-raw-toggle">
-      <summary class="audit-raw-toggle__summary">Inspect payload</summary>
-      <dl class="audit-detail__dl">${fullRows}</dl>
-    </details>`;
+// The sentence carries the event's own figures (money, stock, names) inline so
+// the feed reads like the day's story; the raw payload stays one Details click
+// away. tone colors outcomes only: red where money or access went wrong,
+// green where a balance settled. Categories stay colorless on purpose, so a
+// routine sign-in never looks like an alarm.
+function auditSentence(r, d) {
+  const label = auditLabel(r);
+  if (!d) return { text: label, tone: '' };
+  const cat = r.category;
+  const act = r.action;
+  const P = fmtMoney;
+  const pair = (k, v) => `${String(k).replace(/_/g, ' ')}: ${String(v)}`;
 
-  return `${narrativeHtml}${rawDisclosure}`;
+  if (cat === 'security' && (act === 'login_failed' || act === 'report_login_failed')) {
+    return { text: 'Incorrect PIN entered, access rejected', tone: 'neg' };
+  }
+  if (cat === 'sale' && act === 'void') {
+    const bits = [`Sale ${d.sale_code || ''} voided`];
+    if (d.total !== undefined) bits.push(`amount ${P(d.total)}`);
+    if (d.restored) bits.push('stock restored');
+    if (d.reason) bits.push(`reason: ${d.reason}`);
+    return { text: bits.join(', '), tone: 'neg' };
+  }
+  if (cat === 'sale' && act === 'create') {
+    const bits = [`${d.sale_code || 'Sale'} recorded`];
+    if (d.total !== undefined) bits.push(P(d.total));
+    if (d.payment_method) bits.push(String(d.payment_method).toUpperCase());
+    if (d.items) bits.push(`${d.items} item${d.items > 1 ? 's' : ''}`);
+    if (d.customer) bits.push(String(d.customer));
+    return { text: bits.join(' · '), tone: '' };
+  }
+  if (cat === 'receipt' && act === 'reprint') {
+    return { text: `Receipt reprinted for ${d.sale_code || 'a sale'}`, tone: '' };
+  }
+  if (cat === 'credit' && act === 'settle') {
+    const bits = [`${d.customer || d.customer_name || 'Customer'} paid ${P(d.amount)}`];
+    if (d.method) bits.push(String(d.method).toUpperCase());
+    if (d.reference) bits.push(`ref ${d.reference}`);
+    return { text: bits.join(' · '), tone: 'pos' };
+  }
+  if (cat === 'credit' && act === 'set_limit') {
+    const limit = Number(d.credit_limit) > 0 ? P(d.credit_limit) : 'no limit';
+    return { text: `${d.customer || d.customer_name || 'Customer'}: credit limit set to ${limit}`, tone: '' };
+  }
+  if (cat === 'return' && act === 'create') {
+    const what = d.type === 'replacement' ? 'part replacement' : `refund ${P(d.amount)}`;
+    return { text: `${d.return_code || 'Warranty return'} on sale ${d.sale_code || ''}: ${what}`, tone: '' };
+  }
+  if (cat === 'inventory' && (act === 'adjust_stock' || act === 'adjust')) {
+    const part = d.part || (d.id ? `Part #${d.id}` : 'Inventory item');
+    const delta = Number(d.delta) || 0;
+    const before = d.before !== undefined ? d.before : '?';
+    const after = d.after !== undefined ? d.after : '?';
+    const reason = d.reason ? `, reason: ${formatReason(d.reason)}` : '';
+    return { text: `${part}: stock ${before} → ${after} (${delta >= 0 ? '+' : ''}${delta} units${reason})`, tone: '' };
+  }
+  if (cat === 'inventory' && act === 'create') {
+    const bits = [`${d.part || 'New part'} added`];
+    if (d.stock !== undefined) bits.push(`stock ${d.stock}`);
+    if (d.price !== undefined) bits.push(`price ${P(d.price)}`);
+    if (d.sku) bits.push(`SKU ${d.sku}`);
+    return { text: bits.join(', '), tone: '' };
+  }
+  if (cat === 'inventory' && (act === 'archive' || act === 'unarchive')) {
+    return { text: `${d.part || `Part #${d.id}`} ${act === 'archive' ? 'archived from' : 'restored to'} the catalog`, tone: '' };
+  }
+  if (cat === 'inventory' && act === 'delete') {
+    return { text: `${d.part || `Part #${d.id}`} deleted`, tone: 'neg' };
+  }
+  if (cat === 'inventory' && act === 'import') {
+    return { text: `CSV import: ${d.created || 0} created, ${d.updated || 0} stock updated`, tone: '' };
+  }
+  if (cat === 'inventory' && act === 'bulk_edit') {
+    const act2 = d.action ? `, ${String(d.action).replace(/_/g, ' ')}` : '';
+    return { text: `Bulk edit: ${d.count || 0} part(s)${act2}`, tone: '' };
+  }
+  if ((cat === 'shift' || cat === 'day_close') && act === 'close') {
+    const variance = Number(d.variance) || 0;
+    const balanced = Math.abs(variance) < 0.01;
+    const title = cat === 'day_close' ? `Day ${d.day || ''} closed` : `Shift #${d.shift_id || '1'} closed`;
+    const verdict = balanced ? 'balanced' : `variance ${P(variance)}`;
+    return { text: `${title}: counted ${P(d.counted_cash)}, expected ${P(d.expected_cash)}, ${verdict}`, tone: balanced ? 'pos' : 'neg' };
+  }
+  if (cat === 'settings' && act === 'update' && d.changes && typeof d.changes === 'object') {
+    const keys = Object.keys(d.changes).map((k) => k.replace(/_/g, ' '));
+    const shown = keys.slice(0, 3).join(', ');
+    const more = keys.length > 3 ? ` +${keys.length - 3} more` : '';
+    return { text: `Settings changed: ${shown}${more}`, tone: '' };
+  }
+  if (cat === 'settings' && act === 'cloud_paired') {
+    const backfill = Number(d.backfill_rows) > 0 ? `, ${d.backfill_rows} rows backfilled` : '';
+    return { text: `Cloud register paired, shop ${d.shop_id || ''}${backfill}`, tone: '' };
+  }
+  // Unknown shapes: the label plus the first few payload pairs, values
+  // bounded so one long field cannot stretch the line.
+  const entries = Object.entries(d).filter(([k]) => !['id', 'staff_id', 'customer_id', 'hold_id'].includes(k));
+  if (!entries.length) return { text: label, tone: '' };
+  const pairs = entries.slice(0, 3).map(([k, v]) => {
+    const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return pair(k, val.length > 48 ? `${val.slice(0, 48)}...` : val);
+  }).join(', ');
+  return { text: `${label}: ${pairs}`, tone: '' };
 }
 
 // ---- Relative timestamp --------------------------------------------------
@@ -1831,7 +1791,7 @@ export async function loadAuditLog({ append = false } = {}) {
     return;
   }
   if (!auditInited) initAuditFilters();
-  if (!append) showSkeleton('audit-tbody', 4);
+  if (!append) tbody.innerHTML = '<li class="audit-loading">Loading audit entries...</li>';
   try {
     const actor = document.getElementById('audit-filter-actor')?.value.trim() || '';
     const category = auditCategory;
@@ -1860,55 +1820,82 @@ export async function loadAuditLog({ append = false } = {}) {
 
     if (!append && rows.length === 0) {
       tbody.innerHTML = `
-        <tr><td colspan="4">
+        <li class="audit-loading">
           <div class="empty">
             <div class="empty__icon"><i class="ph ph-shield-check w-5 h-5"></i></div>
             <div class="empty__title">No audit entries found</div>
             <p class="empty__body">No activity logged for this filter or date range.</p>
           </div>
-        </td></tr>`;
+        </li>`;
       return;
     }
 
-    // Build rows, inserting a date-group header when the day changes
-    // ponytail: ':last-child' never matches (data rows follow the header), so
-    // 'load more' re-printed the same day's header — take the actual last one.
+    // Build the feed: day headers, then entries. Consecutive detail-less
+    // entries with the same who + what (the sign-in spam case) collapse into
+    // one expandable row; every entry is still in the log and listed on expand.
+    // ponytail: a repeat straddling a "Load more" boundary renders as two
+    // groups; merging across pages needs state the DOM does not carry.
     let lastDay = append ? [...tbody.querySelectorAll('[data-day]')].pop()?.dataset.day || '' : '';
-    const html = rows.map(r => {
+    const parts = [];
+    let group = null;
+    const flushGroup = () => {
+      if (!group) return;
+      const first = group.times[0];
+      const last = group.times[group.times.length - 1];
+      const range = group.times.length > 1 ? `, ${first} to ${last}` : '';
+      parts.push(`
+        <li class="audit-line">
+          <span class="audit-line__time">${escHtml(first)}</span>
+          <div class="audit-line__body">
+            <details class="audit-repeat">
+              <summary class="audit-line__sentence">${escHtml(group.label)} · ${group.times.length} times${escHtml(range)}</summary>
+              <ul class="audit-repeat__list">${group.times.map((t) => `<li>${escHtml(t)}</li>`).join('')}</ul>
+            </details>
+            <p class="audit-line__meta">${escHtml(group.actor)} · ${escHtml(auditCategoryLabel(group.category))}${group.elevated ? ' · elevated' : ''}</p>
+          </div>
+        </li>`);
+      group = null;
+    };
+    for (const r of rows) {
       const dayKey = auditDayKey(r.created_at);
-      let groupHeader = '';
       if (dayKey !== lastDay) {
+        flushGroup();
         lastDay = dayKey;
-        groupHeader = `<tr class="audit-date-row" data-day="${escHtml(dayKey)}"><td colspan="4"><span class="audit-date-label">${escHtml(auditDayLabel(r.created_at))}</span></td></tr>`;
+        parts.push(`<li class="audit-day" data-day="${escHtml(dayKey)}"><span class="audit-day__label">${escHtml(auditDayLabel(r.created_at))}</span></li>`);
       }
-      const d = new Date(r.created_at);
-      const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const relTime = auditRelTime(r.created_at);
-      const tagClass = auditTagClass(r.category);
-      const label = auditLabel(r);
-      const row = `
-        <tr>
-          <td class="audit-when">
-            <span class="audit-time font-mono">${escHtml(timeStr)}</span>
-            ${relTime ? `<span class="audit-rel">${escHtml(relTime)}</span>` : ''}
-          </td>
-          <td class="audit-who">
-            <span class="audit-name">${escHtml(r.actor_name)}</span>
-            <span class="audit-role">${escHtml(r.actor_type)}${r.elevated ? ' · elevated' : ''}</span>
-          </td>
-          <td class="audit-what">
-            <span class="audit-tag ${tagClass}">${escHtml(r.category)}</span>
-            <span class="audit-action">${escHtml(label)}</span>
-          </td>
-          <td class="audit-detail-cell">${auditDetailCell(r)}</td>
-        </tr>`;
-      return groupHeader + row;
-    }).join('');
+      const detail = parseAuditDetail(r);
+      const timeStr = new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      if (!detail) {
+        const key = `${r.actor_name}|${r.elevated}|${r.category}|${r.action}`;
+        if (group && group.key === key) {
+          group.times.push(timeStr);
+          continue;
+        }
+        flushGroup();
+        group = { key, label: auditLabel(r), actor: r.actor_name, category: r.category, elevated: !!r.elevated, times: [timeStr] };
+        continue;
+      }
+      flushGroup();
+      const sentence = auditSentence(r, detail);
+      const tone = sentence.tone === 'neg' ? ' audit-line__sentence--neg' : sentence.tone === 'pos' ? ' audit-line__sentence--pos' : '';
+      const rel = auditRelTime(r.created_at);
+      parts.push(`
+        <li class="audit-line">
+          <span class="audit-line__time">${escHtml(timeStr)}</span>
+          <div class="audit-line__body">
+            <p class="audit-line__sentence${tone}">${escHtml(sentence.text)}</p>
+            <p class="audit-line__meta">${escHtml(r.actor_name)} · ${escHtml(auditCategoryLabel(r.category))}${r.elevated ? ' · elevated' : ''}${rel ? ` · ${escHtml(rel)}` : ''}</p>
+            ${auditPayloadHtml(detail)}
+          </div>
+        </li>`);
+    }
+    flushGroup();
+    const html = parts.join('');
 
     if (append) tbody.insertAdjacentHTML('beforeend', html);
     else tbody.innerHTML = html;
   } catch (err) {
-    if (!append) tbody.innerHTML = `<tr><td colspan="4"><p class="foot-note" style="padding:8px 0;">${escHtml(err.message)}</p></td></tr>`;
+    if (!append) tbody.innerHTML = `<li class="audit-loading"><p class="foot-note" style="padding:8px 0;">${escHtml(err.message)}</p></li>`;
     showToast(err.message, 'error');
   }
 }

@@ -17,6 +17,7 @@ export const I18N = {
     'nav.close_drawer': 'Close drawer',
     'nav.reprint': 'Reprint',
     'nav.logout': 'Log out',
+    'nav.feedback': 'Report a problem',
     'nav.offline': 'Offline ready',
 
     // Titles
@@ -159,6 +160,23 @@ export const I18N = {
     'inv.no_data_rows': 'The file has no data rows',
     'inv.import_confirm_title': 'Confirm import',
     'inv.parts_count': 'part(s)',
+    'inv.reorder_btn': 'Reorder list',
+    'inv.reorder_tt': 'Parts sold recently, grouped by supplier, with suggested order quantities',
+    'inv.reorder_sold_in': 'Sold in last',
+    'inv.reorder_days_suffix': 'days',
+    'inv.reorder_col_item': 'Item',
+    'inv.reorder_col_sku': 'SKU',
+    'inv.reorder_col_sold': 'Sold',
+    'inv.reorder_col_on_hand': 'On hand',
+    'inv.reorder_col_order': 'Order',
+    'inv.reorder_col_cost': 'Est. cost (₱)',
+    'inv.reorder_copy': 'Copy order',
+    'inv.reorder_copy_all': 'Copy all suppliers',
+    'inv.reorder_copied': 'Order list copied - paste it to your supplier',
+    'inv.reorder_no_supplier': 'No supplier',
+    'inv.reorder_empty': 'No parts sold in this window.',
+    'inv.reorder_error': "Couldn't load the reorder list.",
+    'inv.reorder_group_total': 'Est. cost',
     'part.gen_barcode': 'Create barcode',
 
     // POS & Counter Hints
@@ -197,6 +215,7 @@ export const I18N = {
     'nav.close_drawer': 'Isara ang kaha',
     'nav.reprint': 'I-print muli',
     'nav.logout': 'Mag-log out',
+    'nav.feedback': 'I-report ang problema',
     'nav.offline': 'Handa offline',
 
     // Titles
@@ -221,6 +240,23 @@ export const I18N = {
     'inv.th_stock': 'Dami sa Stock',
     'inv.th_status': 'Katayuan',
     'inv.th_actions': 'Aksyon',
+    'inv.reorder_btn': 'Listahan ng Reorder',
+    'inv.reorder_tt': 'Mga piyesang nabenta kamakailan, nakaayos ayon sa supplier, may suhestiyong dami ng order',
+    'inv.reorder_sold_in': 'Nabenta sa loob ng',
+    'inv.reorder_days_suffix': 'araw',
+    'inv.reorder_col_item': 'Piyesa',
+    'inv.reorder_col_sku': 'SKU',
+    'inv.reorder_col_sold': 'Nabenta',
+    'inv.reorder_col_on_hand': 'Sa stock',
+    'inv.reorder_col_order': 'Order',
+    'inv.reorder_col_cost': 'Tantiyang puhunan (₱)',
+    'inv.reorder_copy': 'Kopyahin ang order',
+    'inv.reorder_copy_all': 'Kopyahin lahat ng supplier',
+    'inv.reorder_copied': 'Nakopya ang order list - i-paste sa supplier',
+    'inv.reorder_no_supplier': 'Walang supplier',
+    'inv.reorder_empty': 'Walang piyesang nabenta sa panahong ito.',
+    'inv.reorder_error': "Hindi ma-load ang reorder list.",
+    'inv.reorder_group_total': 'Tantiyang puhunan',
 
     // POS & Counter
     'pos.intake_placeholder': 'Maghanap ng piyesa gamit ang pangalan, modelo, o SKU...',

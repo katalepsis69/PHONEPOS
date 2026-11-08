@@ -125,6 +125,35 @@ export function setupInventoryEnhancements() {
     editBtn.dataset.bound = '1';
     editBtn.addEventListener('click', openBulkEditModal);
   }
+
+  const reorderToggle = document.getElementById('inv-reorder-toggle');
+  if (reorderToggle && !reorderToggle.dataset.bound) {
+    reorderToggle.dataset.bound = '1';
+    reorderToggle.addEventListener('click', () => {
+      const panel = document.getElementById('inv-reorder-panel');
+      if (!panel) return;
+      const willShow = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !willShow);
+      // Re-fetch on every open so the sheet is never stale, not even after a sale.
+      if (willShow) loadReorderPanel();
+    });
+  }
+
+  const reorderDays = document.getElementById('inv-reorder-days');
+  if (reorderDays && !reorderDays.dataset.bound) {
+    reorderDays.dataset.bound = '1';
+    reorderDays.addEventListener('change', loadReorderPanel);
+  }
+
+  // One delegated listener covers per-supplier copy buttons and copy-all (*).
+  const reorderPanel = document.getElementById('inv-reorder-panel');
+  if (reorderPanel && !reorderPanel.dataset.copyBound) {
+    reorderPanel.dataset.copyBound = '1';
+    reorderPanel.addEventListener('click', e => {
+      const btn = e.target.closest('[data-reorder-copy]');
+      if (btn) copyReorderList(btn.dataset.reorderCopy);
+    });
+  }
 }
 
 export async function loadInventoryTable() {
@@ -190,6 +219,129 @@ export function renderInventoryMetrics(items) {
   set('inv-metric-in', inStock);
   set('inv-metric-low', low);
   set('inv-metric-out', out);
+}
+
+// -------------------------------------------------------------
+// REORDER SHEET — computed live from recent sales, grouped by supplier
+// -------------------------------------------------------------
+let reorderReport = null;
+let reorderRequest = 0;
+
+export async function loadReorderPanel() {
+  const request = ++reorderRequest;
+  const days = document.getElementById('inv-reorder-days')?.value || '3';
+  const content = document.getElementById('inv-reorder-content');
+  if (!content) return;
+  try {
+    const res = await fetch(`/api/inventory/reorder?days=${encodeURIComponent(days)}`);
+    if (!res.ok) throw new Error('Reorder request failed');
+    const report = await res.json();
+    if (request !== reorderRequest) return;
+    renderReorderPanel(report);
+  } catch (err) {
+    if (request !== reorderRequest) return;
+    console.error('Failed to load reorder list:', err);
+    content.innerHTML = `<p class="foot-note p-3">${escHtml(t('inv.reorder_error', "Couldn't load the reorder list."))}</p>`;
+    showToast(t('inv.reorder_error', "Couldn't load the reorder list."), 'error');
+  }
+}
+
+// Server rows arrive sorted by supplier, so first-seen grouping keeps that order.
+// ponytail: O(n²) group find is fine, catalogs are hundreds of rows not millions
+function reorderGroups(report) {
+  const groups = [];
+  for (const r of (report?.rows || [])) {
+    const supplier = (r.supplier || '').trim();
+    let g = groups.find(x => x.supplier === supplier);
+    if (!g) groups.push(g = { supplier, rows: [] });
+    g.rows.push(r);
+  }
+  return groups;
+}
+
+const reorderItemName = r => `${r.brand} ${r.model_name} - ${r.part_type}`;
+
+// Plain-text order sheet to paste into a supplier chat (Messenger/Viber).
+// supplier === '*' copies every group; only actionable lines (Order > 0) travel.
+function buildReorderText(supplier) {
+  const groups = reorderGroups(reorderReport)
+    .filter(g => supplier === '*' || g.supplier === supplier);
+  return groups.map(g => {
+    const lines = [
+      `ORDER - ${g.supplier || t('inv.reorder_no_supplier', 'No supplier')} - ${new Date().toLocaleDateString('en-CA')}`,
+      ...g.rows.filter(r => r.suggested_qty > 0)
+        .map(r => `${r.suggested_qty}x ${reorderItemName(r)}${r.sku_barcode ? ` (${r.sku_barcode})` : ''}`)
+    ];
+    if (g.rows.some(r => r.est_cost != null)) {
+      lines.push(`Est. cost: ${fmtMoney(g.rows.reduce((s, r) => s + (r.est_cost || 0), 0))}`);
+    }
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
+async function copyReorderList(supplier) {
+  if (!reorderReport || !(reorderReport.rows || []).length) {
+    showToast(t('inv.reorder_empty', 'No parts sold in this window.'), 'info');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(buildReorderText(supplier));
+    showToast(t('inv.reorder_copied', 'Order list copied - paste it to your supplier'), 'success');
+  } catch {
+    showToast('Could not copy - check that the page is focused and try again', 'error');
+  }
+}
+
+function renderReorderPanel(report) {
+  const content = document.getElementById('inv-reorder-content');
+  if (!content) return;
+  reorderReport = report;
+  const groups = reorderGroups(report);
+  if (groups.length === 0) {
+    content.innerHTML = `<p class="foot-note p-3">${escHtml(t('inv.reorder_empty', 'No parts sold in this window.'))}</p>`;
+    return;
+  }
+  // Staff sessions get est_cost nulled server-side; hide the whole money column
+  // instead of showing dashes that say nothing to a cashier.
+  const showCost = (report.rows || []).some(r => r.est_cost != null);
+  content.innerHTML = groups.map(g => {
+    const subtotal = g.rows.reduce((s, r) => s + (r.est_cost || 0), 0);
+    return `
+    <div class="mb-3">
+      <div class="flex items-center justify-between gap-2 py-1">
+        <h3 class="font-bold text-sm">${escHtml(g.supplier || t('inv.reorder_no_supplier', 'No supplier'))}</h3>
+        <button type="button" class="btn-mini" data-reorder-copy="${escHtml(g.supplier)}">
+          <i class="ph ph-clipboard-text w-3.5 h-3.5"></i> <span>${escHtml(t('inv.reorder_copy', 'Copy order'))}</span>
+        </button>
+      </div>
+      <table class="ptable">
+        <thead><tr>
+          <th data-i18n="inv.reorder_col_item">${t('inv.reorder_col_item', 'Item')}</th>
+          <th class="is-mid" data-i18n="inv.reorder_col_sku">${t('inv.reorder_col_sku', 'SKU')}</th>
+          <th class="is-num" data-i18n="inv.reorder_col_sold">${t('inv.reorder_col_sold', 'Sold')}</th>
+          <th class="is-num" data-i18n="inv.reorder_col_on_hand">${t('inv.reorder_col_on_hand', 'On hand')}</th>
+          <th class="is-num" data-i18n="inv.reorder_col_order">${t('inv.reorder_col_order', 'Order')}</th>
+          ${showCost ? `<th class="is-num" data-i18n="inv.reorder_col_cost">${t('inv.reorder_col_cost', 'Est. cost (₱)')}</th>` : ''}
+        </tr></thead>
+        <tbody>
+          ${g.rows.map(r => `
+          <tr>
+            <td>${escHtml(reorderItemName(r))}</td>
+            <td class="is-mid font-mono text-xs">${escHtml(r.sku_barcode || '')}</td>
+            <td class="is-num font-mono tabular-nums">${r.qty_sold}</td>
+            <td class="is-num font-mono tabular-nums">${r.stock_quantity}</td>
+            <td class="is-num font-mono tabular-nums font-bold">${r.suggested_qty}</td>
+            ${showCost ? `<td class="is-num font-mono tabular-nums">${r.est_cost != null ? fmtMoney(r.est_cost) : '—'}</td>` : ''}
+          </tr>`).join('')}
+        </tbody>
+        ${showCost ? `<tfoot><tr>
+            <td colspan="4" class="text-right font-bold">${escHtml(t('inv.reorder_group_total', 'Est. cost'))}</td>
+            <td></td>
+            <td class="is-num font-mono tabular-nums font-bold">${fmtMoney(subtotal)}</td>
+          </tr></tfoot>` : ''}
+      </table>
+    </div>`;
+  }).join('');
 }
 
 export function renderPartTypeOptions() {

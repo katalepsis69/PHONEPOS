@@ -4,7 +4,14 @@ All notable changes to TechParts POS and Phone Repair Management System are docu
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
-## [v2.5] - 2026-11-07
+## [v2.6] - 2026-11-08
+
+### Highlights & Changes
+- Verified: system-wide ergonomics: visual comfort tokens, panel & stat elevation
+- Verified: repair counter: tactile in-stock filter pill and stock badges
+- Verified: repair counter: unit icon badge and checkout CTA calm idle state
+
+## [v2.5] - 2026-11-08
 
 ### Highlights & Changes
 - LicenseGenerator builds again: no db import inside the SEA bundle

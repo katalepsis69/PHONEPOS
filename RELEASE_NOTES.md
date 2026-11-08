@@ -1,12 +1,11 @@
-﻿# What is New in TechParts POS (v2.5)
+﻿# What is New in TechParts POS (v2.6)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- LicenseGenerator builds again: no db import inside the SEA bundle
-- Cloud test harness proves readiness before the first request
-- Bring the source tree under version control; audit v7 fix batch
-- Thermal Receipt Printing: Reliable 58mm and 80mm ESC/POS receipt generation, claim stubs, and automated cash drawer kick.
+- Verified: system-wide ergonomics: visual comfort tokens, panel & stat elevation
+- Verified: repair counter: tactile in-stock filter pill and stock badges
+- Verified: repair counter: unit icon badge and checkout CTA calm idle state
 
 ---
 
@@ -106,6 +105,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-v2.5.zip` below.
+  1. Download `TechPartsPOS-v2.6.zip` below.
   2. Extract the folder to your computer (e.g. `C:\TechPartsPOS`).
   3. Double-click `TechPartsPOS.exe` to start.

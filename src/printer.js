@@ -177,9 +177,200 @@ function isAmountRefusal(err) {
 // half fails loudly instead of silently splitting the two renderers.
 const DEVICE_LINE_PREFIX = 'DEVICE · ';
 
-// The slip mirrors what the HTML receipt carries, in the same order.
-function renderSaleSlip(sale, settings) {
-  const cols = colsFor(settings.receipt_paper_width);
+function splitDeviceLine(sale) {
+  const allItems = sale.items || [];
+  const deviceItem = allItems.find((it) => it.item_type === 'labor'
+    && Number(it.unit_price) === 0
+    && String(it.item_name || '').startsWith(DEVICE_LINE_PREFIX));
+  return {
+    deviceText: deviceItem ? String(deviceItem.item_name).slice(DEVICE_LINE_PREFIX.length) : '',
+    billable: allItems.filter((it) => it !== deviceItem),
+  };
+}
+
+// ---- Sale receipt templates ------------------------------------------------
+// Five templates (Settings > Printing), sales receipt only. Content law: every
+// template carries the same money rows, the utang balance, itemized returns,
+// the credit signature block and the warranty expiry; 'OFFICIAL RECEIPT' stays
+// on every template because it names the document. Trimmed templates (compact,
+// airy, grid) drop the shop address and Tel/GCash lines and the warranty
+// policy paragraph; airy and grid keep the footer note, compact drops it.
+
+function itemRowMode(settings) {
+  return ['auto', 'two_line', 'one_line'].includes(settings.receipt_item_rows) ? settings.receipt_item_rows : 'auto';
+}
+
+// One line per item: "2x Tempered glass (Poco X6) ... P300.00". The name pays
+// for the width, cut with '...' so the money column stays exact-width.
+function saleItemOneLine(item, cols) {
+  const right = money(item.total_price);
+  const text = `${item.quantity}x ${item.item_type === 'labor' ? '[LABOR] ' : ''}${plain(item.item_name)}`;
+  const budget = cols - right.length - 1;
+  const left = text.length > budget ? `${text.slice(0, Math.max(1, budget - 3))}...` : text;
+  return row(left, right, cols);
+}
+
+// Item row styles: two_line is the original layout (name wrapped over a
+// "qty x unit ... amount" line); one_line trades the name for paper; auto
+// prints one line when the whole row fits and falls back to two_line when it
+// does not, so a long part name wraps instead of truncating.
+function saleItemLines(item, cols, mode) {
+  if (mode === 'two_line') {
+    const name = wrap(`${item.item_type === 'labor' ? '[LABOR] ' : ''}${item.item_name}`, cols)
+      .map((text) => ({ text }));
+    return [...name, { text: row(`  ${item.quantity} x ${money(item.unit_price)}`, money(item.total_price), cols) }];
+  }
+  const right = money(item.total_price);
+  const text = `${item.quantity}x ${item.item_type === 'labor' ? '[LABOR] ' : ''}${plain(item.item_name)}`;
+  if (mode === 'one_line' || text.length + right.length + 1 <= cols) {
+    return [{ text: saleItemOneLine(item, cols) }];
+  }
+  return saleItemLines(item, cols, 'two_line');
+}
+
+// Grid items: qty / name / amount columns at any width. The name budget comes
+// off the actual amount width, long names truncate on the first line and wrap
+// on continuation lines, so nothing ever exceeds the roll.
+function saleGridItemLines(billable, cols) {
+  const out = ['QTY ITEM'.padEnd(cols - 10) + 'AMOUNT'.padStart(10)];
+  billable.forEach((item, i) => {
+    const right = money(item.total_price);
+    const nameBudget = cols - 3 - 1 - right.length - 1;
+    const name = `${item.item_type === 'labor' ? '[LABOR] ' : ''}${plain(item.item_name)}`;
+    out.push(row(`${String(item.quantity).padStart(2)} ${name.slice(0, nameBudget)}`, right, cols));
+    if (name.length > nameBudget) {
+      for (const cont of wrap(name.slice(nameBudget), nameBudget)) out.push(`   ${cont}`);
+    }
+    if (i < billable.length - 1) out.push('');
+  });
+  return out;
+}
+
+function saleTotalsRows(sale, cols) {
+  const out = [];
+  out.push({ text: row('Subtotal:', money(sale.subtotal), cols) });
+  if (Number(sale.discount) > 0) out.push({ text: row('Discount:', '-' + money(sale.discount), cols) });
+  return out;
+}
+
+function salePaidRows(sale, cols) {
+  const out = [];
+  out.push({ text: row('Amount Paid:', money(sale.amount_paid), cols) });
+  if (Number(sale.change_amount) > 0) out.push({ text: row('CHANGE:', money(sale.change_amount), cols) });
+  // labelled(), not row(): this is the row that introduces the credit signature
+  // block below it. row() still right-aligns short balances to the exact-width
+  // money column, but a balance long enough to crowd the roll would trade away
+  // the 'BALANCE (UTANG):' label, and a signed debt that prints without naming
+  // itself is the one line the acknowledgement is signing up to.
+  if (Number(sale.credit_balance) > 0) {
+    for (const line of labelled('BALANCE (UTANG):', money(sale.credit_balance), cols)) out.push({ text: line });
+  }
+  return out;
+}
+
+// Returns/refunds, itemized on paper exactly as the on-screen receipt and its
+// printable copy show them (public/js/receipts.js): the modal listed each RMA
+// while the paper carried nothing (ESC/POS) or one aggregate line (browser),
+// so the customer's slip and the counter's screen disagreed about what was
+// returned. A replacement contributes no money and says so. Rule placement
+// belongs to the template; only the rows live here. Only appended when the
+// sale actually has returns, so a normal receipt's layout is untouched.
+function saleReturnsRows(sale, cols) {
+  const saleReturns = sale.returns || [];
+  if (!saleReturns.length) return [];
+  const out = [];
+  for (const line of wrap(`RETURNS / REFUNDS (${saleReturns.length}):`, cols)) out.push({ text: line });
+  for (const r of saleReturns) {
+    for (const name of wrap(`  ${plain(r.return_code)} ${r.quantity || 1}x ${plain(r.item_name)}`, cols)) out.push({ text: name });
+    // Never throws mid-layout: a row whose refund_amount is not a finite
+    // number prints as a replacement rather than refusing the whole slip.
+    const amt = Number(r.refund_amount);
+    out.push({ text: row('  ', Number.isFinite(amt) && amt > 0 ? '-' + money(amt) : 'Replacement', cols) });
+  }
+  if (Number(sale.refunded_amount) > 0) out.push({ text: row('REFUNDED:', '-' + money(sale.refunded_amount), cols) });
+  return out;
+}
+
+// A credit sale is signed on paper, not just on screen. The HTML receipt
+// (public/js/receipts.js) carries an acknowledgement block with a signature
+// line under the balance; a customer who walks out with utang has to be
+// handed the same promise in ink. Compact on purpose: title, one sentence
+// naming the balance, a rule to sign on, and who signs it.
+function saleCreditAckRows(sale, cols) {
+  if (Number(sale.credit_balance) <= 0) return [];
+  const credit = money(sale.credit_balance);
+  const out = [];
+  for (const line of wrap('CREDIT / UTANG ACKNOWLEDGEMENT', cols)) out.push({ text: line, centered: true });
+  for (const line of wrap(`I acknowledge receipt of the goods above and agree to pay the balance of ${credit}.`, cols)) out.push({ text: line });
+  out.push({ text: '_'.repeat(Math.min(cols, 24)), centered: true });
+  out.push({ text: 'Customer Signature', centered: true });
+  return out;
+}
+
+// The one warranty rule (see warrantyDays below), on every template: the days
+// the shop set (or seven), and the date-only shop-local expiry. Wrapped like
+// every other line, because a hand-edited `warranty_days` of "99999999999999999999"
+// used to put a 51-character line on a 32-column roll.
+function saleWarrantyRows(sale, settings, cols, { withPolicy = true } = {}) {
+  const warranty = warrantyDays(settings.warranty_days);
+  const expiry = calculateWarrantyExpiry(sale.created_at, settings.warranty_days);
+  const out = [];
+  if (withPolicy) {
+    for (const line of wrap(`WARRANTY (${warranty} DAYS):`, cols)) out.push({ text: line, centered: true });
+    for (const line of wrap(settings.warranty_policy_text, cols)) out.push({ text: line });
+    out.push({ text: `Valid Until: ${expiry}` });
+  } else {
+    for (const line of labelled('Warranty:', `${warranty} day(s), valid until ${expiry}`, cols)) out.push({ text: line });
+  }
+  return out;
+}
+
+// Framed as `*** note ***`, which is what public/js/receipts.js puts under the
+// same setting on screen: the frame belongs to the renderer, so the shop types
+// plain words in Settings and both documents show the same last line. Wrapped,
+// not pushed whole: the framed default is 35 characters and a 58mm roll has 32.
+function saleFooterRows(settings, cols) {
+  return wrap(`*** ${plain(settings.shop_footer_note || 'Thank you for your business!')} ***`, cols)
+    .map((line) => ({ text: line, centered: true }));
+}
+
+function saleShopNameRows(settings, cols) {
+  return nameLines(settings.gcash_name, Math.floor(cols / 2)).map((line) => ({ text: line, wide: true, centered: true }));
+}
+
+// Trimmed header shared by compact, airy and grid: shop name, document title,
+// invoice, date with the payment method. The address and Tel/GCash lines are
+// the parts a trimmed template exists to drop.
+function saleHeaderTrimmedRows(sale, settings, cols) {
+  const pay = String(sale.payment_method || '').toUpperCase();
+  const out = saleShopNameRows(settings, cols);
+  out.push({ text: 'OFFICIAL RECEIPT', centered: true });
+  // Wrapped, not pushed whole: a sale code is server-generated today, but the
+  // invariant is that no emitted line exceeds the roll.
+  for (const line of wrap(`Invoice #: ${sale.sale_code}`, cols)) out.push({ text: line });
+  for (const line of wrap(`${localStamp(sale.created_at)}${pay ? ` / ${pay}` : ''}`, cols)) out.push({ text: line });
+  return out;
+}
+
+// Customer / phone / unit / payment intake block, labels kept via labelled()
+// for the same reason as the standard template: both fields are free text with
+// no upstream cap, and the label must survive whatever the customer typed.
+function saleInfoRows(sale, cols) {
+  const { deviceText } = splitDeviceLine(sale);
+  const out = [];
+  for (const line of labelled('Customer:', sale.customer_name, cols)) out.push({ text: line });
+  if (sale.customer_phone) {
+    for (const line of labelled('Phone:', sale.customer_phone, cols)) out.push({ text: line });
+  }
+  if (deviceText) for (const line of wrap(`Unit: ${deviceText}`, cols)) out.push({ text: line });
+  const paymentText = `${String(sale.payment_method || '').toUpperCase()} ${(sale.payment_reference || '').trim()}`.trim();
+  for (const line of labelled('Payment:', paymentText, cols)) out.push({ text: line });
+  return out;
+}
+
+function saleSlipStandard(sale, settings, cols) {
+  const mode = itemRowMode(settings);
+  const { billable } = splitDeviceLine(sale);
   const slip = [];
   const push = (text, opts) => slip.push({ text, ...opts });
   const lines = (v, wide) => wrap(v, wide ? Math.floor(cols / 2) : cols).forEach((t) => push(t, wide ? { wide: true, centered: true } : {}));
@@ -188,118 +379,189 @@ function renderSaleSlip(sale, settings) {
   lines(`Tel/GCash: ${settings.gcash_number || ''}`);
   push(rule(cols));
   push('OFFICIAL RECEIPT', { centered: true });
-  // Wrapped, not pushed whole: a sale code is server-generated today, but the
-  // invariant is that no emitted line exceeds the roll, and an inline code is the
-  // one header line long enough to break it if the format ever grows.
   for (const line of wrap(`Invoice #: ${sale.sale_code}`, cols)) push(line);
   push(`Date: ${localStamp(sale.created_at)}`);
-  // Same selection rule as public/js/receipts.js: the first zero-price labour
-  // line carrying the marker is the repair detail, not a billable row, and it
-  // prints with the intake details instead of in the item list.
-  const allItems = sale.items || [];
-  const deviceItem = allItems.find((it) => it.item_type === 'labor'
-    && Number(it.unit_price) === 0
-    && String(it.item_name || '').startsWith(DEVICE_LINE_PREFIX));
-  const deviceText = deviceItem ? String(deviceItem.item_name).slice(DEVICE_LINE_PREFIX.length) : '';
-  const billable = allItems.filter((it) => it !== deviceItem);
-  // labelled(), not row(): a name longer than the roll keeps its label and
-  // wraps onto the next line instead of printing bare or cut mid-word.
-  for (const line of labelled('Customer:', sale.customer_name, cols)) push(line);
-  // Phone: and Payment: are the same defect class and get the same treatment.
-  // row() pays for a long value out of the label, so at 58mm a 29-character
-  // phone printed as 'Ph' plus the number, and anything 32 characters or longer
-  // (a typed international form, a GCash reference pasted into the payment
-  // field) printed with no label at all and its digits cut at the roll edge.
-  // Neither field is capped by src/sales.js, so the label the cashier reads has
-  // to survive whatever the customer typed.
-  if (sale.customer_phone) {
-    for (const line of labelled('Phone:', sale.customer_phone, cols)) push(line);
-  }
-  // `Unit:` sits between Phone: and Payment:, where the HTML puts it, and is
-  // wrapped instead of padded: the browser flows this text from the left margin,
-  // so a right-aligned row() would not be the same document. The middot
-  // separators plain() drops would leave double spaces, and wrap() rejoins on a
-  // single space, so paper reads "Unit: RO-0421 iPhone 11 IMEI 3569...".
-  if (deviceText) for (const line of wrap(`Unit: ${deviceText}`, cols)) push(line);
-  const paymentText = `${String(sale.payment_method || '').toUpperCase()} ${(sale.payment_reference || '').trim()}`.trim();
-  for (const line of labelled('Payment:', paymentText, cols)) push(line);
+  for (const line of saleInfoRows(sale, cols).map((l) => l.text)) push(line);
   push(rule(cols));
   for (const item of billable) {
-    for (const name of wrap(`${item.item_type === 'labor' ? '[LABOR] ' : ''}${item.item_name}`, cols)) push(name);
-    push(row(`  ${item.quantity} x ${money(item.unit_price)}`, money(item.total_price), cols));
+    for (const line of saleItemLines(item, cols, mode)) push(line.text, line.centered ? { centered: true } : {});
   }
   push(rule(cols));
-  push(row('Subtotal:', money(sale.subtotal), cols));
-  if (Number(sale.discount) > 0) push(row('Discount:', '-' + money(sale.discount), cols));
+  for (const line of saleTotalsRows(sale, cols)) push(line.text);
   push(row('TOTAL DUE:', money(sale.total_amount), cols));
-  push(row('Amount Paid:', money(sale.amount_paid), cols));
-  if (Number(sale.change_amount) > 0) push(row('CHANGE:', money(sale.change_amount), cols));
-  // labelled(), not row(): this is the row that introduces the credit signature
-  // block below it. row() still right-aligns short balances to the exact-width
-  // money column, but a balance long enough to crowd the roll would trade away
-  // the 'BALANCE (UTANG):' label, and a signed debt that prints without naming
-  // itself is the one line the acknowledgement is signing up to.
-  if (Number(sale.credit_balance) > 0) {
-    for (const line of labelled('BALANCE (UTANG):', money(sale.credit_balance), cols)) push(line);
-  }
-  // Returns/refunds, itemized on paper exactly as the on-screen receipt and its
-  // printable copy show them (public/js/receipts.js): the modal listed each RMA
-  // while the paper carried nothing (ESC/POS) or one aggregate line (browser),
-  // so the customer's slip and the counter's screen disagreed about what was
-  // returned. A replacement contributes no money and says so. Only appended when
-  // the sale actually has returns, so a normal receipt's layout is untouched.
-  const saleReturns = sale.returns || [];
-  if (saleReturns.length) {
+  for (const line of salePaidRows(sale, cols)) push(line.text);
+  const returns = saleReturnsRows(sale, cols);
+  if (returns.length) {
     push(rule(cols));
-    for (const line of wrap(`RETURNS / REFUNDS (${saleReturns.length}):`, cols)) push(line);
-    for (const r of saleReturns) {
-      for (const name of wrap(`  ${plain(r.return_code)} ${r.quantity || 1}x ${plain(r.item_name)}`, cols)) push(name);
-      // Never throws mid-layout: a row whose refund_amount is not a finite
-      // number prints as a replacement rather than refusing the whole slip.
-      const amt = Number(r.refund_amount);
-      push(row('  ', Number.isFinite(amt) && amt > 0 ? '-' + money(amt) : 'Replacement', cols));
-    }
-    if (Number(sale.refunded_amount) > 0) push(row('REFUNDED:', '-' + money(sale.refunded_amount), cols));
+    for (const line of returns) push(line.text);
   }
   push(rule(cols));
-  // A credit sale is signed on paper, not just on screen. The HTML receipt
-  // (public/js/receipts.js) carries an acknowledgement block with a signature
-  // line under the balance; a customer who walks out with utang has to be
-  // handed the same promise in ink, or the only signed copy of the debt is a
-  // browser tab. Compact on purpose: title, one sentence naming the balance, a
-  // rule to sign on, and who signs it. At 58mm that is six lines, which keeps
-  // the warranty block on the roll instead of pushing it past the cut.
-  if (Number(sale.credit_balance) > 0) {
-    const credit = money(sale.credit_balance);
-    for (const line of wrap('CREDIT / UTANG ACKNOWLEDGEMENT', cols)) push(line, { centered: true });
-    for (const line of wrap(`I acknowledge receipt of the goods above and agree to pay the balance of ${credit}.`, cols)) push(line);
-    push('_'.repeat(Math.min(cols, 24)), { centered: true });
-    push('Customer Signature', { centered: true });
+  const credit = saleCreditAckRows(sale, cols);
+  if (credit.length) {
+    for (const line of credit) push(line.text, line.centered ? { centered: true } : {});
     push(rule(cols));
   }
-  // The one warranty rule (see warrantyDays below), in the header as well as the
-  // expiry, because the two used to disagree inside this one document: the header
-  // fell back to '7' and the expiry to 0, so a cleared field promised a week
-  // above a date that was the sale date. Wrapped like every other line, because a
-  // hand-edited `warranty_days` of "99999999999999999999" used to put a
-  // 51-character line on a 32-column roll.
-  const warranty = warrantyDays(settings.warranty_days);
-  for (const line of wrap(`WARRANTY (${warranty} DAYS):`, cols)) push(line, { centered: true });
-  for (const line of wrap(settings.warranty_policy_text, cols)) push(line);
-  push(`Valid Until: ${calculateWarrantyExpiry(sale.created_at, settings.warranty_days)}`);
-  // Framed as `*** note ***`, which is what public/js/receipts.js:314 puts under
-  // the same setting on screen: the frame belongs to the renderer, so the shop
-  // types plain words in Settings and both documents show the same last line.
-  // Paper used to print the setting verbatim, which left the screen framed and
-  // the roll unframed for the same sale.
-  // Wrapped, not pushed whole: the framed default is 35 characters and a 58mm
-  // roll has 32, so a single push would put an over-budget line on the last row
-  // of every receipt, where the printer either clips it or breaks the centering
-  // across its own wrap.
-  for (const line of wrap(`*** ${plain(settings.shop_footer_note || 'Thank you for your business!')} ***`, cols)) {
-    push(line, { centered: true });
+  for (const line of saleWarrantyRows(sale, settings, cols, { withPolicy: true })) {
+    push(line.text, line.centered ? { centered: true } : {});
   }
+  for (const line of saleFooterRows(settings, cols)) push(line.text, { centered: true });
   return slip;
+}
+
+function saleSlipCompact(sale, settings, cols) {
+  const mode = itemRowMode(settings);
+  const { billable } = splitDeviceLine(sale);
+  const slip = saleHeaderTrimmedRows(sale, settings, cols);
+  const push = (text, opts) => slip.push({ text, ...opts });
+  push(rule(cols));
+  for (const line of saleInfoRows(sale, cols)) push(line.text);
+  push(rule(cols));
+  for (const item of billable) {
+    for (const line of saleItemLines(item, cols, mode)) push(line.text);
+  }
+  push(rule(cols));
+  for (const line of saleTotalsRows(sale, cols)) push(line.text);
+  push(row('TOTAL DUE:', money(sale.total_amount), cols));
+  for (const line of salePaidRows(sale, cols)) push(line.text);
+  const returns = saleReturnsRows(sale, cols);
+  if (returns.length) {
+    push(rule(cols));
+    for (const line of returns) push(line.text);
+  }
+  const credit = saleCreditAckRows(sale, cols);
+  if (credit.length) {
+    push(rule(cols));
+    for (const line of credit) push(line.text, line.centered ? { centered: true } : {});
+  }
+  push(rule(cols));
+  for (const line of saleWarrantyRows(sale, settings, cols, { withPolicy: false })) push(line.text);
+  return slip;
+}
+
+function saleSlipBoxed(sale, settings, cols) {
+  const mode = itemRowMode(settings);
+  const { billable } = splitDeviceLine(sale);
+  const hr = '='.repeat(cols);
+  const slip = [];
+  const push = (text, opts) => slip.push({ text, ...opts });
+  const lines = (v, wide) => wrap(v, wide ? Math.floor(cols / 2) : cols).forEach((t) => push(t, wide ? { wide: true, centered: true } : {}));
+  for (const line of nameLines(settings.gcash_name, Math.floor(cols / 2))) push(line, { wide: true, centered: true });
+  lines(settings.shop_address || 'Phone Parts, LCDs & Repair Service');
+  lines(`Tel/GCash: ${settings.gcash_number || ''}`);
+  push(hr);
+  push('OFFICIAL RECEIPT', { centered: true });
+  for (const line of wrap(`Invoice #: ${sale.sale_code}`, cols)) push(line);
+  const pay = String(sale.payment_method || '').toUpperCase();
+  for (const line of wrap(`${localStamp(sale.created_at)}${pay ? ` / ${pay}` : ''}`, cols)) push(line);
+  push(hr);
+  for (const line of saleInfoRows(sale, cols)) push(line.text);
+  push(hr);
+  for (const item of billable) {
+    for (const line of saleItemLines(item, cols, mode)) push(line.text);
+  }
+  push(hr);
+  for (const line of saleTotalsRows(sale, cols)) push(line.text);
+  // The total framed in a box: the one figure a counter scans for.
+  push('+' + '-'.repeat(cols - 2) + '+');
+  push('| ' + row('TOTAL DUE', money(sale.total_amount), cols - 4) + ' |');
+  push('+' + '-'.repeat(cols - 2) + '+');
+  for (const line of salePaidRows(sale, cols)) push(line.text);
+  const returns = saleReturnsRows(sale, cols);
+  if (returns.length) {
+    push(hr);
+    for (const line of returns) push(line.text);
+  }
+  const credit = saleCreditAckRows(sale, cols);
+  if (credit.length) {
+    push(hr);
+    for (const line of credit) push(line.text, line.centered ? { centered: true } : {});
+  }
+  push(hr);
+  for (const line of saleWarrantyRows(sale, settings, cols, { withPolicy: true })) {
+    push(line.text, line.centered ? { centered: true } : {});
+  }
+  for (const line of saleFooterRows(settings, cols)) push(line.text, { centered: true });
+  return slip;
+}
+
+function saleSlipAiry(sale, settings, cols) {
+  const mode = itemRowMode(settings);
+  const { billable } = splitDeviceLine(sale);
+  const slip = [];
+  const push = (text, opts) => slip.push({ text, ...opts });
+  for (const line of saleShopNameRows(settings, cols)) push(line.text, { wide: true, centered: true });
+  push('OFFICIAL RECEIPT', { centered: true });
+  push('');
+  for (const line of wrap(`Invoice #: ${sale.sale_code}`, cols)) push(line);
+  const pay = String(sale.payment_method || '').toUpperCase();
+  for (const line of wrap(`${localStamp(sale.created_at)}${pay ? ` / ${pay}` : ''}`, cols)) push(line);
+  push('');
+  for (const line of saleInfoRows(sale, cols)) push(line.text);
+  push('');
+  for (const item of billable) {
+    for (const line of saleItemLines(item, cols, mode)) push(line.text);
+  }
+  push('');
+  for (const line of saleTotalsRows(sale, cols)) push(line.text);
+  push(row('TOTAL DUE:', money(sale.total_amount), cols));
+  for (const line of salePaidRows(sale, cols)) push(line.text);
+  const returns = saleReturnsRows(sale, cols);
+  if (returns.length) {
+    push('');
+    for (const line of returns) push(line.text);
+  }
+  const credit = saleCreditAckRows(sale, cols);
+  if (credit.length) {
+    push('');
+    for (const line of credit) push(line.text, line.centered ? { centered: true } : {});
+  }
+  push('');
+  for (const line of saleWarrantyRows(sale, settings, cols, { withPolicy: false })) push(line.text);
+  for (const line of saleFooterRows(settings, cols)) push(line.text, { centered: true });
+  return slip;
+}
+
+function saleSlipGrid(sale, settings, cols) {
+  const { billable } = splitDeviceLine(sale);
+  const slip = saleHeaderTrimmedRows(sale, settings, cols);
+  const push = (text, opts) => slip.push({ text, ...opts });
+  push(rule(cols));
+  for (const line of saleInfoRows(sale, cols)) push(line.text);
+  push(rule(cols));
+  for (const line of saleGridItemLines(billable, cols)) push(line);
+  push(rule(cols));
+  for (const line of saleTotalsRows(sale, cols)) push(line.text);
+  push(row('TOTAL DUE:', money(sale.total_amount), cols));
+  for (const line of salePaidRows(sale, cols)) push(line.text);
+  const returns = saleReturnsRows(sale, cols);
+  if (returns.length) {
+    push(rule(cols));
+    for (const line of returns) push(line.text);
+  }
+  const credit = saleCreditAckRows(sale, cols);
+  if (credit.length) {
+    push(rule(cols));
+    for (const line of credit) push(line.text, line.centered ? { centered: true } : {});
+  }
+  push(rule(cols));
+  for (const line of saleWarrantyRows(sale, settings, cols, { withPolicy: false })) push(line.text);
+  for (const line of saleFooterRows(settings, cols)) push(line.text, { centered: true });
+  return slip;
+}
+
+const SALE_TEMPLATES = new Set(['standard', 'compact', 'boxed', 'airy', 'grid']);
+
+// Entry point used by the print queue and the paper preview alike: dispatches
+// on Settings > Printing > Receipt template. Unknown or unset values read the
+// standard layout, so existing shops print exactly what they printed before.
+function renderSaleSlip(sale, settings) {
+  const cols = colsFor(settings.receipt_paper_width);
+  const template = SALE_TEMPLATES.has(settings.receipt_template) ? settings.receipt_template : 'standard';
+  if (template === 'compact') return saleSlipCompact(sale, settings, cols);
+  if (template === 'boxed') return saleSlipBoxed(sale, settings, cols);
+  if (template === 'airy') return saleSlipAiry(sale, settings, cols);
+  if (template === 'grid') return saleSlipGrid(sale, settings, cols);
+  return saleSlipStandard(sale, settings, cols);
 }
 
 // One warranty rule, on both papers: the days the shop set, or seven when the row

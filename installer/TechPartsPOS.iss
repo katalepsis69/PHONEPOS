@@ -16,7 +16,7 @@
 #define MyAppName "TechParts POS & Repair System"
 ; Rewritten by scripts/publish-release.ps1 on every release; keep it equal to
 ; package.json's version and src/updater.js's CURRENT_VERSION.
-#define MyAppVersion "2.4"
+#define MyAppVersion "2.6"
 #define MyAppPublisher "TechParts"
 #define MyAppExeName "TechPartsPOS.exe"
 

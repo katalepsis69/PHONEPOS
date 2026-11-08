@@ -876,28 +876,22 @@ button:disabled {
 .audit-cat-chip.audit-cat--credit.is-active    { background: var(--info); border-color: var(--info); }
 .audit-cat-chip.audit-cat--system.is-active    { background: var(--txt-3); border-color: var(--txt-3); }
 
-/* ---- Audit table rows ---- */
-.audit-table { table-layout: fixed; }
-.audit-table th:nth-child(1) { width: 95px; }
-.audit-table th:nth-child(2) { width: 130px; }
-.audit-table th:nth-child(3) { width: 160px; }
-.audit-table th:nth-child(4) { width: auto; }
-
-/* Date group header */
-.audit-date-row td {
-  padding: 14px 14px 4px;
-  border-bottom: none;
-  background: transparent;
+/* ---- Audit feed: sentence-first timeline ---- */
+/* One sentence per entry, time in the left margin, who + category as quiet
+   meta. Color marks outcomes only (neg = money or access went wrong, pos =
+   reconciled), never the category. */
+.audit-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px;
 }
 
-.ptable tbody tr.audit-date-row:hover {
-  background-color: transparent;
+.audit-day {
+  list-style: none;
+  padding: 14px 10px 4px;
 }
 
-.audit-date-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.audit-day__label {
   font-size: 0.65625rem;
   font-weight: 640;
   letter-spacing: 0.06em;
@@ -905,196 +899,93 @@ button:disabled {
   color: var(--txt-3);
 }
 
-/* Time + relative */
-.audit-when { vertical-align: middle; }
-.audit-time {
-  display: block;
+.audit-line {
+  display: flex;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  list-style: none;
+}
+
+.audit-line:last-child {
+  border-bottom: none;
+}
+
+.audit-line__time {
+  flex: 0 0 62px;
+  padding-top: 2px;
+  font-family: var(--font-numeric);
   font-size: 0.71875rem;
-  color: var(--txt-2);
-  letter-spacing: -0.01em;
-}
-.audit-rel {
-  display: block;
-  font-size: 0.65625rem;
-  color: var(--txt-4);
-  margin-top: 1px;
-}
-
-/* Who */
-.audit-who { vertical-align: middle; }
-.audit-name {
-  display: block;
-  font-size: 0.78125rem;
-  font-weight: 580;
-  color: var(--txt);
-}
-.audit-role {
-  display: block;
-  font-size: 0.65625rem;
-  color: var(--txt-4);
-  margin-top: 1px;
-}
-
-/* What: semantic tag + action label */
-.audit-what { vertical-align: middle; }
-
-.audit-tag {
-  display: inline-block;
-  padding: 2px 7px;
-  border-radius: 4px;
-  font-size: 0.65625rem;
-  font-weight: 640;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   color: var(--txt-3);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Semantic category tones */
-.audit-tag--security { color: var(--danger); background: var(--danger-bg); border-color: color-mix(in oklab, var(--danger) 22%, transparent); }
-.audit-tag--sale      { color: var(--pos);    background: var(--pos-bg);    border-color: color-mix(in oklab, var(--pos) 22%, transparent); }
-.audit-tag--credit    { color: var(--info);   background: var(--info-bg);   border-color: color-mix(in oklab, var(--info) 22%, transparent); }
-.audit-tag--return    { color: var(--warn);   background: var(--warn-bg);   border-color: color-mix(in oklab, var(--warn) 22%, transparent); }
-.audit-tag--inventory { color: var(--warn);   background: var(--warn-bg);   border-color: color-mix(in oklab, var(--warn) 22%, transparent); }
-.audit-tag--settings  { color: var(--txt-3);  background: var(--surface-2); border-color: var(--line); }
-.audit-tag--system    { color: var(--txt-4);  background: var(--surface-2); border-color: var(--line); }
-
-.audit-action {
-  display: block;
-  font-size: 0.75rem;
-  color: var(--txt-2);
-  margin-top: 3px;
+.audit-line__body {
+  flex: 1;
+  min-width: 0;
 }
 
-/* Detail cell */
-.audit-detail-cell { vertical-align: middle; max-width: 0; }
-
-.audit-empty { color: var(--txt-4); font-size: 0.6875rem; }
-
-/* Inline pills */
-.audit-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.audit-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  border-radius: 4px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  overflow: hidden;
-  font-size: 0.65625rem;
-  max-width: 20ch;
-}
-
-.audit-pill__key {
-  padding: 2px 5px;
-  color: var(--txt-4);
-  font-family: var(--font-numeric);
-  border-right: 1px solid var(--line);
-  white-space: nowrap;
-}
-
-.audit-pill__val {
-  padding: 2px 6px;
-  color: var(--txt-2);
-  font-family: var(--font-numeric);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Human narrative detail cell */
-.audit-narrative {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  line-height: 1.35;
-}
-
-.audit-narrative__title {
+.audit-line__sentence {
   font-size: 0.78125rem;
-  font-weight: 620;
   color: var(--txt);
-  letter-spacing: -0.015em;
-  word-break: break-word;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
-.audit-narrative__sub {
+.audit-line__sentence--neg { color: var(--danger); }
+.audit-line__sentence--pos { color: var(--pos); }
+
+.audit-line__meta {
+  font-size: 0.65625rem;
+  color: var(--txt-4);
+  margin-top: 1px;
+}
+
+/* Repeated detail-less events collapse into one expandable row; every entry
+   stays in the log, the group only hides identical neighbors. */
+.audit-repeat summary {
+  cursor: pointer;
+}
+
+.audit-repeat__list {
+  margin: 4px 0 2px;
+  padding: 4px 0 4px 16px;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  font-family: var(--font-numeric);
   font-size: 0.6875rem;
   color: var(--txt-3);
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
 }
 
-.audit-narrative__qty {
-  font-family: var(--font-numeric);
-  font-weight: 600;
-  color: var(--txt-2);
-}
-
-.audit-narrative__badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-family: var(--font-numeric);
-  font-size: 0.65625rem;
-  font-weight: 600;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--txt-2);
-}
-
-.audit-narrative__badge.is-neg {
-  color: var(--danger);
-  background: var(--danger-bg);
-  border-color: color-mix(in oklab, var(--danger) 22%, transparent);
-}
-
-.audit-narrative__badge.is-pos {
-  color: var(--pos);
-  background: var(--pos-bg);
-  border-color: color-mix(in oklab, var(--pos) 22%, transparent);
-}
-
-.audit-narrative__sep {
+.audit-loading {
+  list-style: none;
+  padding: 16px 10px;
+  font-size: 0.75rem;
   color: var(--txt-4);
-  user-select: none;
 }
 
-.audit-narrative__reason {
-  color: var(--txt-3);
-}
-
-.audit-narrative__reason b {
-  color: var(--txt-2);
-  font-weight: 580;
-}
-
-.audit-narrative__method {
-  font-family: var(--font-numeric);
-  font-size: 0.65625rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: var(--surface-2);
+/* ---- Receipt paper preview (Settings > Printing) ---- */
+/* Fixed paper colors on purpose: this pane mocks the thermal roll, so it
+   reads the same in light and dark mode. 16:1 text contrast. */
+.receipt-preview {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 340px;
+  overflow-y: auto;
   border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17181a;
 }
 
-.audit-num {
-  font-family: var(--font-numeric);
-  font-weight: 600;
-  color: var(--txt);
-}
+.receipt-preview .rp-c { display: block; text-align: center; }
+.receipt-preview .rp-w { font-size: 0.9375rem; font-weight: 700; }
 
 /* Discreet raw payload inspect toggle */
 .audit-raw-toggle {

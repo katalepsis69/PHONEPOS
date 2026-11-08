@@ -1,6 +1,6 @@
 {
   "name": "phone-repair-pos",
-  "version": "2.4",
+  "version": "2.6",
   "description": "Offline Phone Parts POS & Repair Management (0 runtime dependencies)",
   "main": "src/server.js",
   "scripts": {

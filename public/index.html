@@ -108,6 +108,10 @@
             <i class="ph ph-printer w-4 h-4"></i>
             <span data-i18n="nav.reprint">Reprint</span>
           </button>
+          <button data-action="open-feedback" class="rail-link" title="Report a problem or request a feature">
+            <i class="ph ph-chat-circle-text w-4 h-4"></i>
+            <span data-i18n="nav.feedback">Report a problem</span>
+          </button>
           <button data-action="logout" class="rail-link" title="Log out or switch user">
             <i class="ph ph-sign-out w-4 h-4"></i>
             <span data-i18n="nav.logout">Log out</span>
@@ -550,6 +554,10 @@
                 <input type="checkbox" id="inv-archived-check">
                 <span>Show archived</span>
               </label>
+              <button type="button" id="inv-reorder-toggle" class="btn-mini" data-i18n-title="inv.reorder_tt"
+                title="Parts sold recently, grouped by supplier, with suggested order quantities">
+                <i class="ph ph-truck w-3.5 h-3.5"></i> <span data-i18n="inv.reorder_btn">Reorder list</span>
+              </button>
               <!-- Import/export on the toolbar; all three are manager-only
                    and elevation-gated server-side. -->
               <span class="flex gap-2">
@@ -571,6 +579,28 @@
                 <i class="ph ph-plus-circle w-4 h-4"></i> <span data-i18n="inv.add_part">Add New Phone Part</span>
               </button>
             </div>
+          </section>
+
+          <!-- Auto reorder sheet: computed live from recent sales, grouped by
+               supplier. Est. costs are manager-only (stripped server-side for staff). -->
+          <section id="inv-reorder-panel" class="panel shrink-0 hidden" aria-label="Supplier reorder list">
+            <div class="parts-tools">
+              <label class="flex items-center gap-2 text-sm shrink-0">
+                <span data-i18n="inv.reorder_sold_in">Sold in last</span>
+                <select id="inv-reorder-days" class="select-sm" aria-label="Sales window in days">
+                  <option value="3">3</option>
+                  <option value="7">7</option>
+                  <option value="14">14</option>
+                  <option value="30">30</option>
+                </select>
+                <span data-i18n="inv.reorder_days_suffix">days</span>
+              </label>
+              <span class="flex-1"></span>
+              <button type="button" class="btn-mini" data-reorder-copy="*">
+                <i class="ph ph-clipboard-text w-3.5 h-3.5"></i> <span data-i18n="inv.reorder_copy_all">Copy all suppliers</span>
+              </button>
+            </div>
+            <div id="inv-reorder-content" class="overflow-y-auto max-h-96"></div>
           </section>
 
           <section class="panel flex-1 min-h-0">
@@ -949,17 +979,7 @@
 
           <section class="panel flex-1 min-h-0">
             <div class="overflow-y-auto flex-1 min-h-0">
-              <table class="ptable audit-table">
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Who</th>
-                    <th>What</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody id="audit-tbody"></tbody>
-              </table>
+              <ol id="audit-tbody" class="audit-feed" aria-label="Audit entries"></ol>
             </div>
             <div class="audit-foot">
               <span class="foot-note" id="audit-count">-</span>
@@ -1479,6 +1499,31 @@
                   <option value="58mm">58mm Mobile / Pocket POS</option>
                 </select>
                 <p class="foot-note">Applies to the whole shop. Receipts reformat to match the roll.</p>
+              </div>
+              <div class="field">
+                <label class="field__label" for="settings-template">Receipt template</label>
+                <select id="settings-template" class="w-full px-3 py-1.5 text-xs">
+                  <option value="standard">Standard (Default)</option>
+                  <option value="compact">Compact: saves paper</option>
+                  <option value="boxed">Boxed: framed total</option>
+                  <option value="airy">Airy: whitespace rhythm</option>
+                  <option value="grid">Grid: qty/name/amount columns</option>
+                </select>
+                <p class="foot-note">Applies to the whole shop, sale receipts only. Settlement slips and claim stubs keep their layout.</p>
+              </div>
+              <div class="field">
+                <label class="field__label" for="settings-item-rows">Item rows</label>
+                <select id="settings-item-rows" class="w-full px-3 py-1.5 text-xs">
+                  <option value="auto">Auto: one line when the name fits (Default)</option>
+                  <option value="two_line">Always two lines</option>
+                  <option value="one_line">Always one line</option>
+                </select>
+                <p class="foot-note">Used by Standard, Compact, Boxed and Airy. Grid sets its own columns.</p>
+              </div>
+              <div class="field">
+                <span class="field__label" id="receipt-preview-label">Paper preview</span>
+                <pre id="settings-receipt-preview" class="receipt-preview" role="status" aria-labelledby="receipt-preview-label">Loading preview...</pre>
+                <p class="foot-note">Rendered by the same layout code the printer uses, with a sample sale. Updates when template, width or item rows change.</p>
               </div>
               <div class="field">
                 <label class="field__label">Auto-print after sale</label>
@@ -2330,6 +2375,34 @@
       <div class="flex gap-2 w-full mt-2">
         <button type="button" data-action="close-pin" class="gate__btn gate__btn--quiet">Cancel</button>
         <button type="button" data-action="verify-pin" class="gate__btn">Verify</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10. REPORT A PROBLEM / REQUEST A FEATURE -->
+  <div id="modal-feedback" class="modal-backdrop gate z-[110] hidden">
+    <div class="gate__card" style="max-width: 430px;">
+      <div class="gate__icon">
+        <i class="ph ph-chat-circle-text"></i>
+      </div>
+      <h3>Report a problem or request a feature</h3>
+      <p class="gate__hint">Goes straight to the TechParts POS team by email. App version, machine ID and license
+        status attach automatically.</p>
+      <div class="seg w-full" role="group" aria-label="Report type">
+        <button type="button" class="seg-btn is-active" data-feedback-kind="problem">Problem</button>
+        <button type="button" class="seg-btn" data-feedback-kind="feature">Feature request</button>
+      </div>
+      <textarea id="feedback-text" rows="5"
+        class="w-full p-2 text-xs font-mono"
+        placeholder="Describe what happened, or what you need. Which screen were you on?"
+        aria-label="Your report"></textarea>
+      <p id="feedback-error" class="gate__err hidden" role="alert"></p>
+      <div class="grid grid-cols-2 gap-2 w-full mt-2">
+        <button type="button" data-action="feedback-email" class="btn-primary col-span-2">Open email app</button>
+        <button type="button" data-action="feedback-gmail" class="btn-quiet">Gmail</button>
+        <button type="button" data-action="feedback-yahoo" class="btn-quiet">Yahoo</button>
+        <button type="button" data-action="feedback-copy" class="btn-quiet col-span-2">Copy report text</button>
+        <button type="button" data-action="close-modal" data-modal="modal-feedback" class="btn-quiet col-span-2">Cancel</button>
       </div>
     </div>
   </div>

@@ -17,7 +17,8 @@ const {
   listStockMovements,
   archiveInventoryItem,
   importInventory,
-  bulkEditInventory
+  bulkEditInventory,
+  listReorderSuggestions
 } = require('./inventory');
 const { createSale, listSales, getSaleDetails, voidSale } = require('./sales');
 const {
@@ -60,9 +61,31 @@ const { getShopSettings, updateShopSettings, updateSyncSetting, getSettleElevati
 // file order, not a guarantee. One property lookup per send makes the belt
 // unbypassable. The rest are layout helpers the belt does not touch.
 const printer = require('./printer');
-const { listPrinters, defaultPrinter, encode, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip } = printer;
+
+// Fixed sample sale for /api/receipt/preview. Deterministic content chosen to
+// exercise the layout: a long item name that wraps, a multi-quantity line, a
+// device intake line, a discount and change. No live customer data.
+function samplePreviewSale() {
+  return {
+    sale_code: 'SALE-A1B2C3D4E5F6',
+    created_at: new Date().toISOString(),
+    customer_name: 'Juan Dela Cruz',
+    customer_phone: '0917 123 4567',
+    payment_method: 'gcash',
+    payment_reference: 'GC-8812',
+    subtotal: 2430, discount: 30, total_amount: 2400, amount_paid: 2400, change_amount: 0, credit_balance: 0,
+    items: [
+      { item_type: 'labor', item_name: DEVICE_LINE_PREFIX + 'iPhone 12 (IMEI 35677890)', quantity: 1, unit_price: 0, total_price: 0 },
+      { item_type: 'part', item_name: 'iPhone 12 screen assembly', quantity: 1, unit_price: 1850, total_price: 1850 },
+      { item_type: 'part', item_name: 'Tempered glass (Poco X6)', quantity: 2, unit_price: 150, total_price: 300 },
+      { item_type: 'part', item_name: 'Charging flex ICC', quantity: 1, unit_price: 280, total_price: 280 },
+    ],
+    returns: [],
+  };
+}
+const { listPrinters, defaultPrinter, encode, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, DEVICE_LINE_PREFIX } = printer;
 const { resetDemoData, seedInitialParts } = require('./seed');
-const { checkForUpdates, applyUpdate, getUpdateProgress, consumeHandoffStatus, setUpdateLogSink } = require('./updater');
+const { checkForUpdates, applyUpdate, getUpdateProgress, consumeHandoffStatus, setUpdateLogSink, CURRENT_VERSION } = require('./updater');
 // [update] lines belong in pos-server.log, which console.log cannot reach in the packaged exe.
 setUpdateLogSink(logLine);
 
@@ -516,6 +539,15 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           }), session, elevated));
         }
 
+        if (pathname === '/api/inventory/reorder' && method === 'GET') {
+          const report = listReorderSuggestions(db, { days: url.searchParams.get('days') || 3 });
+          // Costs are manager data, same rule as the catalog: est_cost is derived
+          // from cost_price, so it is stripped alongside it for staff sessions.
+          const allowed = !session || session.type === 'manager' || elevated;
+          if (!allowed) report.rows = report.rows.map(r => ({ ...r, cost_price: null, est_cost: null }));
+          return sendJson(res, 200, report);
+        }
+
         if (pathname === '/api/inventory' && method === 'POST') {
           if (!elevated) return elevationDenied();
           const body = await parseBody(req);
@@ -817,6 +849,18 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
               return sendJson(res, 400, { error: 'receipt_paper_width must be 58mm or 80mm' });
             }
           }
+          if (Object.prototype.hasOwnProperty.call(body, 'receipt_template')) {
+            const t = String(body.receipt_template ?? '').trim();
+            if (t && !['standard', 'compact', 'boxed', 'airy', 'grid'].includes(t)) {
+              return sendJson(res, 400, { error: 'receipt_template must be standard, compact, boxed, airy or grid' });
+            }
+          }
+          if (Object.prototype.hasOwnProperty.call(body, 'receipt_item_rows')) {
+            const m = String(body.receipt_item_rows ?? '').trim();
+            if (m && !['auto', 'two_line', 'one_line'].includes(m)) {
+              return sendJson(res, 400, { error: 'receipt_item_rows must be auto, two_line or one_line' });
+            }
+          }
           // DNS resolution at save time only (drain must not gain a failure
           // mode). A public hostname pointing at a private IP is rejected
           // here; a dead lookup saves with a warning the UI can show.
@@ -876,6 +920,23 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           if (body && (body.sync_url !== undefined || body.sync_token !== undefined)) kickSync();
           const hasSyncToken = Boolean(db.prepare("SELECT value FROM shop_settings WHERE key = 'sync_token'").get()?.value);
           return sendJson(res, 200, { ...(dnsWarning ? { warning: dnsWarning } : {}), ...getShopSettings(db), sync_token_configured: hasSyncToken, pin_change_required: isDefaultPin(db) });
+        }
+
+        // PAPER PREVIEW (Settings): the exact lines renderSaleSlip lays out for
+        // the chosen template/width/item rows, rendered against a fixed sample
+        // sale so the manager sees the roll output without printing. Same
+        // builder the queue feeds to encode(), so preview and paper cannot
+        // drift; read-only, elevation-gated like the settings it mirrors.
+        if (pathname === '/api/receipt/preview' && method === 'POST') {
+          if (!elevated) return elevationDenied();
+          const overrides = await parseBody(req);
+          const settings = {
+            ...getShopSettings(db),
+            receipt_paper_width: overrides.paper_width === '58mm' ? '58mm' : '80mm',
+            receipt_template: ['standard', 'compact', 'boxed', 'airy', 'grid'].includes(overrides.template) ? overrides.template : 'standard',
+            receipt_item_rows: ['auto', 'two_line', 'one_line'].includes(overrides.item_rows) ? overrides.item_rows : 'auto',
+          };
+          return sendJson(res, 200, { lines: renderSaleSlip(samplePreviewSale(), settings) });
         }
 
         if (pathname === '/api/settings/pair-cloud' && method === 'POST') {
@@ -1288,7 +1349,9 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
 
         // LICENSE & ACTIVATION
         if (pathname === '/api/license/status' && method === 'GET') {
-          return sendJson(res, 200, getLicenseStatus(db));
+          // version rides along for the feedback report; the value is public
+          // in every release note anyway.
+          return sendJson(res, 200, { ...getLicenseStatus(db), version: CURRENT_VERSION });
         }
 
         if (pathname === '/api/license/activate' && method === 'POST') {

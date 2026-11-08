@@ -92,15 +92,14 @@ test('audit log ergonomics: copy hygiene, hover isolation, and empty component',
   // No em dashes in auditDayLabel or empty details
   assert.doesNotMatch(authJs, /return `\${label} —/);
   assert.match(authJs, /return `\${label} · \${d\.toLocaleDateString/);
-  assert.doesNotMatch(authJs, /class="audit-empty">[^<]*—[^<]*<\/span>/);
-  assert.match(authJs, /class="audit-empty">-<\/span>/);
 
   // Initial audit counter placeholder in HTML has no em dash
   assert.doesNotMatch(indexHtml, /id="audit-count">—/);
   assert.match(indexHtml, /id="audit-count">-<\/span>/);
 
-  // Table hover does not highlight date header rows
-  assert.match(styles, /\.ptable tbody tr\.audit-date-row:hover\s*\{[\s\S]*?background-color:\s*transparent;/);
+  // The sentence feed ships its own day-header and loading styles
+  assert.match(styles, /\.audit-day__label\s*\{/);
+  assert.match(styles, /\.audit-loading\s*\{/);
 
   // Uses app-standard .empty component on 0 filter matches
   assert.match(authJs, /<div class="empty">[\s\S]*?ph-shield-check[\s\S]*?No audit entries found/);

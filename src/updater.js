@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 const REPO = 'katalepsis69/PHONEPOS';
-const CURRENT_VERSION = '2.4';
+const CURRENT_VERSION = '2.6';
 
 /**
  * Parses a version string into an array of integers.

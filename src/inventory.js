@@ -490,6 +490,29 @@ function bulkEditInventory(db, { ids, action, params = {} }, ctx = {}, meta = {}
   });
 }
 
+// ponytail: computed live from sale_items on every open, nothing stored or scheduled
+function listReorderSuggestions(db, { days = 3 } = {}) {
+  const n = Number(days);
+  const windowDays = Number.isInteger(n) && n >= 1 && n <= 90 ? n : 3;
+  const rows = db.prepare(`
+    SELECT i.id, i.brand, i.model_name, i.part_type, i.sku_barcode,
+           i.supplier, i.stock_quantity, i.cost_price,
+           COALESCE(SUM(si.quantity), 0) AS qty_sold
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id AND s.voided = 0
+    JOIN inventory i ON i.id = si.inventory_id AND i.archived = 0
+    WHERE si.item_type = 'part'
+      AND s.created_at >= datetime('now', ?)
+    GROUP BY si.inventory_id
+    ORDER BY i.supplier COLLATE NOCASE ASC, qty_sold DESC, i.brand ASC, i.model_name ASC
+  `).all(`-${windowDays} days`);
+  for (const r of rows) {
+    r.suggested_qty = Math.max(r.qty_sold - r.stock_quantity, 0);
+    r.est_cost = money(r.suggested_qty * (r.cost_price || 0));
+  }
+  return { days: windowDays, rows };
+}
+
 module.exports = {
   partLabel,
   listInventory,
@@ -503,5 +526,6 @@ module.exports = {
   archiveInventoryItem,
   importInventory,
   deleteInventoryItem,
-  bulkEditInventory
+  bulkEditInventory,
+  listReorderSuggestions
 };

@@ -392,6 +392,8 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
     insertSetting.run('gcash_number', '0917-123-4567');
     insertSetting.run('gcash_qr_url', '');
     insertSetting.run('receipt_paper_width', '80mm');
+    insertSetting.run('receipt_template', 'standard');
+    insertSetting.run('receipt_item_rows', 'auto');
     insertSetting.run('warranty_days', '7');
     insertSetting.run('warranty_policy_text', '7 Days Test Warranty for LCDs & Batteries. Physical crack, flex tear, water damage, or removed warranty seal voids warranty.');
     insertSetting.run('shop_footer_note', 'Thank you for your business! Please keep this receipt for warranty claims.');

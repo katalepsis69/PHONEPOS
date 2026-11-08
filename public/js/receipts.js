@@ -68,10 +68,17 @@ function refuseUnprintableAmount(container, printable, field) {
   showToast(why, 'error');
 }
 
-function brandHeaderHtml(isThermal = false) {
+function brandHeaderHtml(isThermal = false, trimmed = false) {
   const name = escHtml(S.shopSettings.gcash_name || 'TECHPARTS POS');
   const addr = S.shopSettings.shop_address ? escHtml(S.shopSettings.shop_address) : '';
   const tel = S.shopSettings.gcash_number ? escHtml(S.shopSettings.gcash_number) : '';
+  // Trimmed templates (compact/airy/grid) drop the address and Tel/GCash lines,
+  // mirroring the paper header in src/printer.js.
+  if (trimmed) {
+    return isThermal
+      ? `<div class="rcp-lg" style="font-weight: bold; text-transform: uppercase;">${name}</div>`
+      : `<div class="font-bold text-sm tracking-wider uppercase">${name}</div>`;
+  }
   if (isThermal) {
     return `<div class="rcp-lg" style="font-weight: bold; text-transform: uppercase;">${name}</div>
         <div>${addr || 'Phone Parts, LCDs & Repair Service'}</div>
@@ -250,6 +257,16 @@ export function renderReceipt(sale) {
   const dateStr = formatDateTime(sale.created_at || new Date().toISOString());
   const expiryDate = calculateWarrantyExpiry(sale.created_at, S.shopSettings.warranty_days);
   const paperClass = S.shopSettings.receipt_paper_width === '58mm' ? 'thermal-58mm' : 'thermal-80mm';
+  // Template + item rows come from Settings; unknown values read standard/auto,
+  // the same fallback src/printer.js applies on paper.
+  const template = ['standard', 'compact', 'boxed', 'airy', 'grid'].includes(S.shopSettings.receipt_template) ? S.shopSettings.receipt_template : 'standard';
+  const rowMode = ['auto', 'two_line', 'one_line'].includes(S.shopSettings.receipt_item_rows) ? S.shopSettings.receipt_item_rows : 'auto';
+  const trimmed = template === 'compact' || template === 'airy' || template === 'grid';
+  const withPolicy = !trimmed;
+  // The footer note is decorative, so compact is the one template without it;
+  // the same rule the paper builders apply.
+  const showFooterNote = template !== 'compact';
+  const dateLine = `${escHtml(dateStr)}${trimmed && sale.payment_method ? ` / ${escHtml(String(sale.payment_method).toUpperCase())}` : ''}`;
 
   // The repair's unit / IMEI / note rides along as a ₱0 labour line so it can be
   // stored without a schema change. It belongs with the intake details here,
@@ -260,25 +277,54 @@ export function renderReceipt(sale) {
   const deviceText = deviceItem ? String(deviceItem.item_name).slice(DEVICE_LINE_PREFIX.length) : '';
   const billable = allItems.filter(it => it !== deviceItem);
 
-  const itemsHtml = billable.map(it => `
-    <div class="flex justify-between py-1 border-b border-slate-800">
-      <div>
-        <div class="font-bold flex items-center gap-1">
-          ${it.item_type === 'labor' ? `<span class="text-[9px] px-1 bg-amber-500/20 text-amber-300 rounded">LABOR</span>` : ''}
-          <span>${escHtml(it.item_name)}</span>
+  // Item rows follow the template and the Item rows setting: two_line is the
+  // original stacked row; one_line/auto collapse to "2x name ... amount" like
+  // paper does; grid sets its own qty/name/amount columns.
+  let itemsHtml;
+  if (template === 'grid') {
+    itemsHtml = `
+      <div class="py-2 text-[11px]">
+        <div class="flex justify-between font-bold text-slate-500 pb-1 border-b border-slate-800">
+          <span class="w-8">QTY</span><span class="flex-1">ITEM</span><span class="text-right">AMOUNT</span>
         </div>
-        <div class="text-[10px] text-slate-400">${it.quantity} x ${fmtMoney(Number(it.unit_price))}</div>
+        ${billable.map(it => `
+          <div class="flex justify-between py-1">
+            <span class="w-8 tabular-nums">${it.quantity}</span>
+            <span class="flex-1">${it.item_type === 'labor' ? '[LABOR] ' : ''}${escHtml(it.item_name)}</span>
+            <span class="text-right font-bold text-teal-400 whitespace-nowrap">${fmtMoney(Number(it.total_price))}</span>
+          </div>`).join('')}
+      </div>`;
+  } else if (rowMode === 'two_line') {
+    itemsHtml = billable.map(it => `
+      <div class="flex justify-between py-1 border-b border-slate-800">
+        <div>
+          <div class="font-bold flex items-center gap-1">
+            ${it.item_type === 'labor' ? `<span class="text-[9px] px-1 bg-amber-500/20 text-amber-300 rounded">LABOR</span>` : ''}
+            <span>${escHtml(it.item_name)}</span>
+          </div>
+          <div class="text-[10px] text-slate-400">${it.quantity} x ${fmtMoney(Number(it.unit_price))}</div>
+        </div>
+        <div class="text-right text-teal-400 font-bold">${fmtMoney(Number(it.total_price))}</div>
       </div>
-      <div class="text-right text-teal-400 font-bold">${fmtMoney(Number(it.total_price))}</div>
-    </div>
-  `).join('');
+    `).join('');
+    itemsHtml = `<div class="py-2 space-y-1">${itemsHtml}</div>`;
+  } else {
+    itemsHtml = `
+      <div class="py-2 space-y-0.5 text-[11px]">
+        ${billable.map(it => `
+          <div class="flex justify-between py-1 border-b border-slate-800 gap-2">
+            <span class="truncate">${it.quantity}x ${it.item_type === 'labor' ? '[LABOR] ' : ''}${escHtml(it.item_name)}</span>
+            <span class="text-right text-teal-400 font-bold whitespace-nowrap">${fmtMoney(Number(it.total_price))}</span>
+          </div>`).join('')}
+      </div>`;
+  }
 
   // UI Modal Preview
   container.innerHTML = `
     <div class="text-center pb-3 border-b border-slate-800">
-      ${brandHeaderHtml()}
+      ${brandHeaderHtml(false, trimmed)}
       <div class="text-[10px] text-slate-500 mt-1 font-mono">Invoice #${escHtml(sale.sale_code)}</div>
-      <div class="text-[10px] text-slate-500">${escHtml(dateStr)}</div>
+      <div class="text-[10px] text-slate-500">${dateLine}</div>
     </div>
 
     <div class="text-[11px] space-y-0.5 py-1 border-b border-slate-800 text-slate-300">
@@ -293,9 +339,13 @@ export function renderReceipt(sale) {
     <div class="pt-2 border-t border-slate-800 space-y-1 text-[11px]">
       <div class="flex justify-between text-slate-400"><span>Subtotal</span><span>${fmtMoney(Number(sale.subtotal))}</span></div>
       ${sale.discount > 0 ? `<div class="flex justify-between text-amber-400"><span>Discount</span><span>-${fmtMoney(Number(sale.discount))}</span></div>` : ''}
-      <div class="flex justify-between font-bold text-sm pt-1 border-t border-slate-800">
-        <span>Total Due</span><span class="text-teal-400">${fmtMoney(Number(sale.total_amount))}</span>
-      </div>
+      ${template === 'boxed'
+        ? `<div class="flex justify-between font-bold text-sm pt-1 mt-1 border-2 border-slate-800 rounded px-2 py-1">
+            <span>Total Due</span><span class="text-teal-400">${fmtMoney(Number(sale.total_amount))}</span>
+          </div>`
+        : `<div class="flex justify-between font-bold text-sm pt-1 border-t border-slate-800">
+            <span>Total Due</span><span class="text-teal-400">${fmtMoney(Number(sale.total_amount))}</span>
+          </div>`}
       <div class="flex justify-between text-slate-300"><span>Amount Paid</span><span>${fmtMoney(Number(sale.amount_paid))}</span></div>
       ${sale.change_amount > 0 ? `<div class="flex justify-between font-bold text-teal-400"><span>Change</span><span>${fmtMoney(Number(sale.change_amount))}</span></div>` : ''}
       ${sale.credit_balance > 0 ? `
@@ -318,10 +368,11 @@ export function renderReceipt(sale) {
     </div>
 
     <div class="pt-2 border-t border-slate-800 text-[10px] text-slate-400 space-y-1">
-      <div class="font-bold text-slate-300">WARRANTY POLICY (${warrantyDays(S.shopSettings.warranty_days)} Days):</div>
-      <div class="text-[9px] text-slate-500">${escHtml(S.shopSettings.warranty_policy_text)}</div>
-      <div class="text-[9px] text-amber-400/90 font-mono">Warranty Valid Until: ${escHtml(expiryDate)}</div>
-      ${S.shopSettings.shop_footer_note ? `<div class="text-[9px] text-slate-400 text-center pt-1 font-medium">*** ${escHtml(S.shopSettings.shop_footer_note)} ***</div>` : ''}
+      ${withPolicy ? `
+        <div class="font-bold text-slate-300">WARRANTY POLICY (${warrantyDays(S.shopSettings.warranty_days)} Days):</div>
+        <div class="text-[9px] text-slate-500">${escHtml(S.shopSettings.warranty_policy_text)}</div>` : ''}
+      <div class="text-[9px] text-amber-400/90 font-mono">${withPolicy ? 'Warranty Valid Until: ' : `Warranty: ${warrantyDays(S.shopSettings.warranty_days)} day(s), valid until `}${escHtml(expiryDate)}</div>
+      ${showFooterNote && S.shopSettings.shop_footer_note ? `<div class="text-[9px] text-slate-400 text-center pt-1 font-medium">*** ${escHtml(S.shopSettings.shop_footer_note)} ***</div>` : ''}
     </div>
   `;
 
@@ -334,7 +385,24 @@ export function renderReceipt(sale) {
     // not fit name + qty + price for long part names, so there each item prints
     // as a bold name line over a "qty x unit … total" line.
     const is58 = paperWidthMm() === 58;
-    const itemsPrintHtml = is58 ? `
+    const hrStyle = template === 'boxed' ? 'border-top: 3px double #000;' : 'border-top: 1px dashed #000;';
+    let itemsPrintHtml;
+    if (template === 'grid') {
+      itemsPrintHtml = `
+      <div style="font-size: 12px;">
+        <div style="display: flex; font-weight: bold; border-bottom: 1px solid #000; padding-bottom: 2px;">
+          <span style="width: 24px;">QTY</span><span style="flex: 1;">ITEM</span><span style="text-align: right;">AMOUNT</span>
+        </div>
+        ${billable.map(it => `
+          <div style="display: flex; padding: 2px 0;">
+            <span style="width: 24px;">${it.quantity}</span>
+            <span style="flex: 1;">${it.item_type === 'labor' ? '[LABOR] ' : ''}${escHtml(it.item_name)}</span>
+            <span style="text-align: right; white-space: nowrap;">${printMoney(it.total_price)}</span>
+          </div>`).join('')}
+      </div>
+    `;
+    } else if (rowMode === 'two_line') {
+      itemsPrintHtml = is58 ? `
       <div style="font-size: 12px;">
         ${billable.map(it => `
           <div style="padding: 2px 0;">
@@ -368,14 +436,28 @@ export function renderReceipt(sale) {
         </tbody>
       </table>
     `;
+    } else {
+      // One line per item, like paper's one_line/auto: "2x name ... amount".
+      // The browser flows long names onto a second row instead of truncating.
+      itemsPrintHtml = `
+      <div style="font-size: 12px;">
+        ${billable.map(it => `
+          <div style="display: flex; justify-content: space-between; gap: 8px; padding: 2px 0;">
+            <span style="min-width: 0; overflow-wrap: anywhere;">${it.quantity}x ${it.item_type === 'labor' ? '[LABOR] ' : ''}${escHtml(it.item_name)}</span>
+            <span style="white-space: nowrap;">${printMoney(it.total_price)}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    }
 
     printable.innerHTML = `
       <div style="text-align: center; margin-bottom: 4px;">
-        ${brandHeaderHtml(true)}
-        <div style="margin: 4px 0; border-top: 1px dashed #000;"></div>
+        ${brandHeaderHtml(true, trimmed)}
+        <div style="margin: 4px 0; ${hrStyle}"></div>
         <div style="font-size: 13px; font-weight: bold;">OFFICIAL RECEIPT</div>
         <div style="font-size: 12px;">Invoice #: ${escHtml(sale.sale_code)}</div>
-        <div style="font-size: 12px;">Date: ${escHtml(dateStr)}</div>
+        <div style="font-size: 12px;">${dateLine}</div>
       </div>
 
       <div style="margin-bottom: 4px; font-size: 12px;">
@@ -385,18 +467,22 @@ export function renderReceipt(sale) {
         <div>Payment: ${escHtml(sale.payment_method.toUpperCase())} ${sale.payment_reference ? `(Ref: ${escHtml(sale.payment_reference)})` : ''}</div>
       </div>
 
-      <div style="border-top: 1px dashed #000; margin: 4px 0;"></div>
+      <div style="${hrStyle} margin: 4px 0;"></div>
 
       ${itemsPrintHtml}
 
-      <div style="border-top: 1px dashed #000; margin: 4px 0;"></div>
+      <div style="${hrStyle} margin: 4px 0;"></div>
 
       <div style="font-size: 13px; line-height: 1.4;">
         <div style="display: flex; justify-content: space-between;"><span>Subtotal:</span><span>${printMoney(sale.subtotal)}</span></div>
         ${sale.discount > 0 ? `<div style="display: flex; justify-content: space-between;"><span>Discount:</span><span>-${printMoney(sale.discount)}</span></div>` : ''}
-        <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; border-top: 1px solid #000; padding-top: 2px;">
-          <span>TOTAL DUE:</span><span>${printMoney(sale.total_amount)}</span>
-        </div>
+        ${template === 'boxed'
+          ? `<div style="border: 1px solid #000; padding: 2px 4px; margin: 4px 0; display: flex; justify-content: space-between; font-weight: bold; font-size: 14px;">
+              <span>TOTAL DUE:</span><span>${printMoney(sale.total_amount)}</span>
+            </div>`
+          : `<div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 14px; border-top: 1px solid #000; padding-top: 2px;">
+              <span>TOTAL DUE:</span><span>${printMoney(sale.total_amount)}</span>
+            </div>`}
         <div style="display: flex; justify-content: space-between;"><span>Amount Paid:</span><span>${printMoney(sale.amount_paid)}</span></div>
         ${sale.change_amount > 0 ? `<div style="display: flex; justify-content: space-between; font-weight: bold;"><span>CHANGE:</span><span>${printMoney(sale.change_amount)}</span></div>` : ''}
         ${sale.credit_balance > 0 ? `<div style="display: flex; justify-content: space-between; font-weight: bold;"><span>BALANCE (UTANG):</span><span>${printMoney(sale.credit_balance)}</span></div>` : ''}
@@ -422,11 +508,12 @@ export function renderReceipt(sale) {
           <div style="margin-top: 16px; border-top: 1px solid #000; padding-top: 2px;">Customer Signature</div>
         </div>` : ''}
 
-      <div style="border-top: 1px dashed #000; margin-top: 8px; padding-top: 4px; font-size: 11px; text-align: center;">
-        <div style="font-weight: bold;">WARRANTY (${warrantyDays(S.shopSettings.warranty_days)} DAYS):</div>
-        <div>${escHtml(S.shopSettings.warranty_policy_text)}</div>
-        <div style="margin-top: 2px; font-weight: bold;">Valid Until: ${escHtml(expiryDate)}</div>
-        <div style="margin-top: 4px;">*** ${escHtml(S.shopSettings.shop_footer_note || 'Thank you for your business!')} ***</div>
+      <div style="${hrStyle} margin-top: 8px; padding-top: 4px; font-size: 11px; text-align: center;">
+        ${withPolicy ? `
+          <div style="font-weight: bold;">WARRANTY (${warrantyDays(S.shopSettings.warranty_days)} DAYS):</div>
+          <div>${escHtml(S.shopSettings.warranty_policy_text)}</div>` : ''}
+        <div style="margin-top: 2px; font-weight: bold;">${withPolicy ? 'Valid Until: ' : `Warranty: ${warrantyDays(S.shopSettings.warranty_days)} day(s), valid until `}${escHtml(expiryDate)}</div>
+        ${showFooterNote ? `<div style="margin-top: 4px;">*** ${escHtml(S.shopSettings.shop_footer_note || 'Thank you for your business!')} ***</div>` : ''}
       </div>
     `;
     applyPrintPageSize();

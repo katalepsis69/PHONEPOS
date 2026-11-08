@@ -280,6 +280,10 @@ const nastySale = {
 
 const nastySettings = {
   receipt_paper_width: '58mm',
+  // These tests pin the classic two-line item layout. Auto is the shipped
+  // default (one line when the name fits), so the layout tests say so
+  // explicitly; the auto/one_line behaviors get their own tests below.
+  receipt_item_rows: 'two_line',
   gcash_name: 'TECHPARTS REPAIR & SERVICES & POS',
   shop_address: 'Rizal Street corner Quezon Avenue, Cabanatuan City, Nueva Ecija 3100',
   gcash_number: '0917-123-4567',
@@ -619,7 +623,7 @@ test('a 58mm sale slip stays inside 32 columns and lands totals at the edge', ()
     payment_method: 'cash', payment_reference: '', subtotal: 1250, discount: 0,
     total_amount: 1250, amount_paid: 1000, change_amount: 250, credit_balance: 0,
     items: [{ item_type: 'part', item_name: 'iPhone 11 LCD Screen Original', quantity: 1, unit_price: 1250, total_price: 1250 }],
-  }, { receipt_paper_width: '58mm', gcash_name: 'TECHPARTS', warranty_days: '7', warranty_policy_text: '7 Days Test Warranty for LCDs & Batteries.' });
+  }, { receipt_paper_width: '58mm', receipt_item_rows: 'two_line', gcash_name: 'TECHPARTS', warranty_days: '7', warranty_policy_text: '7 Days Test Warranty for LCDs & Batteries.' });
   for (const line of slip) {
     assert.ok(line.text.length <= (line.wide ? 16 : 32), `over budget: ${line.text}`);
   }
@@ -1604,8 +1608,8 @@ test('the fallback shares paper labels and money shape, and the doc says so', ()
   assert.ok(receiptsSrc.includes("toLocaleString('en-US'"), 'the fallback lost the shared money shape');
   // The call-site count in the sentence is the count in the file.
   const sites = (receiptsSrc.match(/printMoney\(/g) || []).length - 1;
-  assert.equal(sites, 17, `printMoney call sites moved to ${sites}; the doc sentence and this test both need the new number`);
-  assert.match(bullet, /seventeen call sites/, 'the doc no longer matches the seventeen sites');
+  assert.equal(sites, 20, `printMoney call sites moved to ${sites}; the doc sentence and this test both need the new number`);
+  assert.match(bullet, /twenty call sites/, 'the doc no longer matches the twenty sites');
   // The labels are shared now; a re-split fails here until the doc is edited too.
   for (const label of ['WARRANTY (', 'Payment received:', 'Remaining balance:', 'RETURNS / REFUNDS']) {
     assert.ok(printerSrc.includes(label), `paper no longer prints ${label}`);
@@ -1677,7 +1681,9 @@ test('the browser refuses exactly the amounts the paper slip prints', () => {
     assert.ok(start > -1 && stop > start, `${from} moved; update this test`);
     return src.slice(start, stop);
   };
-  const paperSale = slice(printerSrc, 'function renderSaleSlip', 'function calculateWarrantyExpiry');
+  // The template section: the shared leaf helpers plus all five builders, so
+  // the regex sees every money() call the paper can make for one sale.
+  const paperSale = slice(printerSrc, 'function splitDeviceLine', 'function warrantyDays');
   const paperSettle = slice(printerSrc, 'function renderSettlementSlip', "const { spawn }");
   const called = (body, receiver) =>
     [...new Set([...body.matchAll(new RegExp(`money\\(\\s*${receiver}\\.([\\w_]+)\\s*\\)`, 'g'))].map((m) => m[1]))].sort();
@@ -1844,4 +1850,100 @@ serverTest('POST /api/print kind=claim_stub goes to the queue without a sale', a
   });
   assert.equal(bad.status, 400);
   assert.equal((await bad.json()).fallback, false, 'an amount refusal is not a printer fault');
+});
+
+// ---- Templates + item rows (Settings > Printing) ---------------------------
+test('item rows: auto prints one line when the row fits and wraps when it does not', () => {
+  const fits = renderSaleSlip(
+    { ...sampleSale, items: [{ item_type: 'part', item_name: 'LCD', quantity: 1, unit_price: 100, total_price: 100 }] },
+    { ...nastySettings, receipt_item_rows: 'auto', receipt_paper_width: '80mm' }).map((l) => l.text);
+  assert.ok(fits.some((l) => l.startsWith('1x LCD')), `auto collapsed the row: ${JSON.stringify(fits)}`);
+  const wide = renderSaleSlip(
+    { ...sampleSale, items: [{ item_type: 'part', item_name: 'iPhone 12 Screen Original Assembly OLED', quantity: 1, unit_price: 2200, total_price: 2200 }] },
+    { ...nastySettings, receipt_item_rows: 'auto', receipt_paper_width: '58mm' }).map((l) => l.text);
+  assert.ok(wide.some((l) => l.startsWith('iPhone 12 Screen')), 'a long name wraps instead of truncating');
+  assert.ok(wide.some((l) => l.startsWith('  1 x P2,200.00')), 'the wrapped name keeps the qty x unit row');
+});
+
+test('item rows: one_line truncates the name and keeps the money column exact', () => {
+  const long = 'iPhone 12 Pro Max Screen Original Assembly OLED Grade A';
+  const text = renderSaleSlip(
+    { ...sampleSale, items: [{ item_type: 'part', item_name: long, quantity: 2, unit_price: 150, total_price: 300 }] },
+    { ...nastySettings, receipt_item_rows: 'one_line', receipt_paper_width: '58mm' }).map((l) => l.text);
+  const line = text.find((l) => l.startsWith('2x iPhone'));
+  assert.ok(line, `one-line row missing: ${JSON.stringify(text)}`);
+  assert.ok(line.length <= 32, line);
+  assert.ok(line.endsWith('P300.00'), line);
+  assert.ok(line.includes('...'), 'the truncated name says so');
+});
+
+test('every template stays inside the roll at both widths and keeps the shared content', () => {
+  const sale = { ...sampleSale, credit_balance: 250 };
+  for (const template of ['standard', 'compact', 'boxed', 'airy', 'grid']) {
+    for (const width of ['58mm', '80mm']) {
+      const cols = colsFor(width);
+      const slip = renderSaleSlip(sale, { ...nastySettings, receipt_template: template, receipt_paper_width: width });
+      assert.ok(slip.length > 10, `${template} produced no slip`);
+      for (const line of slip) {
+        const budget = line.wide ? Math.floor(cols / 2) : cols;
+        assert.ok((line.text || '').length <= budget, `${template}/${width} over budget: ${JSON.stringify(line.text)}`);
+      }
+      const text = slip.map((l) => l.text).join('\n');
+      // The trimmed templates phrase the warranty line differently, so the
+      // shared-content check looks for the expiry date itself (sampleSale is
+      // 2026-09-30 + 7 days).
+      for (const must of ['OFFICIAL RECEIPT', 'Invoice #', 'TOTAL DUE', 'BALANCE (UTANG):', 'Customer Signature', '2026-10-07']) {
+        assert.ok(text.includes(must), `${template} lost ${must}`);
+      }
+    }
+  }
+});
+
+test('trimmed templates drop address, tel and policy; compact also drops the footer', () => {
+  const render = (t) => renderSaleSlip(sampleSale, { ...nastySettings, receipt_template: t, receipt_paper_width: '80mm' }).map((l) => l.text).join('\n');
+  const compact = render('compact');
+  for (const gone of ['Tel/GCash:', 'Rizal Street', 'WARRANTY (', 'Thank you for your business']) {
+    assert.ok(!compact.includes(gone), `compact kept ${gone}`);
+  }
+  assert.match(compact, /Warranty:\s+7 day\(s\), valid until 2026-10-07/, compact);
+  for (const t of ['airy', 'grid']) {
+    const text = render(t);
+    assert.ok(!text.includes('Tel/GCash:'), `${t} kept the tel line`);
+    assert.ok(!text.includes('WARRANTY ('), `${t} kept the policy header`);
+    assert.ok(text.includes('Thank you for your business'), `${t} lost the footer note`);
+  }
+});
+
+test('boxed frames the total; grid sets qty/name/amount columns', () => {
+  const boxed = renderSaleSlip(sampleSale, { ...nastySettings, receipt_template: 'boxed', receipt_paper_width: '80mm' }).map((l) => l.text);
+  assert.ok(boxed.some((l) => l.startsWith('+---')), 'boxed total frame missing');
+  assert.ok(boxed.some((l) => l.startsWith('| TOTAL DUE')), 'boxed total row missing');
+  assert.ok(boxed.includes('='.repeat(48)), 'boxed double rules missing');
+  const grid = renderSaleSlip(sampleSale, { ...nastySettings, receipt_template: 'grid', receipt_paper_width: '80mm' }).map((l) => l.text);
+  assert.ok(grid.some((l) => l.startsWith('QTY ITEM') && l.endsWith('AMOUNT')), 'grid header missing');
+  assert.ok(grid.some((l) => l.includes('iPhone 11 Screen OLED')), 'grid item rows missing');
+});
+
+serverTest('the paper preview renders the chosen template from the sample sale', async (baseUrl, db, auth) => {
+  const preview = async (body, headers = auth) => {
+    const res = await fetch(`${baseUrl}/api/receipt/preview`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, data: await res.json() };
+  };
+  // Manager-gated like the settings it mirrors.
+  const denied = await preview({ template: 'compact' }, { Authorization: auth.Authorization });
+  assert.equal(denied.status, 403);
+  const { status, data } = await preview({ template: 'compact', item_rows: 'auto', paper_width: '58mm' });
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(data.lines) && data.lines.length > 10);
+  assert.ok(data.lines.every((l) => l.text.length <= 32), 'a preview line exceeds the roll');
+  const text = data.lines.map((l) => l.text).join('\n');
+  assert.ok(text.includes('OFFICIAL RECEIPT'));
+  assert.ok(!text.includes('Tel/GCash:'), 'compact preview kept the tel line');
+  assert.ok(text.includes('iPhone 12 screen assembly'), 'the sample sale drives the preview');
+  const boxed = await preview({ template: 'boxed', item_rows: 'two_line', paper_width: '80mm' });
+  assert.ok(boxed.data.lines.some((l) => l.text.startsWith('| TOTAL DUE')), 'boxed total missing from preview');
 });

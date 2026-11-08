@@ -1,6 +1,6 @@
 import { S } from './state.js';
-import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, debouncedViewLoad, initConfirmModal, initInputModal, initLiveClock, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
-import { applyRoleVisibility, checkLicenseStatus, clearQrImage, disconnectCloud, dismissLicenseOverlay, doLogout, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, closePinModal, renderStaffPanel, requireManagerPin, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal } from './auth.js';
+import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, debouncedViewLoad, initConfirmModal, initInputModal, initLiveClock, openModal, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
+import { applyRoleVisibility, checkLicenseStatus, clearQrImage, disconnectCloud, dismissLicenseOverlay, doLogout, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal } from './auth.js';
 import { autoPrintEnabled, calculateChange, calculateCreditBalance, clearDeviceSelection, setPosBrandFilter, clearRepairOrder, completeSale, copyRepairRef, customerComboboxInit, editCartQtyPrompt, fillExactAmount, focusImeiForScan, loadCustomerSuggestions, loadPosCatalog, newRepairRef, onCustomerNameInput, onDeviceSelected, onPartSearchKeydown, onRepairIntakeInput, printClaimStub, quickAddPart, refreshDraftChip, removeCartItem, renderCartSummary, resetPosFilters, resetRepairCounter, restoreCartRecovery, saveRepairDraft, setPartCategory, setInStockOnly, setPaymentMethod, setPriceTier, toggleRepairNote, renderPartsTable, initScanListeners, resumeRepairDraft } from './views/pos.js';
 import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
 import { editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, dismissUpdateBanner, openUpdateModal } from './views/backoffice.js';
@@ -348,6 +348,11 @@ const ACTIONS = {
   'shift-open': () => openShiftPrompt(),
   'shift-close': () => closeShiftPrompt(),
   'reprint-last': () => reprintLastReceipt(), // rail shortcut: no walk to Sales history
+  'open-feedback': () => openFeedbackDialog(),
+  'feedback-email': () => feedbackSend(FEEDBACK_URLS.email),
+  'feedback-gmail': () => feedbackSend(FEEDBACK_URLS.gmail),
+  'feedback-yahoo': () => feedbackSend(FEEDBACK_URLS.yahoo),
+  'feedback-copy': () => feedbackCopy(),
 };
 
 document.addEventListener('click', e => {
@@ -357,9 +362,88 @@ document.addEventListener('click', e => {
   if (fn) fn(el);
 });
 
+// -------------------------------------------------------------
+// REPORT A PROBLEM / REQUEST A FEATURE
+// -------------------------------------------------------------
+// No backend: the report is a pre-filled email the shop sends from its own
+// account. Four doors out of the dialog because a browser cannot detect
+// whether this PC has a mail handler: the mail app, Gmail, Yahoo, clipboard.
+const FEEDBACK_EMAIL = 'bfffpt@gmail.com';
+let feedbackKind = 'problem';
+
+async function feedbackContextLines() {
+  try {
+    const res = await fetch('/api/license/status');
+    const d = await res.json();
+    const license = d.activated
+      ? `License: activated (${d.plan_type || 'plan'})${d.expires_at ? `, valid until ${d.expires_at}` : ''}`
+      : d.trial_active ? `License: trial, ${d.trial_days_left} day(s) left` : 'License: not activated';
+    return `App version: ${d.version || 'unknown'}\nMachine ID: ${d.machine_id || 'unknown'}\n${license}`;
+  } catch (_) {
+    return 'App version: unknown\nMachine ID: unknown (server not reached)';
+  }
+}
+
+async function buildFeedbackReport() {
+  const textEl = document.getElementById('feedback-text');
+  const errEl = document.getElementById('feedback-error');
+  const text = textEl?.value.trim() || '';
+  if (!text) {
+    if (errEl) { errEl.textContent = 'Type a few words first, so the report can be answered.'; errEl.classList.remove('hidden'); }
+    textEl?.focus();
+    return null;
+  }
+  errEl?.classList.add('hidden');
+  const kindWord = feedbackKind === 'feature' ? 'Feature request' : 'Problem report';
+  const subject = `${kindWord} - TechParts POS`;
+  const body = `${text}\n\n---- attached automatically ----\n${await feedbackContextLines()}`;
+  return { subject, body };
+}
+
+async function openFeedbackDialog() {
+  const textEl = document.getElementById('feedback-text');
+  const errEl = document.getElementById('feedback-error');
+  if (textEl) textEl.value = '';
+  errEl?.classList.add('hidden');
+  openModal('modal-feedback');
+  setTimeout(() => textEl?.focus(), 100);
+}
+
+async function feedbackSend(handler) {
+  const report = await buildFeedbackReport();
+  if (report) handler(report);
+}
+
+const FEEDBACK_URLS = {
+  email: ({ subject, body }) => {
+    window.location.href = `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  },
+  gmail: ({ subject, body }) => window.open(
+    `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(FEEDBACK_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+    '_blank', 'noopener'),
+  yahoo: ({ subject, body }) => window.open(
+    `https://compose.mail.yahoo.com/?to=${encodeURIComponent(FEEDBACK_EMAIL)}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+    '_blank', 'noopener'),
+};
+
+async function feedbackCopy() {
+  const report = await buildFeedbackReport();
+  if (!report) return;
+  try {
+    await navigator.clipboard.writeText(`To: ${FEEDBACK_EMAIL}\nSubject: ${report.subject}\n\n${report.body}`);
+    showToast('Report copied. Paste it into any email or message.', 'success');
+  } catch (_) {
+    showToast('Could not reach the clipboard on this browser.', 'error');
+  }
+}
+
 // Inputs/forms whose inline handlers were removed get wired here instead.
 function initFormWiring() {
   const on = (id, ev, fn) => document.getElementById(id)?.addEventListener(ev, fn);
+  document.querySelectorAll('#modal-feedback [data-feedback-kind]').forEach(btn => btn.addEventListener('click', () => {
+    feedbackKind = btn.dataset.feedbackKind;
+    document.querySelectorAll('#modal-feedback [data-feedback-kind]').forEach(b => b.classList.toggle('is-active', b === btn));
+  }));
   on('global-search', 'input', e => routeGlobalSearch(e.target.value));
   on('login-gate-pin', 'keydown', e => { if (e.key === 'Enter') submitLoginPin(); });
   on('login-gate-name-input', 'keydown', e => { if (e.key === 'Enter') submitLoginPin(); });
@@ -390,6 +474,10 @@ function initFormWiring() {
   on('sales-search', 'input', searchSales);
   on('sales-payment-filter', 'change', loadSalesHistory);
   on('settle-method', 'change', toggleSettleRefInput);
+  // Settings > Printing: the paper preview re-renders as the choice moves.
+  on('settings-template', 'change', loadReceiptPreview);
+  on('settings-item-rows', 'change', loadReceiptPreview);
+  on('settings-paper-width', 'change', loadReceiptPreview);
 
   on('form-add-part', 'submit', submitAddPart);
   on('form-edit-part', 'submit', submitEditPart);
@@ -440,6 +528,13 @@ function initFormWiring() {
 // INITIALIZATION
 // -------------------------------------------------------------
 S.sessionToken = sessionStorage.getItem('pos_session') || null;
+// Restore the elevation token saved by setElevation so a manager session
+// revived after F5 stays unlocked (expired entries are dropped, not reused).
+try {
+  const savedElevation = JSON.parse(sessionStorage.getItem('pos_elevation') || 'null');
+  if (savedElevation?.t && Number(savedElevation.e) > Date.now()) setElevation(savedElevation.t, Number(savedElevation.e));
+  else sessionStorage.removeItem('pos_elevation');
+} catch (_) { try { sessionStorage.removeItem('pos_elevation'); } catch (_) {} }
 S.currentTheme = localStorage.getItem('techparts_theme') || 'dark';
 S.repairRefCode = newRepairRef();
 // Appearance (accent/scale/density) applies before first paint too.
