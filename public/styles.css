@@ -912,12 +912,27 @@ button:disabled {
 }
 
 .audit-line__time {
-  flex: 0 0 62px;
+  flex: 0 0 78px;
   padding-top: 2px;
   font-family: var(--font-numeric);
   font-size: 0.71875rem;
   color: var(--txt-3);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Who column: the actor is the thing you scan for, so it sits at its own
+   fixed position at readable weight instead of hiding in the faint meta. */
+.audit-line__actor {
+  flex: 0 0 104px;
+  min-width: 0;
+  padding-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78125rem;
+  font-weight: 570;
+  color: var(--txt-2);
 }
 
 .audit-line__body {
@@ -926,7 +941,7 @@ button:disabled {
 }
 
 .audit-line__sentence {
-  font-size: 0.78125rem;
+  font-size: 0.8125rem;
   color: var(--txt);
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -935,10 +950,53 @@ button:disabled {
 .audit-line__sentence--neg { color: var(--danger); }
 .audit-line__sentence--pos { color: var(--pos); }
 
+/* Bold identifiers (sale codes, part names, customers) inside the sentence. */
+.audit-line__ref {
+  font-weight: 650;
+}
+
 .audit-line__meta {
-  font-size: 0.65625rem;
-  color: var(--txt-4);
+  font-size: 0.6875rem;
+  color: var(--txt-3);
   margin-top: 1px;
+}
+
+/* Category dot: identifies the category, never the outcome (that stays in the
+   sentence color). Small and matte so a calm feed stays calm. */
+.audit-cat-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--txt-3);
+}
+
+.audit-cat-dot--danger { background: var(--danger); }
+.audit-cat-dot--pos    { background: var(--pos); }
+.audit-cat-dot--info   { background: var(--info); }
+.audit-cat-dot--warn   { background: var(--warn); }
+
+/* Manager-override status: the one badge worth a highlight. */
+.audit-elev-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 0.625rem;
+  font-weight: 640;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--warn);
+  background: color-mix(in oklab, var(--warn) 14%, transparent);
+}
+
+@media (max-width: 480px) {
+  .audit-line__actor { flex-basis: 84px; }
+}
+
+.audit-line:hover {
+  background: var(--surface-2);
 }
 
 /* Repeated detail-less events collapse into one expandable row; every entry
@@ -984,7 +1042,8 @@ button:disabled {
   color: #17181a;
 }
 
-.receipt-preview .rp-c { display: block; text-align: center; }
+.receipt-preview .rp-l { display: block; }
+.receipt-preview .rp-c { text-align: center; }
 .receipt-preview .rp-w { font-size: 0.9375rem; font-weight: 700; }
 
 /* Discreet raw payload inspect toggle */
@@ -2134,6 +2193,13 @@ html.light .modal-backdrop {
   vertical-align: middle;
 }
 
+/* Footer cells (reorder subtotal): the UA's ~1px td padding let the total
+   overhang past the money column edge. Mirror the body-cell box. */
+.ptable tfoot td {
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+}
+
 .ptable tbody tr {
   transition: background-color 0.12s var(--ease-out);
 }
@@ -2160,6 +2226,50 @@ html.light .modal-backdrop {
    ragged rows on ~1366px laptops once the rail collapses. */
 .tab-view:not(#view-pos) .ptable {
   min-width: 820px;
+}
+
+/* ---- reorder list: editable order quantities ---- */
+/* 44px tall per the touch-target floor: cashiers poke these on the counter
+   screen all day. Spinners are gone because nobody steppers a reorder qty. */
+.reorder-qty {
+  width: 72px;
+  height: 44px;
+  padding: 0 8px;
+  text-align: right;
+  font-family: var(--font-numeric);
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--txt);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.reorder-qty::-webkit-inner-spin-button,
+.reorder-qty::-webkit-outer-spin-button {
+  display: none;
+}
+
+.reorder-qty:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Group headings sit outside the table; without the cells' 10px side padding
+   "No supplier" hangs left of the ITEM column it names. */
+[data-reorder-group] > h3 {
+  padding-inline: 10px;
+}
+
+.reorder-unit {
+  /* Block: the ea anchor drops under the total instead of pushing it left of
+     the subtotal edge the tfoot row aligns to. */
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--txt-3);
 }
 
 .tab-view {
@@ -3760,6 +3870,10 @@ a.btn-mini {
     padding: 5px 8px !important;
     font-size: 0.875rem !important;
     line-height: 1.35 !important;
+  }
+
+  .ptable tfoot td {
+    padding: 5px 8px !important;
   }
 
   .pname__t {

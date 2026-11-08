@@ -296,6 +296,13 @@ test('updater: the apply helper is cmd builtins only, so it can never open a win
   assert.ok(restore.includes('ren "C:\\app\\TechPartsPOS.exe.old" "TechPartsPOS.exe"'), 'the old build is put back');
   assert.ok(!restore.includes('del "C:\\stage\\TechPartsPOS_update.exe"'), 'restore deleted the staged exe it was kept for');
   assert.ok(!restore.includes('del "C:\\stage\\TechPartsPOS_update.resume"'), 'restore deleted the resume marker');
+  // A failed del or ren used to proceed silently while the handoff log already
+  // claimed "previous exe restored": the 2026-11-09 audit requires both steps
+  // to log their own failure so the next boot prints the truth.
+  assert.ok(restore.includes('if exist "C:\\app\\TechPartsPOS.exe"'), 'a blocked clear is detected, not assumed');
+  assert.ok(restore.includes('restore blocked'), 'the handoff log names a blocked restore');
+  assert.ok(restore.includes('if errorlevel 1'), 'a failed rename-back is detected');
+  assert.ok(restore.includes('restore FAILED'), 'the handoff log can say the restore failed');
   assert.ok(script.includes('del "%~f0"'), 'the script deletes itself');
   assert.ok(script.endsWith('\r\n'), 'batch files need CRLF');
 });
@@ -446,6 +453,30 @@ test('updater: a blocked swap resumes from the staged exe without re-downloading
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// The 2026-11-09 audit: a checksum FETCH outage must not delete the very
+// material the staged-reuse branch exists to reuse. Fail closed (nothing
+// installs), keep both files, and let the next Update Now re-verify.
+test('updater: a digest-fetch outage keeps the staged retry material', async () => {
+  const dir = tempStagingDir();
+  try {
+    const bytes = Buffer.alloc(1024 * 1024 + 3, 9);
+    fs.writeFileSync(path.join(dir, 'TechPartsPOS_update.exe'), bytes);
+    fs.writeFileSync(path.join(dir, 'TechPartsPOS_update.resume'),
+      JSON.stringify({ url: assetUrl(), version: NEWER_TAG, bytes: bytes.length }));
+    await withUpdateHooks(async (url) => {
+      if (String(url).endsWith('.sha256')) throw new Error('connection reset');
+      throw new Error('no feed in this test');
+    }, dir, async () => {
+      await assert.rejects(
+        () => applyUpdate({ downloadUrl: assetUrl(), expectedBytes: bytes.length }),
+        /SHA-256/
+      );
+      assert.ok(fs.existsSync(path.join(dir, 'TechPartsPOS_update.exe')), 'the staged exe must survive a checksum-fetch outage');
+      assert.ok(fs.existsSync(path.join(dir, 'TechPartsPOS_update.resume')), 'the resume marker must survive a checksum-fetch outage');
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('updater: a staged exe from an older release is discarded, not misapplied', async () => {

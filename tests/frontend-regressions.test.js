@@ -257,6 +257,7 @@ test('remediation batch: idempotency keys wired, dead dispatcher entries gone, l
 
 test('audit feed: sentence-first, outcome-only color, repeat collapse', () => {
   const auth = source('public/js/auth.js');
+  const html = source('public/index.html');
   assert.match(auth, /function auditSentence\(r, d\)/);
   assert.match(auth, /audit-line__sentence--neg/);
   assert.match(auth, /audit-line__sentence--pos/);
@@ -267,9 +268,34 @@ test('audit feed: sentence-first, outcome-only color, repeat collapse', () => {
   assert.doesNotMatch(auth, /audit-narrative/);
   // The raw payload stays reachable one Details click away.
   assert.match(auth, /Inspect payload|>Details</);
-  const html = source('public/index.html');
+  // Who sits in its own scannable column, not the faint meta line; identifiers
+  // are bolded refs; sentence is HTML built with ref()/txt() escaping at the
+  // source (renderer no longer re-escapes it).
+  assert.match(auth, /audit-line__actor/);
+  assert.match(auth, /audit-line__ref/);
+  assert.match(auth, /sentence\.html/);
+  assert.doesNotMatch(auth, /escHtml\(sentence\.text\)/, 'escaping moved into the sentence builders');
+  // The five numeric-only payload interpolations are escaped like everything
+  // else: if a future server change logs a string into one of these keys, it
+  // must not reach innerHTML raw (2026-11-09 audit).
+  assert.match(auth, /txt\(d\.items\)/);
+  assert.match(auth, /stock \$\{txt\(d\.stock\)\}/);
+  assert.match(auth, /txt\(d\.created \|\| 0\)/);
+  assert.match(auth, /txt\(d\.count \|\| 0\)/);
+  assert.match(auth, /txt\(d\.backfill_rows\)/);
+  // Highlights: category dot + elevated badge in the meta, single-occurrence
+  // groups render plain (no "1 times" expander).
+  assert.match(auth, /audit-cat-dot/);
+  assert.match(auth, /audit-elev-badge/);
+  assert.doesNotMatch(auth, /1 times/, 'single occurrences render plain, counts pluralize');
   assert.match(html, /<ol id="audit-tbody" class="audit-feed"/);
   assert.doesNotMatch(html, /audit-table/);
+  const styles = source('public/styles.css');
+  assert.match(styles, /\.audit-line__actor\s*\{/);
+  assert.match(styles, /\.audit-line__ref\s*\{/);
+  assert.match(styles, /\.audit-cat-dot\s*\{/);
+  assert.match(styles, /\.audit-elev-badge\s*\{/);
+  assert.match(styles, /\.audit-line__time\s*\{[^}]*white-space:\s*nowrap/, 'timestamps never wrap to two lines');
 });
 
 test('receipt templates ship with a paper preview wired to the print builder', () => {
@@ -288,6 +314,15 @@ test('receipt templates ship with a paper preview wired to the print builder', (
   for (const id of ['settings-template', 'settings-item-rows', 'settings-receipt-preview']) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
+  // The preview renders one block per line with no '\n' joins: a display:block
+  // span already breaks the line, so joining with a newline showed blank lines
+  // between centered/wide rows that the roll never prints.
+  const styles = source('public/styles.css');
+  assert.match(auth, /const cls = `rp-l\$\{l\.centered \? ' rp-c' : ''\}\$\{l\.wide \? ' rp-w' : ''\}`;/);
+  assert.match(auth, /escHtml\(l\.text\) \|\| '\\u00a0'/, 'empty lines keep their height');
+  assert.doesNotMatch(auth, /join\('\\n'\)/);
+  assert.match(styles, /\.receipt-preview \.rp-l \{ display: block; \}/);
+  assert.match(styles, /\.receipt-preview \.rp-c \{ text-align: center; \}/);
 });
 
 test('feedback dialog composes a pre-filled report with no backend', () => {

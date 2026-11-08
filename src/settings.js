@@ -16,6 +16,10 @@ function getShopSettings(db) {
 
 const EDITABLE_SETTINGS = new Set([
   'gcash_name', 'gcash_number', 'gcash_qr_url', 'receipt_paper_width', 'printer_name',
+  // Template + item rows are validated by the route (server.js) before this
+  // whitelist runs; missing them made updateShopSettings throw on every save
+  // the Printing pane sent, so no choice (and nothing else in the form) stuck.
+  'receipt_template', 'receipt_item_rows',
   'warranty_days', 'warranty_policy_text', 'shop_footer_note',
   'owner_name', 'shop_address', 'settle_elevation_threshold', 'shift_variance_threshold',
   'default_retail_markup_pct', 'default_wholesale_markup_pct'

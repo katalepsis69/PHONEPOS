@@ -53,6 +53,29 @@ When modifying or adding UI in `public/`:
 
 ---
 
+## 🔁 Standing Quality Passes
+
+All quality passes are invoked through the **techparts-pass** dispatcher skill (`.agents/skills/techparts-pass/SKILL.md`); each pass is governed by its prompt file in `docs/` and is never run from memory.
+
+Order for a landed batch: **feature batch → audit → remediation → refactoring → cleaning → test hardening**.
+
+- Audit always first; it STOPS at its report. Nothing is fixed until specific numbered findings are approved.
+- Remediation fixes only approved findings, one at a time, gates after each; it is the only pass allowed to change behavior.
+- Cleaning and refactoring may swap; each waits for approval of its proposal list before touching anything.
+- Test hardening adds tests only; source stays read-only in that pass.
+- Each pass runs its own baseline ritual (gates measured and recorded) before its first change.
+
+| Pass | Prompt file |
+|---|---|
+| Audit | `docs/code-audit-prompt.md` |
+| Remediation | `docs/remediation-prompt.md` |
+| Refactoring | `docs/refactoring-prompt.md` |
+| Cleaning | `docs/code-cleaning-prompt.md` |
+| Test hardening | `docs/test-hardening-prompt.md` |
+| Feature batch | `docs/feature-batch-prompt.md` |
+
+---
+
 ## 🔒 Non-Negotiable Core Invariants
 
 1. **Zero Runtime Dependencies:**

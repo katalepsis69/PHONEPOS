@@ -154,6 +154,15 @@ export function setupInventoryEnhancements() {
       if (btn) copyReorderList(btn.dataset.reorderCopy);
     });
   }
+
+  // Edited order quantities re-price their row and group live.
+  const reorderContent = document.getElementById('inv-reorder-content');
+  if (reorderContent && !reorderContent.dataset.qtyBound) {
+    reorderContent.dataset.qtyBound = '1';
+    reorderContent.addEventListener('input', e => {
+      if (e.target.matches('input[data-qty-id]')) updateReorderMoney(e.target);
+    });
+  }
 }
 
 export async function loadInventoryTable() {
@@ -261,31 +270,77 @@ function reorderGroups(report) {
 
 const reorderItemName = r => `${r.brand} ${r.model_name} - ${r.part_type}`;
 
+const round2 = v => Math.round((Number(v) || 0) * 100) / 100;
+
+// The edited order quantity lives in the DOM input — single source of truth,
+// no edit-state to keep in sync. Falls back to the server suggestion.
+function domQty(id, fallback) {
+  const input = document.querySelector(`input[data-qty-id="${id}"]`);
+  if (!input) return fallback;
+  return Math.max(0, Math.floor(Number(input.value) || 0));
+}
+
+// One cell renderer for the est-cost column, used at render time and on live
+// edits, so the two can never drift. The "ea" suffix is the unit-cost anchor:
+// it shows what the total is based on so the manager can trim the order.
+const estCellHtml = (r, qty) => {
+  if (r.cost_price == null) return '—';
+  const unit = ` <span class="reorder-unit">${fmtMoney(round2(r.cost_price))} ea</span>`;
+  return `${fmtMoney(round2(qty * r.cost_price))}${unit}`;
+};
+
+// Keep the money honest while the cashier edits quantities: recompute the row's
+// est cost and its group subtotal from the same inputs the copy button reads.
+function updateReorderMoney(inputEl) {
+  if (!reorderReport) return;
+  const row = reorderReport.rows.find(r => r.id === Number(inputEl.dataset.qtyId));
+  if (!row || row.cost_price == null) return;
+  const qty = Math.max(0, Math.floor(Number(inputEl.value) || 0));
+  const estCell = document.querySelector(`[data-est-id="${row.id}"]`);
+  if (estCell) estCell.innerHTML = estCellHtml(row, qty);
+  const group = inputEl.closest('[data-reorder-group]');
+  if (!group) return;
+  let sum = 0;
+  for (const r of reorderReport.rows) {
+    if ((r.supplier || '').trim() !== group.dataset.reorderGroup || r.cost_price == null) continue;
+    sum += domQty(r.id, r.suggested_qty) * r.cost_price;
+  }
+  const sub = group.querySelector('[data-reorder-subtotal]');
+  if (sub) sub.textContent = fmtMoney(round2(sum));
+}
+
 // Plain-text order sheet to paste into a supplier chat (Messenger/Viber).
-// supplier === '*' copies every group; only actionable lines (Order > 0) travel.
-function buildReorderText(supplier) {
-  const groups = reorderGroups(reorderReport)
-    .filter(g => supplier === '*' || g.supplier === supplier);
+// Quantities come from the editable inputs; only actionable lines (qty > 0) travel.
+function buildReorderText() {
+  const groups = reorderGroups(reorderReport);
   return groups.map(g => {
     const lines = [
       `ORDER - ${g.supplier || t('inv.reorder_no_supplier', 'No supplier')} - ${new Date().toLocaleDateString('en-CA')}`,
-      ...g.rows.filter(r => r.suggested_qty > 0)
-        .map(r => `${r.suggested_qty}x ${reorderItemName(r)}${r.sku_barcode ? ` (${r.sku_barcode})` : ''}`)
+      ...g.rows
+        .map(r => ({ r, qty: domQty(r.id, r.suggested_qty) }))
+        .filter(x => x.qty > 0)
+        .map(x => `${x.qty}x ${reorderItemName(x.r)}${x.r.sku_barcode ? ` (${x.r.sku_barcode})` : ''}`)
     ];
     if (g.rows.some(r => r.est_cost != null)) {
-      lines.push(`Est. cost: ${fmtMoney(g.rows.reduce((s, r) => s + (r.est_cost || 0), 0))}`);
+      const sum = g.rows.reduce((s, r) => (r.cost_price != null ? s + domQty(r.id, r.suggested_qty) * r.cost_price : s), 0);
+      lines.push(`Est. cost: ${fmtMoney(round2(sum))}`);
     }
     return lines.join('\n');
   }).join('\n\n');
 }
 
-async function copyReorderList(supplier) {
+async function copyReorderList() {
   if (!reorderReport || !(reorderReport.rows || []).length) {
     showToast(t('inv.reorder_empty', 'No parts sold in this window.'), 'info');
     return;
   }
+  const hasAny = reorderGroups(reorderReport).some(g => g.rows.some(r => domQty(r.id, r.suggested_qty) > 0));
+  if (!hasAny) {
+    showToast(t('inv.reorder_empty', 'No parts sold in this window.'), 'info');
+    return;
+  }
   try {
-    await navigator.clipboard.writeText(buildReorderText(supplier));
+    await navigator.clipboard.writeText(buildReorderText());
     showToast(t('inv.reorder_copied', 'Order list copied - paste it to your supplier'), 'success');
   } catch {
     showToast('Could not copy - check that the page is focused and try again', 'error');
@@ -304,16 +359,9 @@ function renderReorderPanel(report) {
   // Staff sessions get est_cost nulled server-side; hide the whole money column
   // instead of showing dashes that say nothing to a cashier.
   const showCost = (report.rows || []).some(r => r.est_cost != null);
-  content.innerHTML = groups.map(g => {
-    const subtotal = g.rows.reduce((s, r) => s + (r.est_cost || 0), 0);
-    return `
-    <div class="mb-3">
-      <div class="flex items-center justify-between gap-2 py-1">
-        <h3 class="font-bold text-sm">${escHtml(g.supplier || t('inv.reorder_no_supplier', 'No supplier'))}</h3>
-        <button type="button" class="btn-mini" data-reorder-copy="${escHtml(g.supplier)}">
-          <i class="ph ph-clipboard-text w-3.5 h-3.5"></i> <span>${escHtml(t('inv.reorder_copy', 'Copy order'))}</span>
-        </button>
-      </div>
+  content.innerHTML = groups.map(g => `
+    <div class="mb-3" data-reorder-group="${escHtml(g.supplier)}">
+      <h3 class="font-bold text-sm py-1">${escHtml(g.supplier || t('inv.reorder_no_supplier', 'No supplier'))}</h3>
       <table class="ptable">
         <thead><tr>
           <th data-i18n="inv.reorder_col_item">${t('inv.reorder_col_item', 'Item')}</th>
@@ -330,18 +378,20 @@ function renderReorderPanel(report) {
             <td class="is-mid font-mono text-xs">${escHtml(r.sku_barcode || '')}</td>
             <td class="is-num font-mono tabular-nums">${r.qty_sold}</td>
             <td class="is-num font-mono tabular-nums">${r.stock_quantity}</td>
-            <td class="is-num font-mono tabular-nums font-bold">${r.suggested_qty}</td>
-            ${showCost ? `<td class="is-num font-mono tabular-nums">${r.est_cost != null ? fmtMoney(r.est_cost) : '—'}</td>` : ''}
+            <td class="is-num">
+              <input type="number" inputmode="numeric" min="0" step="1" value="${r.suggested_qty}" data-qty-id="${r.id}"
+                class="reorder-qty"
+                aria-label="${escHtml(t('inv.reorder_col_order', 'Order quantity'))} - ${escHtml(reorderItemName(r))}">
+            </td>
+            ${showCost ? `<td class="is-num font-mono tabular-nums" data-est-id="${r.id}">${estCellHtml(r, r.suggested_qty)}</td>` : ''}
           </tr>`).join('')}
         </tbody>
         ${showCost ? `<tfoot><tr>
-            <td colspan="4" class="text-right font-bold">${escHtml(t('inv.reorder_group_total', 'Est. cost'))}</td>
-            <td></td>
-            <td class="is-num font-mono tabular-nums font-bold">${fmtMoney(subtotal)}</td>
+            <td colspan="5" class="text-right font-bold">${escHtml(t('inv.reorder_group_total', 'Est. cost'))}</td>
+            <td class="is-num font-mono tabular-nums font-bold" data-reorder-subtotal>${fmtMoney(round2(g.rows.reduce((s, r) => s + (r.est_cost || 0), 0)))}</td>
           </tr></tfoot>` : ''}
       </table>
-    </div>`;
-  }).join('');
+    </div>`).join('');
 }
 
 export function renderPartTypeOptions() {

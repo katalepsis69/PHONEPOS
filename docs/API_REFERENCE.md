@@ -2,6 +2,8 @@
 
 This document defines the complete HTTP REST API interface exposed by [`src/server.js`](file:///c:/Users/sloth/Downloads/phone-repair-pos/src/server.js).
 
+> Completeness disclaimer: this reference covers the main commerce, auth, settings and system routes by intent, but it is not an exhaustive enumeration of every literal path and dynamic matcher in `src/server.js` (for example the update-check/progress routes and parameterized staff, sale and inventory sub-paths). When in doubt, the router in `src/server.js` is the source of truth.
+
 ---
 
 ## 1. Overview & Conventions

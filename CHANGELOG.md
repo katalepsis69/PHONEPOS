@@ -4,12 +4,19 @@ All notable changes to TechParts POS and Phone Repair Management System are docu
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v2.7] - 2026-11-08
+
+### Highlights & Changes
+- Verified: Reorder UI: single copy button, editable quantities, i18n keys consistent
+- Verified: Reorder footer: subtotal cells align with the column edges above
+- Verified: sale retries retain one operation id and validate credit downpayments
+
 ## [v2.6] - 2026-11-08
 
 ### Highlights & Changes
-- Verified: server survives a held preferred port (EACCES) by drifting to the next port
-- Verified: system-wide ergonomics: visual comfort tokens, panel & stat elevation
-- Verified: repair counter: tactile in-stock filter pill and stock badges
+- Verified: Reorder UI: single copy button, editable quantities, i18n keys consistent
+- Verified: Reorder footer: subtotal cells align with the column edges above
+- Verified: sale retries retain one operation id and validate credit downpayments
 
 
 ## [v2.5] - 2026-11-08

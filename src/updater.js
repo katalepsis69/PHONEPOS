@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 const REPO = 'katalepsis69/PHONEPOS';
-const CURRENT_VERSION = '2.6';
+const CURRENT_VERSION = '2.7';
 
 /**
  * Parses a version string into an array of integers.
@@ -445,7 +445,12 @@ function buildApplyScript({ stagingExe, targetExe, resumeMarker, handoffLog, old
     `if not "%RESTORE_ACTUAL%"=="%RESTORE_EXPECTED%" >> "${winHandoff}" echo restore size mismatch: .old is %%RESTORE_ACTUAL%% bytes, expected %%RESTORE_EXPECTED%%`,
     `>> "${winHandoff}" echo copy FAILED; previous exe restored`,
     `del "${winExe}" >nul 2>&1`,
+    // A failed del leaves the partial target in the way, and a rename cannot
+    // land on a filled path: log it instead of reporting a restore that never
+    // happened.
+    `if exist "${winExe}" >> "${winHandoff}" echo restore blocked: the partial target could not be cleared`,
     `ren "${winOld}" "${exeName}"`,
+    `if errorlevel 1 (>> "${winHandoff}" echo restore FAILED: the previous exe could not be renamed back)`,
     'set NO_LAUNCH_BROWSER=1',
     `start "" "${winExe}"`,
     ':done',
@@ -579,18 +584,34 @@ async function applyUpdateInner({ downloadUrl, expectedBytes = 0, currentVer = C
   // instead of a full re-download; anything else is cleaned out.
   let buffer = null;
   if (fs.existsSync(stagingExe) && fs.existsSync(resumeMarker)) {
+    // A checksum FETCH failure is the network's fault, not the staged bytes':
+    // deleting the retry material over a transient outage would force a full
+    // re-download on the next attempt. A verified MISMATCH is the bytes'
+    // fault and cleans both files.
+    let digestFetchError = null;
     try {
       const marker = JSON.parse(fs.readFileSync(resumeMarker, 'utf8'));
       const staged = fs.readFileSync(stagingExe);
       const sameRelease = marker && marker.url === targetUrl;
       const sizeOk = !(targetBytes > 0) || staged.length === targetBytes;
-      if (sameRelease && staged.length >= 1024 * 1024 && sizeOk
-          && digestMatches(staged, await fetchPublishedDigest(targetUrl))) {
-        buffer = staged;
-        setProgress({ phase: 'verifying', downloadedBytes: buffer.length, totalBytes: buffer.length, percent: 100 });
-        updateLog(`apply: reusing the staged update from the blocked swap (${buffer.length} bytes)`);
+      if (sameRelease && staged.length >= 1024 * 1024 && sizeOk) {
+        let digestText;
+        try {
+          digestText = await fetchPublishedDigest(targetUrl);
+        } catch (err) {
+          digestFetchError = err;
+        }
+        if (!digestFetchError && digestMatches(staged, digestText)) {
+          buffer = staged;
+          setProgress({ phase: 'verifying', downloadedBytes: buffer.length, totalBytes: buffer.length, percent: 100 });
+          updateLog(`apply: reusing the staged update from the blocked swap (${buffer.length} bytes)`);
+        }
       }
     } catch (_) {}
+    if (digestFetchError) {
+      updateLog(`apply: could not fetch the published checksum to verify the staged update (${digestFetchError && digestFetchError.message ? digestFetchError.message : digestFetchError}); keeping the staged bytes for the next attempt`);
+      throw new Error('Could not verify the staged update against its published SHA-256. Nothing was installed. Try again once the connection is back.');
+    }
     if (!buffer) {
       try { fs.rmSync(stagingExe, { force: true }); } catch (_) {}
       try { fs.rmSync(resumeMarker, { force: true }); } catch (_) {}

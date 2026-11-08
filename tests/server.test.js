@@ -937,3 +937,17 @@ serverTest('a failed sync push is visible in /api/sync/status and the log', asyn
   const log = fs.readFileSync(logFilePath(), 'utf8');
   assert.match(log, /sync: push failed/, 'the failure streak lands in pos-server.log');
 });
+
+// The 2026-11-09 audit: the cloud spends the pairing code before it answers,
+// so a response lost to the pair route's 15 s abort can leave the shop paired
+// on the cloud with a token the register never received. A behavioral test
+// would need a >15 s hang, too slow for the suite: this pins the branch at
+// source instead, so the timeout failure keeps naming the stranded state.
+test('pair-cloud timeout names the stranded-pairing state, not a generic network error', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  const route = src.slice(src.indexOf("'/api/settings/pair-cloud'"), src.indexOf("'/api/settings/pair-cloud'") + 4200);
+  assert.match(route, /TimeoutError/, 'the abort signal rejection is detected by name');
+  assert.match(route, /504/, 'a lost pairing response answers 504, not 502');
+  assert.match(route, /pairing may have completed on the cloud side/, 'the error names the possibly-completed pairing');
+  assert.match(route, /rotate this shop's credential/, 'the error names the recovery path');
+});

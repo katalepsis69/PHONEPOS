@@ -1,11 +1,11 @@
-﻿# What is New in TechParts POS (v2.6)
+﻿# What is New in TechParts POS (v2.7)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- Verified: server survives a held preferred port (EACCES) by drifting to the next port
-- Verified: system-wide ergonomics: visual comfort tokens, panel & stat elevation
-- Verified: repair counter: tactile in-stock filter pill and stock badges
+- Verified: Reorder UI: single copy button, editable quantities, i18n keys consistent
+- Verified: Reorder footer: subtotal cells align with the column edges above
+- Verified: sale retries retain one operation id and validate credit downpayments
 
 ---
 
@@ -105,6 +105,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-v2.6.zip` below.
+  1. Download `TechPartsPOS-v2.7.zip` below.
   2. Extract the folder to your computer (e.g. `C:\TechPartsPOS`).
   3. Double-click `TechPartsPOS.exe` to start.

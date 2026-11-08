@@ -1,6 +1,9 @@
 // phone-repair-pos/tests/reorder.test.js
 // Auto reorder sheet: sold-in-window demand per part, grouped by supplier.
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test').test;
 const { dbTest, serverTest } = require('./helper');
 const {
   createInventoryItem,
@@ -112,4 +115,37 @@ serverTest('Reorder route: manager sees est costs, staff gets them stripped', as
   assert.strictEqual(staffReport.rows[0].suggested_qty, 4);
   assert.strictEqual(staffReport.rows[0].est_cost, null);
   assert.strictEqual(staffReport.rows[0].cost_price, null);
+});
+
+// UI contract: ONE copy button (toolbar), editable order quantities whose
+// inputs are what the copy text reads, and no orphaned i18n key left behind.
+test('Reorder UI: single copy button, editable quantities, i18n keys consistent', () => {
+  const root = path.join(__dirname, '..');
+  const index = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
+  assert.strictEqual((index.match(/data-reorder-copy/g) || []).length, 1, 'there must be exactly one copy button');
+  assert.match(index, /data-i18n="inv\.reorder_copy"/);
+
+  const view = fs.readFileSync(path.join(root, 'public', 'js', 'views', 'inventory.js'), 'utf8');
+  assert.match(view, /type="number"[^>]*data-qty-id/, 'order quantities must be editable inputs');
+  assert.match(view, /function updateReorderMoney/, 'edits must re-price rows and groups');
+  assert.match(view, /const estCellHtml/, 'est cost has one cell renderer for render and live edits');
+  assert.match(view, /reorder-unit/, 'row totals carry the unit-cost anchor');
+  assert.ok(!view.includes('data-reorder-copy="${escHtml(g.supplier)}"'), 'per-group copy buttons must stay removed');
+
+  const i18n = fs.readFileSync(path.join(root, 'public', 'js', 'i18n.js'), 'utf8');
+  assert.ok(!i18n.includes('inv.reorder_copy_all'), 'removed key must not linger in either dictionary');
+  assert.ok(i18n.includes("'inv.reorder_copy'"));
+
+  const styles = fs.readFileSync(path.join(root, 'public', 'styles.css'), 'utf8');
+  assert.match(styles, /\.reorder-qty\s*\{[^}]*height:\s*44px/, 'order qty input meets the 44px touch target');
+  assert.match(styles, /\[data-reorder-group\] > h3\s*\{[^}]*padding-inline:\s*10px/, 'group heading lines up with the item column');
+  assert.match(styles, /\.reorder-unit\s*\{[^}]*display:\s*block/, 'ea anchor drops under the total so money aligns with the subtotal');
+});
+
+// Alignment contract: footer subtotal cells must carry body-cell padding, or
+// the UA's ~1px td padding lets the total overhang past the money column edge.
+test('Reorder footer: subtotal cells align with the column edges above', () => {
+  const styles = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  assert.match(styles, /\.ptable tfoot td\s*\{[^}]*padding:\s*6px 10px/, 'footer cells mirror body-cell padding');
+  assert.match(styles, /\.ptable tfoot td\s*\{[^}]*padding:\s*5px 8px/, 'footer padding tracks the compact rows');
 });

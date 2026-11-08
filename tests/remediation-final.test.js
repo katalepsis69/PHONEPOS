@@ -9,7 +9,6 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { dbTest } = require('./helper');
 const { initDb } = require('../src/db');
@@ -159,16 +158,6 @@ const ROOT = path.join(__dirname, '..');
 const CLOUD_SERVER = path.join(ROOT, 'cloud', 'server.js');
 const TOKEN_A = 'a'.repeat(64);
 
-function reservePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      server.close(err => err ? reject(err) : resolve(port));
-    });
-  });
-}
 function waitForServer(child) {
   return new Promise((resolve, reject) => {
     let output = '';

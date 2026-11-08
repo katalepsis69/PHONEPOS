@@ -89,9 +89,11 @@ test('anti-slop copy hygiene (no em dashes in dashboard QA)', () => {
 test('audit log ergonomics: copy hygiene, hover isolation, and empty component', () => {
   const authJs = fs.readFileSync(path.join(ROOT, 'public/js/auth.js'), 'utf8');
 
-  // No em dashes in auditDayLabel or empty details
-  assert.doesNotMatch(authJs, /return `\${label} —/);
-  assert.match(authJs, /return `\${label} · \${d\.toLocaleDateString/);
+  // No em dashes in the day label; Today/Yesterday keep the date, weekday
+  // days say it once (no more "Thursday, Nov 5, 2026 · Nov 5, 2026")
+  assert.doesNotMatch(authJs, /return `\$\{label} —/);
+  assert.match(authJs, /return `Today · \$\{d\.toLocaleDateString/);
+  assert.match(authJs, /weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' \}\);/);
 
   // Initial audit counter placeholder in HTML has no em dash
   assert.doesNotMatch(indexHtml, /id="audit-count">—/);

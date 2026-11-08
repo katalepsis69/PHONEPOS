@@ -159,3 +159,16 @@ test('publish-release provides non-technical user release notes with zero em das
   assert.match(ps1, /Keyboard Shortcuts/i, 'publish-release.ps1 default notes must include shortcuts');
   assert.doesNotMatch(ps1, /—/, 'publish-release.ps1 must not contain em dashes');
 });
+
+test('cloud rotate-pin writes the new manager PIN only to its 0600 file, never stdout', () => {
+  // The PIN must not land in a systemd journal or tmux pane: the mint paths
+  // print the credential file's PATH only. Both copies of the cloud server
+  // (cloud/ is the deploy mirror of cloud-deploy/) must obey the same rule.
+  for (const rel of ['cloud-deploy/server.js', 'cloud/server.js']) {
+    const src = fs.readFileSync(path.join(ROOT_DIR, ...rel.split('/')), 'utf8');
+    const block = src.slice(src.indexOf("--rotate-pin'"));
+    assert.ok(block.length > 0 && block.length < src.length, `${rel} must contain the rotate-pin block`);
+    assert.doesNotMatch(block, /Manager PIN: \$\{pin\}/, `${rel} must not echo the rotated PIN to stdout`);
+    assert.match(block, /MANAGER_PIN_PATH/, `${rel} must name the file the PIN was saved to`);
+  }
+});

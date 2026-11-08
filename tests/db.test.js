@@ -2,6 +2,7 @@
 const assert = require('node:assert');
 const test = require('node:test');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { dbTest } = require('./helper');
@@ -190,4 +191,45 @@ test('a release folder is never chosen as the data home', () => {
   assert.equal(isReleaseShaped(path.join(__dirname, '..')), false, 'the dev tree stays a valid base');
   // getBaseDir consults it alongside the writability probe.
   assert.match(dbSource, /if \(isReleaseShaped\(base\) \|\| !isDirWritable\(base\)\)/);
+});
+
+// The 2026-11-09 audit: startup repair writes (SKU collision rename, opening
+// balance backfill) used to bypass the sync outbox, so on an already-paired
+// shop the renamed loser and a pre-pairing part's opening balance never
+// reached the cloud mirror. ensureSyncTables now runs before the repairs and
+// both write paths enqueue their rows.
+test('startup repairs enqueue their rows into the sync outbox', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 't_db_repair_'));
+  const dbPath = path.join(tmp, 'shop.db');
+  try {
+    // First open: schema only (fresh installs seed no parts).
+    const db1 = initDb(dbPath);
+    db1.close();
+    // Legacy shape: the migration's dupRows query folds UPPER(TRIM(sku)), so
+    // a trailing-space twin is the collision case it exists for (the column's
+    // own NOCASE UNIQUE rejects a pure case twin on the current schema).
+    const raw = new DatabaseSync(dbPath);
+    raw.prepare(`INSERT INTO inventory (brand, model_name, part_type, sku_barcode, stock_quantity) VALUES ('A', 'M1', 'LCD', 'abc123', 5)`).run();
+    raw.prepare(`INSERT INTO inventory (brand, model_name, part_type, sku_barcode, stock_quantity) VALUES ('B', 'M2', 'Battery', 'ABC123 ', 3)`).run();
+    raw.close();
+
+    const db2 = initDb(dbPath);
+    const renamed = db2.prepare("SELECT id, sku_barcode FROM inventory WHERE sku_barcode LIKE 'ABC123-%'").all();
+    assert.strictEqual(renamed.length, 1, 'exactly one colliding row is renamed with an id suffix');
+    const outboxInv = db2.prepare("SELECT COUNT(*) AS c FROM sync_outbox WHERE table_name = 'inventory' AND local_id = ?").get(renamed[0].id);
+    assert.strictEqual(outboxInv.c, 1, 'the renamed SKU must ride the outbox');
+
+    const mv = db2.prepare("SELECT id FROM stock_movements WHERE reason = 'opening_balance'").all();
+    assert.strictEqual(mv.length, 2, 'both parts got an opening balance');
+    const outboxMv = db2.prepare("SELECT COUNT(*) AS c FROM sync_outbox WHERE table_name = 'stock_movements'").get().c;
+    assert.strictEqual(outboxMv, mv.length, 'every backfilled opening balance must ride the outbox');
+    db2.close();
+  } finally {
+    // WAL mode leaves -shm/-wal siblings behind and Windows can hold them a
+    // beat after close(): best-effort per-file scrub, same as helper.js.
+    for (const f of [dbPath, `${dbPath}-shm`, `${dbPath}-wal`, `${dbPath}-journal`]) {
+      try { fs.rmSync(f, { force: true, maxRetries: 5, retryDelay: 25 }); } catch {}
+    }
+    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 }); } catch {}
+  }
 });

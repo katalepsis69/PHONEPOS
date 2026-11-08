@@ -1182,8 +1182,7 @@ const server = http.createServer(async (req, res) => {
 if (process.argv.includes('--rotate-pin')) {
   const pin = newManagerPin();
   fs.writeFileSync(MANAGER_PIN_PATH, pin, { encoding: 'utf8', mode: 0o600 });
-  console.log(`[setup] Manager PIN rotated and saved to ${MANAGER_PIN_PATH}`);
-  console.log(`[setup] Manager PIN: ${pin}`);
+  console.log(`[setup] Manager PIN rotated and saved to ${MANAGER_PIN_PATH} (read it from that file, not from a journal)`);
   console.log('[setup] Restart the cloud service now; the restart also signs out all manager sessions.');
   process.exit(0);
 }

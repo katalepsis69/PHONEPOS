@@ -972,6 +972,15 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
               signal: AbortSignal.timeout(15000),
             });
           } catch (err) {
+            if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+              // The cloud mints the shop, saves the credential and spends the
+              // code BEFORE it answers, so a response lost to this timeout can
+              // leave the shop paired on the cloud with a token this register
+              // never received. Name that state: retries with a new code will
+              // 409 (the shop id is already paired), and recovery is a vendor
+              // credential rotation.
+              return sendJson(res, 504, { error: `The cloud did not answer within 15 s. The pairing may have completed on the cloud side anyway; if pushes later fail with 401, generate a new code and ask the vendor to rotate this shop's credential (shop ${shopIdentity}).` });
+            }
             return sendJson(res, 502, { error: `Failed to reach cloud service at ${effectiveSyncUrl}: ${err.message}` });
           }
 

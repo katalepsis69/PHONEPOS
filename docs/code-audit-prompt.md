@@ -1,16 +1,25 @@
-# Code and System Audit Prompt (v7)
+# Code and System Audit Prompt (v8)
 
-[v7, 2026-11-05, supersedes v6 of 2026-11-02 (which superseded v5 of 2026-10-14 evening,
-which superseded v4 of that morning and v3 of 2026-10-02; a byte-identical copy of v3 sits
-at backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). Those trees are frozen
-snapshots, this file is the live brief. v6 measured 488 tests in 42 files on 2026-11-02
-against version 2.1, with a nondeterministic pass count. THIS EDITION IS MEASURED ON
-2026-11-05 against version 2.4: npm test reports 505 tests in 44 files, 505/505 on both a
-parallel and a sequential full run (one earlier parallel run hung past ten minutes and was
-killed without producing output; the rerun rule in GATES stands, and a hung run is a rerun,
-not a regression). Version is 2.4 in all three places that matter: package.json:3,
-CURRENT_VERSION (src/updater.js:10) and MyAppVersion (installer/TechPartsPOS.iss:19). Tags
-on the remote now include v2.2, v2.3 and v2.4. Six batches landed after v6 was written:
+[v8, 2026-11-09, supersedes v7 of 2026-11-05 (which superseded v6 of 2026-11-02, which
+superseded v5 of 2026-10-14 evening, which superseded v4 of that morning and v3 of
+2026-10-02; a byte-identical copy of v3 sits at
+backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). Those trees are frozen
+snapshots, this file is the live brief. v7 measured 505 tests in 44 files on 2026-11-05
+against version 2.4 (505/505 on a parallel and a sequential run that day; one earlier
+parallel run hung past ten minutes and was killed without output, and a hung run is a
+rerun, not a regression). THIS EDITION IS MEASURED ON 2026-11-09 against version 2.6:
+npm test reports 536 tests in 47 files, 536/536 green on a parallel run (about 22 s; the
+rerun rule in GATES stands). Version is 2.6 in all three places that matter:
+package.json:3, CURRENT_VERSION (src/updater.js:10) and MyAppVersion
+(installer/TechPartsPOS.iss:19). Tags on the remote now run through v2.6, and v2.6 was
+fully published with every release asset live.
+GIT IS THE HISTORY NOW: 6834474 (2026-11-07) brought the full source tree under version
+control, so the v7 claims that git ls-files held three paths and that src/, public/,
+tests/, scripts/, installer/, cloud/ and docs/ were untracked are OBSOLETE. git log, git
+diff and git blame are usable history; git status is the interference detector (hazard
+(f) below survives on that point); never git --amend because the release pipeline
+commits mid-session. backups/code-pre-* snapshots remain belt-and-braces, no longer the
+only undo path. Six batches landed after v6 was written:
 (a) the 2026-11-02 realtime alignment already covered by v6; (b) a small-monitor typography
 batch on 2026-11-03 (tests/small-monitor-counter-typography.test.js); (c) a PARALLEL WORKING
 SESSION active 2026-11-03 through 2026-11-05 whose landings the v6 brief never measured:
@@ -32,16 +41,12 @@ truncated on disk while another session was live (src/sync.js restored wholesale
 backdated mtime, a function cut to half its body, two test files rolled back). Any audit
 run in this tree must re-verify the on-disk state of every file it cites in the same
 command that tests it, and treat a stale mismatch as interference first, a code defect
-second. .git STILL IS NOT THE HISTORY: git ls-files returns exactly three paths (.gitignore,
-README.md, RELEASE_NOTES.md, CHANGELOG.md); src/, public/, tests/, scripts/, installer/, docs/, cloud/
-and cloud-deploy/ are all untracked. Never cite git log as evidence of a code change. The
-newest diff-able snapshot is backups/code-pre-cloudsync-fixes-2026-11-05/ (five files only:
-src/sync.js, src/server.js, public/js/main.js, tests/sync.test.js, tests/server.test.js as
-they stood before batch (d)); backups/code-pre-v6fixes-2026-10-15/ sits behind it and is
-the last FULL tree snapshot, so everything from the 10-31 batch onward is diff-able only
-against that. CLOUD TREE DUALITY: cloud/ and cloud-deploy/ both exist; as of 2026-11-05
-their server.js files are byte-identical at 1191 lines and cloud/ additionally holds data/
-(runtime state). DEPLOY DIRECTION, measured 2026-11-05 and contradicting the folder names:
+second. [2026-11-09: the ".git STILL IS NOT THE HISTORY" paragraph that followed here is
+OBSOLETE; the full tree is tracked since 6834474, git log and git diff are the primary
+change-evidence tools, and the code-pre-* snapshots are secondary.]
+CLOUD TREE DUALITY: cloud/ and cloud-deploy/ both exist; as of 2026-11-09
+their server.js files are byte-identical at 1244 lines and cloud/ additionally holds data/
+(runtime state); re-verify at audit time. DEPLOY DIRECTION, measured 2026-11-05 and contradicting the folder names:
 scripts/deploy-cloud.js copies cloud/ INTO cloud-deploy/ and uploads the cloud/ copies to
 POST /api/deploy, so cloud/ is the script's source of truth and cloud-deploy/ the mirror;
 deploy-cloud.bat's own prompt says the reverse. This direction conflict is itself a
@@ -49,12 +54,43 @@ finding (the audit confirmed it); until it is fixed, treat EITHER tree's server.
 the same code only because they were byte-identical at measurement time. Every citation
 below written as
 cloud/server.js means cloud-deploy/server.js today; re-resolve the symbol against
-cloud-deploy/ rather than trusting a coordinate. Read AGENTS.md / GEMINI.md / SKILL.md for
+cloud-deploy/ rather than trusting a coordinate.
+CHANGES SINCE v7 (2026-11-07 through 2026-11-08, all unaudited by v7, first-look here):
+(a) 6834474 brought the tree under git and was the v7 fix batch itself; (b) the manager
+elevation token now lives in sessionStorage so elevation survives F5 (15-minute TTL and
+server verification kept; public/js/auth.js:7-34, key pos_elevation); (c) port drift
+widened: the server retries on EACCES as well as EADDRINUSE (src/server.js:1951-1964)
+after a stale bun.exe held port 3000 and Windows reported it as EACCES; (d)
+scripts/publish-release.ps1 was rewritten to 575 lines (idempotent version derivation,
+whole-tree release commit, zero-mutation DryRun mode; GitHub /releases must be read
+through Get-GithubReleases because PowerShell 5.1 transposes that listing on this box);
+(e) the reorder list: an auto supplier reorder sheet with editable quantities and live
+re-price, 44px quantity inputs anchored to unit cost through a shared estCellHtml helper
+(public/js/views/inventory.js, tests/reorder.test.js); (f) receipt templates: five
+layouts (standard default, compact, boxed, airy, grid) plus an item-rows dropdown, sales
+only, validated into the settings whitelist (src/server.js:852-855), with a NEW POST
+/api/receipt/preview route (src/server.js:930) rendering a fixed sample sale (:65-68)
+through the same printer.js line layer the queue builder uses, so preview and paper
+cannot drift by construction - verify that claim, check the route's session and license
+posture, and note the printer tests pin two_line explicitly because Auto is the default;
+(g) the audit-log redesign: sentence-first feed, actor column, category dots, ELEVATED
+badge, day headers; auditSentence (public/js/auth.js:1657) emits html through ref()/txt()
+escaping - verify every interpolation inside those helpers, and note the v7 citations to
+public/js/auth.js (the v7 path public/js/views/auth.js no longer exists) are stale paths, that file no longer exists; (h) the feedback
+button: a rail dialog offering mailto, Gmail, Yahoo and copy-to-clipboard to the vendor
+address, auto-attaching version, machine id and license state fetched from
+/api/license/status; no backend, no provider.
+Read AGENTS.md / GEMINI.md / SKILL.md for
 tone, not as a spec of what the code does. LINE-NUMBER HONESTY: numbers below were
-measured against 2.4 on 2026-11-05 unless marked otherwise. Where the brief names a symbol
+measured against 2.4 on 2026-11-05 unless marked otherwise; the 2026-11-09 additions to
+this brief are measured against 2.6, and any coordinate that predates the 2026-11-07/08
+batches may have moved. Where the brief names a symbol
 and no number, that number was NOT re-measured, so resolve the symbol instead of trusting a
 coordinate. Spot-check the block matches, then move on; do not re-litigate it as findings.
-Companion: docs/refactoring-prompt.md governs zero-behavior-change refactoring passes.
+Companion: docs/refactoring-prompt.md (now v3) governs zero-behavior-change refactoring
+passes; docs/remediation-prompt.md, docs/code-cleaning-prompt.md,
+docs/test-hardening-prompt.md and docs/feature-batch-prompt.md complete the six-pass
+system dispatched by the techparts-pass skill (.agents/skills/techparts-pass/SKILL.md).
 WORKFLOW CHANGE SINCE v6: this prompt still reports before it fixes, but the operator has
 granted STANDING BLANKET APPROVAL for the run that follows the report: every finding in the
 report is fixed in the same run, one commit-style batch, each fix carrying a regression test
@@ -110,20 +146,22 @@ If a problem cannot manifest at this scale, it belongs in "Future Scale Notes", 
 in the findings. Do not manufacture performance problems where they cannot occur.
 
 WHAT TO AUDIT (and what to skip)
-Audit: src/ (server.js 1975, updater.js 644, printer.js 650, analytics.js 590,
-inventory.js 490, db.js 418, license.js 382, auth.js 326, credits.js 303, sales.js 285,
-sync.js 233, returns.js 227, settings.js 138, seed.js 128, reconcile.js 122,
-audit.js 112, shifts.js 86, names.js 43, money.js 35; 7187 lines total), public/ sources
-(js/ including views/ (backoffice.js 2162, pos.js 1532, inventory.js 1094), i18n.js 416
-lines, auth.js 1930, main.js 863, receipts.js 928, ui.js 539, report.js 326, importer.js
-154, theme.js 129, search.js 116, chart.js 84, index.html 2343, report.html 476,
-styles.css as the hand-written source, report-sw.js, the manifests; skip fonts/ and the
-generated tailwind.build.css), cloud-deploy/ (server.js 1191 and public/app.js 1084, the
-manager app), scripts/ (generate-license.js, set-pin.js, mirror-backups.js,
-build-artifacts.js, build-exe.js, build-common.js, build-license-exe.js,
-build-installer.js, verify-exe.js, release-customer.js, check-repair-ui.js, deploy-cloud.js,
-publish-release.ps1), installer/TechPartsPOS.iss, tests/ (44 *.test.js files plus
-helper.js), and the docs: README.md, RELEASE_NOTES.md, ARCHITECTURE.md,
+Audit: src/ (server.js 2098, printer.js 961, updater.js 698, analytics.js 593,
+inventory.js 531, db.js 425, license.js 420, auth.js 326, credits.js 303, sales.js 285,
+sync.js 249, returns.js 227, settings.js 138, seed.js 133, reconcile.js 123,
+audit.js 112, shifts.js 86, names.js 43, money.js 35; 7786 lines total), public/ sources
+(js/ including views/ (backoffice.js 2167, pos.js 1543, inventory.js 1315), auth.js 1961,
+receipts.js 1019, main.js 958, ui.js 539, i18n.js 472, report.js 326, importer.js 154,
+theme.js 129, search.js 116, chart.js 84, state.js 75, api.js 58, index.html 2416,
+report.html 476, styles.css as the hand-written source, report-sw.js, the manifests; skip
+fonts/ and the generated tailwind.build.css), cloud-deploy/ (server.js 1244 and
+public/app.js 1105, byte-identical to cloud/server.js at measurement time; the manager
+app), scripts/ (generate-license.js, set-pin.js, mirror-backups.js, build-artifacts.js,
+build-exe.js, build-common.js, build-license-exe.js, build-installer.js, verify-exe.js,
+release-customer.js, check-repair-ui.js, deploy-cloud.js, publish-release.ps1 at 575
+lines, REWRITTEN 2026-11-08), installer/TechPartsPOS.iss, tests/ (47 *.test.js files plus
+helper.js; reorder, port-drift and packaging-workflows joined since v7), and the docs:
+README.md, RELEASE_NOTES.md, ARCHITECTURE.md,
 DATABASE_SCHEMA.md, API_REFERENCE.md, BUSINESS_LOGIC_AND_WORKFLOWS.md,
 SECURITY_AND_LICENSING.md, OPERATIONS_AND_DEPLOYMENT.md, README-DEV.md. REMEDIATION_PLAN.md
 is a dated completion record, docs/superpowers/ specs and plans are project history, and
@@ -150,17 +188,14 @@ codebase states intent in long comments by convention; where a comment states
 deliberate behavior, verify the code matches the comment; do not flag the comment.
 Where code and doc disagree, that is a finding.
 
-METHOD FOR SEEING WHAT CHANGED (there is no usable git here, see the version note)
-The snapshots are the history. backups/code-pre-v6fixes-2026-10-15/ is the newest and
-holds src, public, docs, scripts, tests and package.json as they stood then; diff it for
-everything after the 10-15 batch, and use code-pre-v5fixes-2026-10-14/ for the 10-14
-evening. Diff whole areas rather than guessing:
-  diff -rq backups/code-pre-v6fixes-2026-10-15/src src
-  diff -ru backups/code-pre-v6fixes-2026-10-15/src/updater.js src/updater.js
-Or list by recency:
-  find src public cloud scripts tests -type f -name "*.js" -newermt "2026-10-15" \
-    -printf "%TH %p\n" | sort -r
-A snapshot shows what changed; only the live code shows what is true. Never cite a
+METHOD FOR SEEING WHAT CHANGED (git is the history since 2026-11-07)
+Primary tools: git log --oneline, git log --stat, git diff v2.6 HEAD (v2.6 = 8103023),
+git blame for a line's history, git status as the interference detector. For changes
+older than 6834474 the snapshots are the secondary record:
+backups/code-pre-v6fixes-2026-10-15/ is the last FULL pre-git snapshot (use
+code-pre-v5fixes-2026-10-14/ for the 10-14 evening), and
+backups/code-pre-cloudsync-fixes-2026-11-05/ holds five files just before the 11-05 sync
+batch. A snapshot shows what changed; only the live code shows what is true. Never cite a
 snapshot as spec, and never conclude a feature is absent because a snapshot lacks it.
 
 HONESTY RULES (these override thoroughness)
@@ -231,7 +266,7 @@ that the implementation still matches, then move on)
   action set. src/audit.js itself is unchanged since before v5 (hashRow, one INSERT
   carrying the predicted id and the previous hash, paged verifyChain, the row_hash
   guarded ALTER at src/db.js:299 with the backfill at :302-315). The 2026-10-14 render
-  work in public/js/views/auth.js is presentation only; a layout complaint about that
+  work in public/js/auth.js (the v7 path public/js/views/auth.js no longer exists) is presentation only; a layout complaint about that
   list is not a trail-integrity finding.
 - Sync: one-way push-only outbox (no pull, no conflict resolution); the cloud mirror is
   keyed by (shop_id, table, local_id) for idempotent upserts; only acked rows are marked
@@ -286,7 +321,7 @@ that the implementation still matches, then move on)
   safety snapshot.
 - Lifecycle: a machine-wide instance lock lives at
   %LOCALAPPDATA%\TechPartsPOS\server.lock (dev and start.bat runs use the project
-  directory; tests never touch the machine lock); the port retry is bounded (+21); the
+  directory; tests never touch the machine lock); the port retry is bounded (+20); the
   auto-exit watchdog is armed by the browser heartbeat and is silence-driven (the kiosk
   dropped the ?closing=1 beacons, public/js/main.js:124-132); SIGINT, SIGBREAK and SIGTERM
   are handled; crash handlers write pos-crash.log.
@@ -348,7 +383,7 @@ that the implementation still matches, then move on)
   2026-11-02). The :root default is the sans stack and Newsreader appears only under
   editorial; --font-numeric is untouched on purpose. theme.js is byte-identical to the
   2026-10-15 snapshot.
-- Audit log presentation (public/js/views/auth.js): date-grouped rows, a middot day
+- Audit log presentation (public/js/auth.js; the v7 views/auth.js path is gone): date-grouped rows, a middot day
   separator, a dash placeholder cell for entries with no detail, an entry count foot-note,
   an empty state, hover isolation in styles.css. Presentation only; the trail it renders
   is unchanged. ACTION_LABELS now carries 'system update_apply' (public/js/auth.js:1428),
@@ -362,10 +397,10 @@ that the implementation still matches, then move on)
   license surface (machine id, trial seal, anti-rollback) is NEW and unaudited, see below.
 
 GATES (recount and rerun at audit time; report the current numbers)
-- npm test (node --test tests/*.test.js). Measured 2026-11-05: 505 tests across 44 files;
-  505/505 on a parallel run and again on a --test-concurrency=1 run. One earlier parallel
-  run during the 11-05 session produced no output for over ten minutes and was killed;
-  the immediate rerun was green, so a HANG is also a rerun, not a regression. The v6
+- npm test (node --test tests/*.test.js). Measured 2026-11-09: 536 tests across 47 files;
+  536/536 on a parallel run, about 22 s. The 11-05 history stands: one parallel run that
+  day produced no output for over ten minutes and was killed; the immediate rerun was
+  green, so a HANG is also a rerun, not a regression. The v6
   flake (tests/cloud-hardening.test.js reserve-then-release port race, reservePort closes
   the listener before the spawned cloud process rebinds it) is believed still present;
   verify rather than trust. Do not report a red suite as a code regression without
@@ -419,18 +454,15 @@ STILL OPEN:
   under test than v5 claimed; the real cmd.exe handoff is still unreachable. Nobody has
   run the replace-and-restart on a machine holding TechPartsPOS.exe with a sale in
   progress. Treat the whole apply path as unproven until it is.
-- Releases published before the checksum rule carries no TechPartsPOS.exe.sha256 asset and
-  the updater fails closed without one. v5 named v1.1; tags v1.2, v2.0 and v2.1 landed
-  after, so CHECK WHICH TAGS ACTUALLY CARRY THE ASSET before telling a shop to press
-  Update Now, and check what an already-installed 2.0 or 2.1 seat sees when the release it
-  wants has no digest. Do not assume the newest tag is safe.
-- The source code is still not version controlled, and the hole is wider than v5 recorded:
-  git ls-files returns .gitignore, README.md and RELEASE_NOTES.md only. src/, public/,
-  tests/, scripts/, installer/, package.json and now cloud/ and docs/ are all ignored, so
-  the 628-line release script, the 642-line updater, the whole manager app and every spec
-  exist only in this working tree. No rollback, no blame, and the publish step's
-  auto-bump can never be committed. Consequence worth reporting: backups/code-pre-* is
-  the only undo path, and it is manual.
+- Releases published before the checksum rule carry no TechPartsPOS.exe.sha256 asset and
+  the updater fails closed without one. v2.5 and v2.6 shipped with every asset live;
+  CHECK WHICH OLDER TAGS (v1.x through v2.4) ACTUALLY CARRY THE ASSET before telling a
+  shop on one of them to press Update Now, and check what such a seat sees when the
+  release it wants has no digest. Do not assume the newest tag is safe, and do not
+  assume the old ones are unreachable from the client.
+- Source control: RESOLVED 2026-11-07 (6834474 tracks the full tree, package.json and
+  .gitignore included). Verify the remote is current at audit time (git status, and
+  compare local main against origin) and move on.
 - Barcode scanning has never been proven against a physical reader. The suite replays
   keydowns inside a node:vm context, which proves the classification logic and proves
   nothing about a real scanner's keystroke interval, its suffix key, or whether an IMEI
@@ -439,13 +471,13 @@ STILL OPEN:
   timer, and no vm test can measure a real wedge's timing. Missing evidence is a handful
   of real scans at the counter; ask for them instead of treating the feature as verified.
   Same standing rule as the printed slip: browser evidence is self-consistency, not proof.
-- Release pipeline idempotency: the bump logic was rewritten, the hazard is not.
-  scripts/publish-release.ps1 now takes the base as the HIGHER of the latest tag and
-  package.json (:18-58) and defaults to a MINOR bump (:84-96), with an interactive prompt
-  when no -Version is passed. So running it twice without arguments on a clean tree moves
-  2.1 to 2.2 and then to 2.3, and because package.json is gitignored the bumped version is
-  written to disk and committed nowhere. Verify the actual behaviour of Get-NextVersion
-  and of the git add set at :388-407 rather than reasoning from this sentence.
+- Release pipeline idempotency: REWRITTEN 2026-11-08 (575 lines) with idempotent version
+  derivation, a whole-tree release commit and a zero-mutation DryRun mode, which answers
+  the v7 hazard (reruns bumping the version into gitignored files, tag pushed before the
+  assets upload). That is the rewrite's claim, not a verified fact: run the DryRun on a
+  scratch copy or read Get-NextVersion and the commit set and prove a rerun is a no-op.
+  Standing rule: list releases through Get-GithubReleases, because PowerShell 5.1
+  transposes the /releases listing on this box.
 - Docs completeness, reported ONCE per v5's own rule and now much smaller: the three
   claims in v5 are FIXED (ARCHITECTURE.md:56-75 lists all 19 src modules including
   updater, printer, settings, sync, shifts, reconcile, audit, money, names; README.md:15
@@ -659,7 +691,7 @@ AUDIT CATEGORIES (cover all ten; report per category)
    or before closed.signed_at; capped() truncation of labor name, phone and
    payment_reference (src/sales.js:15-17, :72, :126); the default markup and variance
    helpers and their 50 and 20 defaults (src/settings.js:24-47); the audit-log render path
-   in public/js/views/auth.js.
+   in public/js/auth.js (the v7 path public/js/views/auth.js no longer exists).
 
 2. CONCURRENCY & DATA INTEGRITY
    The DB is synchronous and single-process, so classic DB-thread races are rare: the
@@ -904,10 +936,13 @@ AUDIT CATEGORIES (cover all ten; report per category)
    gitignored files is visible anywhere but a git tag.
 
 8. TEST QUALITY
-   505 tests across 44 files (v6 counted 488 in 42), but many are static greps of source
+   536 tests across 47 files (v7 counted 505 in 44), but many are static greps of source
    text, which cannot fail on a real regression. Recount per file, keep the
    behavioral / hybrid / pure-static split as the useful axis, and name what each group can
-   actually detect. Files added since v6: tests/template-chooser.test.js and
+   actually detect. Files added since v7: tests/reorder.test.js, tests/port-drift.test.js
+   and tests/packaging-workflows.test.js (the last pins packaging and release artifacts,
+   including a zero-em-dash packaging rule; check what it actually gates). Files added
+   since v6: tests/template-chooser.test.js and
    tests/changelog.test.js (both from the parallel 11-03/05 session; the latter is a new
    KIND of gate, verify what it actually asserts). Files materially changed by that
    session: typography-presets, report, cloud-hardening, updater-ui, importer, inventory.

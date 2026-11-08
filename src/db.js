@@ -3,7 +3,7 @@ const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { ensureSyncTables } = require('./sync');
+const { ensureSyncTables, enqueueRow } = require('./sync');
 const { hashRow } = require('./audit');
 
 let cachedBaseDir = null;
@@ -336,6 +336,13 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
       if (!invCols.includes(col)) db.exec(ddl);
     }
 
+    // Sync outbox + shop identity (src/sync.js). Runs on every open; guarded
+    // CREATEs make it a no-op after the first run. It lives BEFORE the repair
+    // writes below so they can enqueue their rows: a renamed SKU or a
+    // backfilled opening balance that never reached the outbox would silently
+    // never reach the cloud mirror on an already-paired shop.
+    ensureSyncTables(db);
+
     // Case-insensitive SKU collisions used to refuse the whole boot; renaming
     // the later row keeps the shop open, and the suffix (the row id) makes the
     // loser findable and editable in the catalog. One transaction, because the
@@ -353,11 +360,13 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
       const seenSku = new Set();
       const skuTaken = db.prepare('SELECT 1 FROM inventory WHERE sku_barcode = ? COLLATE NOCASE LIMIT 1');
       let renamedSkus = 0;
+      const renamedIds = [];
       for (const row of dupRows) {
         if (seenSku.has(row.sku)) {
           let candidate = `${row.sku}-${row.id}`;
           for (let n = 2; skuTaken.get(candidate); n++) candidate = `${row.sku}-${row.id}-${n}`;
           db.prepare('UPDATE inventory SET sku_barcode = ? WHERE id = ?').run(candidate, row.id);
+          renamedIds.push(row.id);
           seenSku.add(candidate);
           renamedSkus++;
         } else {
@@ -368,6 +377,10 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
       db.prepare("UPDATE inventory SET sku_barcode = UPPER(TRIM(sku_barcode)) WHERE sku_barcode IS NOT NULL").run();
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_sku_nocase ON inventory(sku_barcode COLLATE NOCASE) WHERE sku_barcode IS NOT NULL');
       db.exec('COMMIT');
+      // A renamed SKU must reach the cloud mirror: the outbox exists by now
+      // (ensureSyncTables ran above), so each renamed loser rides the same
+      // push the live write paths use.
+      for (const id of renamedIds) enqueueRow(db, 'inventory', id);
     } catch (e) {
       try { db.exec('ROLLBACK'); } catch (_) {}
       throw e;
@@ -378,13 +391,19 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
     // from the first run on. Idempotent: parts already tracked are excluded.
     // created_at rides along explicitly: the column default is zone-less
     // CURRENT_TIMESTAMP, which every other movement writer avoids.
+    const backfillAt = new Date().toISOString();
     db.prepare(`
       INSERT INTO stock_movements (inventory_id, delta, reason, created_at)
       SELECT id, stock_quantity, 'opening_balance', ?
       FROM inventory
       WHERE stock_quantity != 0
         AND id NOT IN (SELECT inventory_id FROM stock_movements)
-    `).run(new Date().toISOString());
+    `).run(backfillAt);
+    // The cloud's movement window covers only the recent 30 days, so a
+    // pre-pairing part's opening balance would never mirror without this.
+    for (const r of db.prepare("SELECT id FROM stock_movements WHERE reason = 'opening_balance' AND created_at = ?").all(backfillAt)) {
+      enqueueRow(db, 'stock_movements', Number(r.id));
+    }
 
     // Seed default shop settings if missing
     const insertSetting = db.prepare('INSERT OR IGNORE INTO shop_settings (key, value) VALUES (?, ?)');
@@ -412,9 +431,6 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
     // src/inventory.js; rows prune after 2 days.
     db.exec('CREATE TABLE IF NOT EXISTS op_log (op_id TEXT PRIMARY KEY, entity_id INTEGER, created_at TEXT NOT NULL)');
 
-    // Sync outbox + shop identity (src/sync.js). Runs on every open; guarded
-    // CREATEs make it a no-op after the first run.
-    ensureSyncTables(db);
     return db;
   } catch (e) {
     try { db.close(); } catch (_) {}

@@ -683,10 +683,14 @@ export async function loadReceiptPreview() {
       throw new Error(data.error || 'Preview failed');
     }
     const { lines } = await res.json();
+    // Every line is one block span, and no '\n' joins them: a display:block
+    // element already breaks the line, so joining with a newline rendered
+    // centered and wide rows with blank lines the roll never prints. Empty
+    // lines keep their height through a non-breaking space.
     pre.innerHTML = (lines || []).map((l) => {
-      const cls = `${l.centered ? 'rp-c ' : ''}${l.wide ? 'rp-w' : ''}`.trim();
-      return `<span class="${cls}">${escHtml(l.text)}</span>`;
-    }).join('\n');
+      const cls = `rp-l${l.centered ? ' rp-c' : ''}${l.wide ? ' rp-w' : ''}`;
+      return `<span class="${cls}">${escHtml(l.text) || '\u00a0'}</span>`;
+    }).join('');
   } catch (err) {
     pre.textContent = err.message;
   }
@@ -1581,6 +1585,24 @@ function auditCategoryLabel(category) {
   return CATEGORY_LABELS[category] || category;
 }
 
+// Category dots: the color anchor the eye scans by (user-requested highlight).
+// They identify the category only; good/bad still lives in the sentence color,
+// so a routine green dot never disguises a red outcome.
+const CATEGORY_DOT_CLASS = {
+  security:  'danger',
+  sale:      'pos',
+  receipt:   'pos',
+  credit:    'info',
+  return:    'info',
+  inventory: 'warn',
+};
+const auditCatDot = (c) => {
+  const m = CATEGORY_DOT_CLASS[c];
+  return `<span class="audit-cat-dot${m ? ` audit-cat-dot--${m}` : ''}"></span>`;
+};
+// Manager override on a staff session: a real status worth spotting fast.
+const auditElevBadge = () => ' <span class="audit-elev-badge">elevated</span>';
+
 function auditLabel(r) {
   const key = `${r.category} ${r.action}`;
   return ACTION_LABELS[key] || r.action.replace(/_/g, ' ');
@@ -1629,103 +1651,110 @@ function auditPayloadHtml(d) {
 // away. tone colors outcomes only: red where money or access went wrong,
 // green where a balance settled. Categories stay colorless on purpose, so a
 // routine sign-in never looks like an alarm.
+// Builders emit HTML: identifiers (sale codes, part names, customers) go
+// through ref() so the "where" is scannable; every other dynamic value goes
+// through txt(). Both escape at the source, so the renderer can trust
+// sentence.html directly.
+const ref = (v) => `<b class="audit-line__ref">${escHtml(String(v))}</b>`;
+const txt = (v) => escHtml(String(v));
+
 function auditSentence(r, d) {
-  const label = auditLabel(r);
-  if (!d) return { text: label, tone: '' };
+  const label = txt(auditLabel(r));
+  if (!d) return { html: label, tone: '' };
   const cat = r.category;
   const act = r.action;
   const P = fmtMoney;
-  const pair = (k, v) => `${String(k).replace(/_/g, ' ')}: ${String(v)}`;
+  const pair = (k, v) => `${txt(k)}: ${txt(v)}`;
 
   if (cat === 'security' && (act === 'login_failed' || act === 'report_login_failed')) {
-    return { text: 'Incorrect PIN entered, access rejected', tone: 'neg' };
+    return { html: 'Incorrect PIN entered, access rejected', tone: 'neg' };
   }
   if (cat === 'sale' && act === 'void') {
-    const bits = [`Sale ${d.sale_code || ''} voided`];
+    const bits = [`Sale ${d.sale_code ? ref(d.sale_code) : ''} voided`];
     if (d.total !== undefined) bits.push(`amount ${P(d.total)}`);
     if (d.restored) bits.push('stock restored');
-    if (d.reason) bits.push(`reason: ${d.reason}`);
-    return { text: bits.join(', '), tone: 'neg' };
+    if (d.reason) bits.push(`reason: ${txt(d.reason)}`);
+    return { html: bits.join(', '), tone: 'neg' };
   }
   if (cat === 'sale' && act === 'create') {
-    const bits = [`${d.sale_code || 'Sale'} recorded`];
+    const bits = [`${d.sale_code ? ref(d.sale_code) : 'Sale'} recorded`];
     if (d.total !== undefined) bits.push(P(d.total));
-    if (d.payment_method) bits.push(String(d.payment_method).toUpperCase());
-    if (d.items) bits.push(`${d.items} item${d.items > 1 ? 's' : ''}`);
-    if (d.customer) bits.push(String(d.customer));
-    return { text: bits.join(' · '), tone: '' };
+    if (d.payment_method) bits.push(txt(String(d.payment_method).toUpperCase()));
+    if (d.items) bits.push(`${txt(d.items)} item${d.items > 1 ? 's' : ''}`);
+    if (d.customer) bits.push(ref(d.customer));
+    return { html: bits.join(' · '), tone: '' };
   }
   if (cat === 'receipt' && act === 'reprint') {
-    return { text: `Receipt reprinted for ${d.sale_code || 'a sale'}`, tone: '' };
+    return { html: `Receipt reprinted for ${d.sale_code ? ref(d.sale_code) : 'a sale'}`, tone: '' };
   }
   if (cat === 'credit' && act === 'settle') {
-    const bits = [`${d.customer || d.customer_name || 'Customer'} paid ${P(d.amount)}`];
-    if (d.method) bits.push(String(d.method).toUpperCase());
-    if (d.reference) bits.push(`ref ${d.reference}`);
-    return { text: bits.join(' · '), tone: 'pos' };
+    const bits = [`${ref(d.customer || d.customer_name || 'Customer')} paid ${P(d.amount)}`];
+    if (d.method) bits.push(txt(String(d.method).toUpperCase()));
+    if (d.reference) bits.push(`ref ${ref(d.reference)}`);
+    return { html: bits.join(' · '), tone: 'pos' };
   }
   if (cat === 'credit' && act === 'set_limit') {
     const limit = Number(d.credit_limit) > 0 ? P(d.credit_limit) : 'no limit';
-    return { text: `${d.customer || d.customer_name || 'Customer'}: credit limit set to ${limit}`, tone: '' };
+    return { html: `${ref(d.customer || d.customer_name || 'Customer')}: credit limit set to ${limit}`, tone: '' };
   }
   if (cat === 'return' && act === 'create') {
     const what = d.type === 'replacement' ? 'part replacement' : `refund ${P(d.amount)}`;
-    return { text: `${d.return_code || 'Warranty return'} on sale ${d.sale_code || ''}: ${what}`, tone: '' };
+    return { html: `${d.return_code ? ref(d.return_code) : 'Warranty return'} on sale ${d.sale_code ? ref(d.sale_code) : ''}: ${what}`, tone: '' };
   }
   if (cat === 'inventory' && (act === 'adjust_stock' || act === 'adjust')) {
     const part = d.part || (d.id ? `Part #${d.id}` : 'Inventory item');
     const delta = Number(d.delta) || 0;
     const before = d.before !== undefined ? d.before : '?';
     const after = d.after !== undefined ? d.after : '?';
-    const reason = d.reason ? `, reason: ${formatReason(d.reason)}` : '';
-    return { text: `${part}: stock ${before} → ${after} (${delta >= 0 ? '+' : ''}${delta} units${reason})`, tone: '' };
+    const reason = d.reason ? `, reason: ${txt(formatReason(d.reason))}` : '';
+    return { html: `${ref(part)}: stock ${txt(before)} → ${txt(after)} (${delta >= 0 ? '+' : ''}${delta} units${reason})`, tone: '' };
   }
   if (cat === 'inventory' && act === 'create') {
-    const bits = [`${d.part || 'New part'} added`];
-    if (d.stock !== undefined) bits.push(`stock ${d.stock}`);
+    const bits = [`${d.part ? ref(d.part) : 'New part'} added`];
+    if (d.stock !== undefined) bits.push(`stock ${txt(d.stock)}`);
     if (d.price !== undefined) bits.push(`price ${P(d.price)}`);
-    if (d.sku) bits.push(`SKU ${d.sku}`);
-    return { text: bits.join(', '), tone: '' };
+    if (d.sku) bits.push(`SKU ${ref(d.sku)}`);
+    return { html: bits.join(', '), tone: '' };
   }
   if (cat === 'inventory' && (act === 'archive' || act === 'unarchive')) {
-    return { text: `${d.part || `Part #${d.id}`} ${act === 'archive' ? 'archived from' : 'restored to'} the catalog`, tone: '' };
+    return { html: `${d.part ? ref(d.part) : `Part #${d.id}`} ${act === 'archive' ? 'archived from' : 'restored to'} the catalog`, tone: '' };
   }
   if (cat === 'inventory' && act === 'delete') {
-    return { text: `${d.part || `Part #${d.id}`} deleted`, tone: 'neg' };
+    return { html: `${d.part ? ref(d.part) : `Part #${d.id}`} deleted`, tone: 'neg' };
   }
   if (cat === 'inventory' && act === 'import') {
-    return { text: `CSV import: ${d.created || 0} created, ${d.updated || 0} stock updated`, tone: '' };
+    return { html: `CSV import: ${txt(d.created || 0)} created, ${txt(d.updated || 0)} stock updated`, tone: '' };
   }
   if (cat === 'inventory' && act === 'bulk_edit') {
-    const act2 = d.action ? `, ${String(d.action).replace(/_/g, ' ')}` : '';
-    return { text: `Bulk edit: ${d.count || 0} part(s)${act2}`, tone: '' };
+    const act2 = d.action ? `, ${txt(String(d.action).replace(/_/g, ' '))}` : '';
+    return { html: `Bulk edit: ${txt(d.count || 0)} part(s)${act2}`, tone: '' };
   }
   if ((cat === 'shift' || cat === 'day_close') && act === 'close') {
     const variance = Number(d.variance) || 0;
     const balanced = Math.abs(variance) < 0.01;
-    const title = cat === 'day_close' ? `Day ${d.day || ''} closed` : `Shift #${d.shift_id || '1'} closed`;
+    const title = cat === 'day_close' ? `Day ${d.day ? ref(d.day) : ''} closed` : `Shift #${ref(d.shift_id || '1')} closed`;
     const verdict = balanced ? 'balanced' : `variance ${P(variance)}`;
-    return { text: `${title}: counted ${P(d.counted_cash)}, expected ${P(d.expected_cash)}, ${verdict}`, tone: balanced ? 'pos' : 'neg' };
+    return { html: `${title}: counted ${P(d.counted_cash)}, expected ${P(d.expected_cash)}, ${verdict}`, tone: balanced ? 'pos' : 'neg' };
   }
   if (cat === 'settings' && act === 'update' && d.changes && typeof d.changes === 'object') {
-    const keys = Object.keys(d.changes).map((k) => k.replace(/_/g, ' '));
+    const keys = Object.keys(d.changes).map((k) => txt(k.replace(/_/g, ' ')));
     const shown = keys.slice(0, 3).join(', ');
     const more = keys.length > 3 ? ` +${keys.length - 3} more` : '';
-    return { text: `Settings changed: ${shown}${more}`, tone: '' };
+    return { html: `Settings changed: ${shown}${more}`, tone: '' };
   }
   if (cat === 'settings' && act === 'cloud_paired') {
-    const backfill = Number(d.backfill_rows) > 0 ? `, ${d.backfill_rows} rows backfilled` : '';
-    return { text: `Cloud register paired, shop ${d.shop_id || ''}${backfill}`, tone: '' };
+    const backfill = Number(d.backfill_rows) > 0 ? `, ${txt(d.backfill_rows)} rows backfilled` : '';
+    return { html: `Cloud register paired, shop ${txt(d.shop_id || '')}${backfill}`, tone: '' };
   }
   // Unknown shapes: the label plus the first few payload pairs, values
   // bounded so one long field cannot stretch the line.
   const entries = Object.entries(d).filter(([k]) => !['id', 'staff_id', 'customer_id', 'hold_id'].includes(k));
-  if (!entries.length) return { text: label, tone: '' };
+  if (!entries.length) return { html: label, tone: '' };
   const pairs = entries.slice(0, 3).map(([k, v]) => {
     const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
     return pair(k, val.length > 48 ? `${val.slice(0, 48)}...` : val);
   }).join(', ');
-  return { text: `${label}: ${pairs}`, tone: '' };
+  return { html: `${label}: ${pairs}`, tone: '' };
 }
 
 // ---- Relative timestamp --------------------------------------------------
@@ -1739,14 +1768,18 @@ function auditRelTime(dateStr) {
 }
 
 // ---- Day label for group header ------------------------------------------
+// Weekday form already carries the date, so appending it again produced
+// "Thursday, Nov 5, 2026 · Nov 5, 2026". Today/Yesterday keep the date,
+// other days say it once.
 function auditDayLabel(dateStr) {
   const d = new Date(dateStr);
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
   const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  const label = sameDay(d, today) ? 'Today' : sameDay(d, yesterday) ? 'Yesterday' : d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
-  return `${label} · ${d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  if (sameDay(d, today)) return `Today · ${d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  if (sameDay(d, yesterday)) return `Yesterday · ${d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function auditDayKey(dateStr) {
@@ -1840,20 +1873,35 @@ export async function loadAuditLog({ append = false } = {}) {
     let group = null;
     const flushGroup = () => {
       if (!group) return;
-      const first = group.times[0];
-      const last = group.times[group.times.length - 1];
-      const range = group.times.length > 1 ? `, ${first} to ${last}` : '';
-      parts.push(`
+      const n = group.times.length;
+      const name = escHtml(group.actor || 'Unknown');
+      const meta = `${auditCatDot(group.category)}${escHtml(auditCategoryLabel(group.category))}${group.elevated ? auditElevBadge() : ''}`;
+      // One occurrence is a plain row; the expander only earns its keep from 2 up.
+      // Range reads oldest to newest even though the feed is newest-first.
+      if (n === 1) {
+        parts.push(`
         <li class="audit-line">
-          <span class="audit-line__time">${escHtml(first)}</span>
+          <span class="audit-line__time">${escHtml(group.times[0])}</span>
+          <span class="audit-line__actor" title="${name}">${name}</span>
           <div class="audit-line__body">
-            <details class="audit-repeat">
-              <summary class="audit-line__sentence">${escHtml(group.label)} · ${group.times.length} times${escHtml(range)}</summary>
-              <ul class="audit-repeat__list">${group.times.map((t) => `<li>${escHtml(t)}</li>`).join('')}</ul>
-            </details>
-            <p class="audit-line__meta">${escHtml(group.actor)} · ${escHtml(auditCategoryLabel(group.category))}${group.elevated ? ' · elevated' : ''}</p>
+            <p class="audit-line__sentence">${escHtml(group.label)}</p>
+            <p class="audit-line__meta">${meta}</p>
           </div>
         </li>`);
+      } else {
+        parts.push(`
+        <li class="audit-line">
+          <span class="audit-line__time">${escHtml(group.times[0])}</span>
+          <span class="audit-line__actor" title="${name}">${name}</span>
+          <div class="audit-line__body">
+            <details class="audit-repeat">
+              <summary class="audit-line__sentence">${escHtml(group.label)} · ${n} times, ${escHtml(group.times[n - 1])} to ${escHtml(group.times[0])}</summary>
+              <ul class="audit-repeat__list">${group.times.map((t) => `<li>${escHtml(t)}</li>`).join('')}</ul>
+            </details>
+            <p class="audit-line__meta">${meta}</p>
+          </div>
+        </li>`);
+      }
       group = null;
     };
     for (const r of rows) {
@@ -1882,9 +1930,10 @@ export async function loadAuditLog({ append = false } = {}) {
       parts.push(`
         <li class="audit-line">
           <span class="audit-line__time">${escHtml(timeStr)}</span>
+          <span class="audit-line__actor" title="${escHtml(r.actor_name)}">${escHtml(r.actor_name || 'Unknown')}</span>
           <div class="audit-line__body">
-            <p class="audit-line__sentence${tone}">${escHtml(sentence.text)}</p>
-            <p class="audit-line__meta">${escHtml(r.actor_name)} · ${escHtml(auditCategoryLabel(r.category))}${r.elevated ? ' · elevated' : ''}${rel ? ` · ${escHtml(rel)}` : ''}</p>
+            <p class="audit-line__sentence${tone}">${sentence.html}</p>
+            <p class="audit-line__meta">${auditCatDot(r.category)}${escHtml(auditCategoryLabel(r.category))}${r.elevated ? auditElevBadge() : ''}${rel ? ` · ${escHtml(rel)}` : ''}</p>
             ${auditPayloadHtml(detail)}
           </div>
         </li>`);

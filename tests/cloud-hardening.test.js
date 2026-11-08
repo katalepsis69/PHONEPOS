@@ -336,7 +336,11 @@ test('--rotate-pin writes a keypad-typable PIN the next boot keeps', async () =>
     // legacy shape and rewrites on the next boot: the "new" PIN never survived a
     // restart, and the rewrite used to be a delete that reopened setup.
     assert.match(written, /^\d{8}$/, `rotate-pin must write a typable PIN, got "${written}"`);
-    assert.ok(output.includes(written), 'the rotated PIN must be printed once for the operator');
+    // The 2026-11-09 audit closed the last cloud console-credential print: the
+    // PIN travels through its 0600 file only, so a systemd journal or tmux
+    // pane never holds it. The operator reads the file path from stdout.
+    assert.ok(output.includes('manager-pin.txt'), 'the rotated PIN file path must be printed for the operator');
+    assert.ok(!output.includes(written), 'the rotated PIN itself must never be echoed to stdout');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
