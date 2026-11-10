@@ -172,11 +172,12 @@ dbTest('Reorder export format round-trips into importInventory() with full fidel
   assert.strictEqual(row.min_stock_alert, 5);
   assert.strictEqual(row.location, 'Bin A1');
 
-  const headers = ['Brand', 'Model Name', 'Part Type', 'SKU / Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Qty', 'Min Stock Alert', 'Supplier', 'Location'];
+  const headers = ['Brand', 'Model Name', 'Part Type', 'SKU / Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Sold', 'In Stock', 'Stock Qty', 'Min Stock Alert', 'Supplier', 'Location'];
   const map = importer.matchHeaders(headers);
   for (const col of Object.keys(map)) assert.ok(map[col] !== -1, `${col} must map to a column`);
+  assert.strictEqual(map.stock_quantity, 9, 'Stock Qty column (not Sold or In Stock) maps to stock_quantity');
 
-  const exportRow = {
+  const uneditedRow = {
     brand: row.brand,
     model_name: row.model_name,
     part_type: row.part_type,
@@ -184,12 +185,14 @@ dbTest('Reorder export format round-trips into importInventory() with full fidel
     cost_price: row.cost_price,
     price_retail: row.price_retail,
     price_technician: row.price_technician,
-    stock_quantity: 3,
     min_stock_alert: row.min_stock_alert,
     supplier: row.supplier,
     location: row.location
   };
+  importInventory(db, [uneditedRow], ctxMgr, { auto_price: false });
+  assert.strictEqual(getInventoryItem(db, part.id).stock_quantity, 2, 'blank Stock Qty leaves stock untouched');
 
+  const exportRow = { ...uneditedRow, stock_quantity: 3 };
   const res = importInventory(db, [exportRow], ctxMgr, { auto_price: false });
   assert.strictEqual(res.updated, 1);
   assert.strictEqual(res.created, 0);

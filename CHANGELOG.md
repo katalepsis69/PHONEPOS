@@ -11,6 +11,7 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 - Verified: Reorder footer: subtotal cells align with the column edges above
 - Verified: Reorder UI: Export CSV button, custom days input, and actions wired
 
+
 ## [v2.7] - 2026-11-10
 
 ### Highlights & Changes

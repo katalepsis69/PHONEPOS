@@ -321,8 +321,8 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
       if (!Number.isInteger(qty)) throw new Error('stock_quantity must be an integer');
       if (match) {
         const fields = {};
-        for (const k of ['cost_price', 'price_retail', 'price_technician']) if (str(r[k]) !== '') fields[k] = Number(r[k]);
-        for (const k of ['supplier', 'location']) if (str(r[k]) !== '') fields[k] = str(r[k]);
+        for (const k of ['cost_price', 'price_retail', 'price_technician', 'min_stock_alert']) if (str(r[k]) !== '') fields[k] = Number(r[k]);
+        for (const k of ['sku_barcode', 'supplier', 'location']) if (str(r[k]) !== '') fields[k] = str(r[k]);
         if (meta.auto_price && fields.cost_price != null && fields.cost_price > 0) {
           const costChanged = match.cost_price == null || Number(match.cost_price) !== fields.cost_price;
           if (fields.price_retail == null && (costChanged || !match.price_retail)) {

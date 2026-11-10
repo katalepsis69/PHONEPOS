@@ -422,11 +422,10 @@ export function exportReorderCsv() {
     requireManagerPin('Enter manager PIN to export reorder sheet', () => exportReorderCsv());
     return;
   }
+  const headers = ['Brand', 'Model Name', 'Part Type', 'SKU / Barcode', 'Capital',
+    'Retail Price', 'Wholesale Price', 'Sold', 'In Stock', 'Stock Qty', 'Min Stock Alert', 'Supplier', 'Location'];
   const rows = [];
   for (const r of reorderReport.rows) {
-    const orderQty = domQty(r.id, r.suggested_qty);
-    const qty = orderQty > 0 ? orderQty : (r.suggested_qty > 0 ? r.suggested_qty : r.qty_sold);
-    if (qty <= 0) continue;
     rows.push([
       r.brand ?? '',
       r.model_name ?? '',
@@ -435,22 +434,20 @@ export function exportReorderCsv() {
       r.cost_price ?? '',
       r.price_retail ?? '',
       r.price_technician ?? '',
-      qty,
+      r.qty_sold ?? 0,
+      r.stock_quantity ?? 0,
+      '',
       r.min_stock_alert ?? '',
       r.supplier ?? '',
       r.location ?? ''
     ]);
-  }
-  if (rows.length === 0) {
-    showToast(t('inv.reorder_export_empty', 'No items to export in this window.'), 'info');
-    return;
   }
   const csvEsc = v => {
     let s = String(v ?? '');
     if (/^[=+@\t\r]/.test(s) || (/^-/.test(s) && !/^-?\d+(\.\d+)?$/.test(s))) s = `'${s}`;
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const csv = '\uFEFF' + [IMPORT_TEMPLATE_HEADERS, ...rows].map(row => row.map(csvEsc).join(',')).join('\r\n') + '\r\n';
+  const csv = '\uFEFF' + [headers, ...rows].map(row => row.map(csvEsc).join(',')).join('\r\n') + '\r\n';
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   a.download = `reorder-${reorderReport.days}days-${new Date().toISOString().slice(0, 10)}.csv`;
