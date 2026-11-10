@@ -18,11 +18,15 @@ export function clearInventorySelection() {
 
 export function updateBulkBar() {
   const bar = document.getElementById('inv-bulk-bar');
+  const hint = document.getElementById('inv-bulk-hint');
   const countEl = document.getElementById('inv-bulk-count');
   const allCb = document.getElementById('inv-select-all');
   const size = selectedPartIds.size;
   if (bar) {
     bar.classList.toggle('hidden', size === 0);
+  }
+  if (hint) {
+    hint.classList.toggle('hidden', size > 0);
   }
   if (countEl) {
     countEl.textContent = `${size} ${t('common.selected', 'selected')}`;
@@ -134,6 +138,8 @@ export function setupInventoryEnhancements() {
       if (!panel) return;
       const willShow = panel.classList.contains('hidden');
       panel.classList.toggle('hidden', !willShow);
+      reorderToggle.classList.toggle('is-active', willShow);
+      reorderToggle.setAttribute('aria-expanded', String(willShow));
       // Re-fetch on every open so the sheet is never stale, not even after a sale.
       if (willShow) loadReorderPanel();
     });
@@ -142,7 +148,37 @@ export function setupInventoryEnhancements() {
   const reorderDays = document.getElementById('inv-reorder-days');
   if (reorderDays && !reorderDays.dataset.bound) {
     reorderDays.dataset.bound = '1';
-    reorderDays.addEventListener('change', loadReorderPanel);
+    reorderDays.addEventListener('change', () => {
+      const customDays = document.getElementById('inv-reorder-custom-days');
+      if (customDays) {
+        const isCustom = reorderDays.value === 'custom';
+        customDays.classList.toggle('hidden', !isCustom);
+        if (isCustom) {
+          customDays.focus();
+          customDays.select();
+        }
+      }
+      loadReorderPanel();
+    });
+  }
+
+  const customDays = document.getElementById('inv-reorder-custom-days');
+  if (customDays && !customDays.dataset.bound) {
+    customDays.dataset.bound = '1';
+    let customTimer = null;
+    customDays.addEventListener('input', () => {
+      clearTimeout(customTimer);
+      customTimer = setTimeout(() => {
+        const n = Math.floor(Number(customDays.value));
+        if (n >= 1 && n <= 90) loadReorderPanel();
+      }, 180);
+    });
+    customDays.addEventListener('change', () => {
+      clearTimeout(customTimer);
+      const n = Math.floor(Number(customDays.value));
+      customDays.value = String(Number.isFinite(n) && n >= 1 ? Math.min(90, n) : 3);
+      loadReorderPanel();
+    });
   }
 
   // One delegated listener covers per-supplier copy buttons and copy-all (*).
@@ -238,7 +274,12 @@ let reorderRequest = 0;
 
 export async function loadReorderPanel() {
   const request = ++reorderRequest;
-  const days = document.getElementById('inv-reorder-days')?.value || '3';
+  const daysSelect = document.getElementById('inv-reorder-days');
+  const customInput = document.getElementById('inv-reorder-custom-days');
+  let days = daysSelect?.value || '3';
+  if (days === 'custom') {
+    days = customInput?.value || '3';
+  }
   const content = document.getElementById('inv-reorder-content');
   if (!content) return;
   try {
@@ -289,10 +330,35 @@ const estCellHtml = (r, qty) => {
   return `${fmtMoney(round2(qty * r.cost_price))}${unit}`;
 };
 
+function updateReorderSummary() {
+  const sumEl = document.getElementById('inv-reorder-summary');
+  if (!sumEl) return;
+  const rows = reorderReport?.rows || [];
+  if (!rows.length) {
+    sumEl.textContent = '';
+    return;
+  }
+  let parts = 0, units = 0, cost = 0, hasCost = false;
+  for (const r of rows) {
+    const q = domQty(r.id, r.suggested_qty);
+    if (q > 0) {
+      parts++;
+      units += q;
+      if (r.cost_price != null) {
+        hasCost = true;
+        cost += q * r.cost_price;
+      }
+    }
+  }
+  const base = `${parts} ${parts === 1 ? 'part' : 'parts'} · ${units} ${units === 1 ? 'unit' : 'units'}`;
+  sumEl.textContent = hasCost ? `${base} · ${fmtMoney(round2(cost))}` : base;
+}
+
 // Keep the money honest while the cashier edits quantities: recompute the row's
 // est cost and its group subtotal from the same inputs the copy button reads.
 function updateReorderMoney(inputEl) {
   if (!reorderReport) return;
+  updateReorderSummary();
   const row = reorderReport.rows.find(r => r.id === Number(inputEl.dataset.qtyId));
   if (!row || row.cost_price == null) return;
   const qty = Math.max(0, Math.floor(Number(inputEl.value) || 0));
@@ -347,6 +413,53 @@ async function copyReorderList() {
   }
 }
 
+export function exportReorderCsv() {
+  if (!reorderReport || !(reorderReport.rows || []).length) {
+    showToast(t('inv.reorder_export_empty', 'No items to export in this window.'), 'info');
+    return;
+  }
+  if (!hasElevation()) {
+    requireManagerPin('Enter manager PIN to export reorder sheet', () => exportReorderCsv());
+    return;
+  }
+  const rows = [];
+  for (const r of reorderReport.rows) {
+    const orderQty = domQty(r.id, r.suggested_qty);
+    const qty = orderQty > 0 ? orderQty : (r.suggested_qty > 0 ? r.suggested_qty : r.qty_sold);
+    if (qty <= 0) continue;
+    rows.push([
+      r.brand ?? '',
+      r.model_name ?? '',
+      r.part_type ?? '',
+      r.sku_barcode ?? '',
+      r.cost_price ?? '',
+      r.price_retail ?? '',
+      r.price_technician ?? '',
+      qty,
+      r.min_stock_alert ?? '',
+      r.supplier ?? '',
+      r.location ?? ''
+    ]);
+  }
+  if (rows.length === 0) {
+    showToast(t('inv.reorder_export_empty', 'No items to export in this window.'), 'info');
+    return;
+  }
+  const csvEsc = v => {
+    let s = String(v ?? '');
+    if (/^[=+@\t\r]/.test(s) || (/^-/.test(s) && !/^-?\d+(\.\d+)?$/.test(s))) s = `'${s}`;
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = '\uFEFF' + [IMPORT_TEMPLATE_HEADERS, ...rows].map(row => row.map(csvEsc).join(',')).join('\r\n') + '\r\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `reorder-${reorderReport.days}days-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  showToast(t('inv.reorder_export_success', 'Reorder sheet exported.'), 'success');
+}
+
 function renderReorderPanel(report) {
   const content = document.getElementById('inv-reorder-content');
   if (!content) return;
@@ -354,15 +467,19 @@ function renderReorderPanel(report) {
   const groups = reorderGroups(report);
   if (groups.length === 0) {
     content.innerHTML = `<p class="foot-note p-3">${escHtml(t('inv.reorder_empty', 'No parts sold in this window.'))}</p>`;
+    updateReorderSummary();
     return;
   }
   // Staff sessions get est_cost nulled server-side; hide the whole money column
   // instead of showing dashes that say nothing to a cashier.
   const showCost = (report.rows || []).some(r => r.est_cost != null);
   content.innerHTML = groups.map(g => `
-    <div class="mb-3" data-reorder-group="${escHtml(g.supplier)}">
-      <h3 class="font-bold text-sm py-1">${escHtml(g.supplier || t('inv.reorder_no_supplier', 'No supplier'))}</h3>
-      <table class="ptable">
+    <div class="reorder-group" data-reorder-group="${escHtml(g.supplier)}">
+      <h3 class="reorder-group__head">
+        <span>${escHtml(g.supplier || t('inv.reorder_no_supplier', 'No supplier'))}</span>
+        <span class="foot-note font-mono">${g.rows.length} ${g.rows.length === 1 ? 'item' : 'items'}</span>
+      </h3>
+      <table class="ptable reorder-table">
         <thead><tr>
           <th data-i18n="inv.reorder_col_item">${t('inv.reorder_col_item', 'Item')}</th>
           <th class="is-mid" data-i18n="inv.reorder_col_sku">${t('inv.reorder_col_sku', 'SKU')}</th>
@@ -374,8 +491,8 @@ function renderReorderPanel(report) {
         <tbody>
           ${g.rows.map(r => `
           <tr>
-            <td>${escHtml(reorderItemName(r))}</td>
-            <td class="is-mid font-mono text-xs">${escHtml(r.sku_barcode || '')}</td>
+            <td class="font-medium">${escHtml(reorderItemName(r))}</td>
+            <td class="is-mid font-mono text-xs">${r.sku_barcode ? escHtml(r.sku_barcode) : '<span class="foot-note">—</span>'}</td>
             <td class="is-num font-mono tabular-nums">${r.qty_sold}</td>
             <td class="is-num font-mono tabular-nums">${r.stock_quantity}</td>
             <td class="is-num">
@@ -392,6 +509,7 @@ function renderReorderPanel(report) {
           </tr></tfoot>` : ''}
       </table>
     </div>`).join('');
+  updateReorderSummary();
 }
 
 export function renderPartTypeOptions() {

@@ -999,3 +999,42 @@ test('the manager app refetches only the shop a change event names', () => {
   ctx.onSseChange(makeEvent('south'));
   assert.strictEqual(scheduled, 4, "another shop's change does not refetch the selected view");
 });
+
+// The parity suite proves the new manager endpoints' math; this one proves
+// their gates: sessions required, ids validated, custom ranges sanitized.
+test('reorder, dead-stock, sale-detail and shifts endpoints keep their gates', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pos-cloud-shapes-'));
+  fs.writeFileSync(path.join(dataDir, 'manager-pin.txt'), '2468\n');
+  let child;
+  try {
+    const running = await startCloud(dataDir);
+    child = running.child;
+    const { base } = running;
+
+    for (const p of ['/api/reorder', '/api/dead-stock', '/api/sale?id=1', '/api/rows?table=shifts']) {
+      const res = await fetch(`${base}${p}`);
+      assert.strictEqual(res.status, 401, `${p} must require a manager session`);
+    }
+
+    const { cookie } = await login(base);
+    const auth = { Cookie: cookie };
+    // Shifts are now a visible table; staff stays out (never mirrored).
+    assert.strictEqual((await fetch(`${base}/api/rows?table=shifts`, { headers: auth })).status, 200);
+    assert.strictEqual((await fetch(`${base}/api/rows?table=staff`, { headers: auth })).status, 400);
+    // Sale detail validates its id before touching the mirror.
+    assert.strictEqual((await fetch(`${base}/api/sale?id=0`, { headers: auth })).status, 400);
+    assert.strictEqual((await fetch(`${base}/api/sale?id=notanumber`, { headers: auth })).status, 400);
+    assert.strictEqual((await fetch(`${base}/api/sale?id=999999`, { headers: auth })).status, 404);
+    const reorder = await (await fetch(`${base}/api/reorder`, { headers: auth })).json();
+    const dead = await (await fetch(`${base}/api/dead-stock`, { headers: auth })).json();
+    assert.ok(Array.isArray(reorder), 'reorder answers a list over the empty mirror');
+    assert.ok(Array.isArray(dead), 'dead stock answers a list over the empty mirror');
+    // Custom range validation: malformed dates and inverted ranges refuse.
+    assert.strictEqual((await fetch(`${base}/api/analytics?period=custom&from=not-a-date`, { headers: auth })).status, 400);
+    assert.strictEqual((await fetch(`${base}/api/analytics?period=custom&from=2026-02-01&to=2026-01-01`, { headers: auth })).status, 400);
+    assert.strictEqual((await fetch(`${base}/api/analytics?period=custom&from=2020-01-01`, { headers: auth })).status, 400, 'a range wider than 365 days refuses');
+  } finally {
+    if (child) await stopCloud(child);
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});

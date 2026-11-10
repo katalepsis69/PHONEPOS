@@ -8,7 +8,9 @@ const { dbTest, serverTest } = require('./helper');
 const {
   createInventoryItem,
   archiveInventoryItem,
-  listReorderSuggestions
+  listReorderSuggestions,
+  importInventory,
+  getInventoryItem
 } = require('../src/inventory');
 const { createSale, voidSale } = require('../src/sales');
 const { createStaff } = require('../src/auth');
@@ -148,4 +150,73 @@ test('Reorder footer: subtotal cells align with the column edges above', () => {
   const styles = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   assert.match(styles, /\.ptable tfoot td\s*\{[^}]*padding:\s*6px 10px/, 'footer cells mirror body-cell padding');
   assert.match(styles, /\.ptable tfoot td\s*\{[^}]*padding:\s*5px 8px/, 'footer padding tracks the compact rows');
+});
+
+dbTest('Reorder export format round-trips into importInventory() with full fidelity', async (db) => {
+  const importer = await import('../public/js/importer.js');
+  const part = createInventoryItem(db, {
+    brand: 'Apple', model_name: 'iPhone 11', part_type: 'LCD', sku_barcode: 'IP11-LCD',
+    cost_price: 600, price_retail: 1200, price_technician: 900, stock_quantity: 5,
+    min_stock_alert: 5, supplier: 'Greenhills Wholesale', location: 'Bin A1'
+  });
+  createSale(db, { items: [{ inventory_id: part.id, quantity: 3 }], amount_paid: 3600 }, ctxMgr);
+
+  const report = listReorderSuggestions(db, { days: 5 });
+  assert.strictEqual(report.rows.length, 1);
+  const row = report.rows[0];
+  assert.strictEqual(row.qty_sold, 3);
+  assert.strictEqual(row.stock_quantity, 2);
+  assert.strictEqual(row.suggested_qty, 1);
+  assert.strictEqual(row.price_retail, 1200);
+  assert.strictEqual(row.price_technician, 900);
+  assert.strictEqual(row.min_stock_alert, 5);
+  assert.strictEqual(row.location, 'Bin A1');
+
+  const headers = ['Brand', 'Model Name', 'Part Type', 'SKU / Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Qty', 'Min Stock Alert', 'Supplier', 'Location'];
+  const map = importer.matchHeaders(headers);
+  for (const col of Object.keys(map)) assert.ok(map[col] !== -1, `${col} must map to a column`);
+
+  const exportRow = {
+    brand: row.brand,
+    model_name: row.model_name,
+    part_type: row.part_type,
+    sku_barcode: row.sku_barcode,
+    cost_price: row.cost_price,
+    price_retail: row.price_retail,
+    price_technician: row.price_technician,
+    stock_quantity: 3,
+    min_stock_alert: row.min_stock_alert,
+    supplier: row.supplier,
+    location: row.location
+  };
+
+  const res = importInventory(db, [exportRow], ctxMgr, { auto_price: false });
+  assert.strictEqual(res.updated, 1);
+  assert.strictEqual(res.created, 0);
+
+  const updated = getInventoryItem(db, part.id);
+  assert.strictEqual(updated.stock_quantity, 5);
+});
+
+test('Reorder UI: Export CSV button, custom days input, and actions wired', () => {
+  const root = path.join(__dirname, '..');
+  const index = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
+  assert.match(index, /data-action="export-reorder-csv"/, 'Export CSV action wired');
+  assert.match(index, /data-i18n="inv\.reorder_export"/, 'Export CSV i18n label present');
+  assert.match(index, /id="inv-reorder-custom-days"/, 'Custom days input element present');
+  assert.match(index, /value="custom"/, 'Custom days option present in dropdown');
+  assert.match(index, /id="inv-reorder-summary"/, 'Live reorder summary badge present');
+  assert.match(index, /id="inv-bulk-hint" class="inv-bulk-hint"/, 'Bulk hint uses padded subbar class');
+
+  const view = fs.readFileSync(path.join(root, 'public', 'js', 'views', 'inventory.js'), 'utf8');
+  assert.match(view, /function exportReorderCsv/, 'exportReorderCsv defined in inventory view');
+  assert.match(view, /reorder-custom-days/, 'custom days input listener wired');
+  assert.match(view, /function updateReorderSummary/, 'live reorder summary updater defined');
+
+  const styles = fs.readFileSync(path.join(root, 'public', 'styles.css'), 'utf8');
+  assert.match(styles, /\.reorder-days-input\s*\{[^}]*appearance:\s*textfield/, 'custom days input strips native spin buttons and chevron padding');
+  assert.match(styles, /\.inv-bulk-hint\s*\{[^}]*padding:\s*6px 10px/, 'bulk hint has counter subbar padding');
+
+  const main = fs.readFileSync(path.join(root, 'public', 'js', 'main.js'), 'utf8');
+  assert.match(main, /'export-reorder-csv':/, 'export-reorder-csv registered in main ACTIONS');
 });

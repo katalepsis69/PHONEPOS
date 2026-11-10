@@ -2257,10 +2257,91 @@ html.light .modal-backdrop {
   outline-offset: 1px;
 }
 
+.reorder-days-input {
+  width: 64px;
+  padding: 6px 8px;
+  text-align: center;
+  font-family: var(--font-numeric);
+  font-size: 0.875rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--txt);
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.reorder-days-input::-webkit-inner-spin-button,
+.reorder-days-input::-webkit-outer-spin-button {
+  display: none;
+}
+
+.reorder-days-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.reorder-summary {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--txt-2);
+}
+
+.reorder-summary:empty {
+  display: none;
+}
+
+.reorder-group + .reorder-group {
+  margin-top: 8px;
+}
+
 /* Group headings sit outside the table; without the cells' 10px side padding
    "No supplier" hangs left of the ITEM column it names. */
 [data-reorder-group] > h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding-block: 6px;
   padding-inline: 10px;
+  font-size: 0.78125rem;
+  font-weight: 700;
+  color: var(--txt-2);
+  background: color-mix(in oklab, var(--surface-2) 60%, transparent);
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.reorder-table th:first-child,
+.reorder-table td:first-child {
+  width: 44%;
+}
+
+.reorder-table th:nth-child(2),
+.reorder-table td:nth-child(2) {
+  width: 16%;
+}
+
+.reorder-table tfoot td {
+  border-top: 1px solid var(--line);
+  background: color-mix(in oklab, var(--surface-2) 35%, transparent);
+}
+
+.btn-mini.is-active {
+  background: var(--accent-soft);
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--line));
+  color: var(--txt);
 }
 
 .reorder-unit {
@@ -3445,15 +3526,20 @@ input[type="password"]::-ms-clear {
 /* ------------------------------------------------- 8e. small row helpers */
 /* cost-price cell is a real button now (keyboard reachable), styled invisible */
 .cell-btn {
-  padding: 0;
+  padding: 2px 6px;
+  margin-right: -6px;
   border: 0;
+  border-radius: 5px;
   background: none;
   color: inherit;
   font: inherit;
   cursor: pointer;
+  transition: background-color 0.12s var(--ease-out), color 0.12s var(--ease-out);
 }
 
-.cell-btn:hover {
+.cell-btn:hover,
+.cell-btn:focus-visible {
+  background: var(--surface-3);
   color: var(--txt);
 }
 
@@ -5610,17 +5696,26 @@ a {
 }
 
 /* Inventory floating bulk action toolbar */
+.inv-bulk-hint {
+  margin: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  background: color-mix(in oklab, var(--surface-2) 40%, transparent);
+  color: var(--txt-3);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
 .inv-bulk-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 12px;
-  margin-bottom: 12px;
-  border-radius: var(--radius-sm, 6px);
-  border: 1px solid var(--line-soft);
-  background: var(--surface-2);
-  color: var(--txt-2);
-  font-size: 0.75rem;
+  padding: 6px 10px;
+  margin: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: color-mix(in oklab, var(--accent-soft) 55%, var(--surface-2));
+  color: var(--txt);
+  font-size: 0.78125rem;
 }
 

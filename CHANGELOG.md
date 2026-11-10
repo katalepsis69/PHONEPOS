@@ -4,12 +4,20 @@ All notable changes to TechParts POS and Phone Repair Management System are docu
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
-## [v2.7] - 2026-11-08
+## [v2.8] - 2026-11-10
 
 ### Highlights & Changes
 - Verified: Reorder UI: single copy button, editable quantities, i18n keys consistent
 - Verified: Reorder footer: subtotal cells align with the column edges above
-- Verified: sale retries retain one operation id and validate credit downpayments
+- Verified: Reorder UI: Export CSV button, custom days input, and actions wired
+
+## [v2.7] - 2026-11-10
+
+### Highlights & Changes
+- Verified: Reorder UI: single copy button, editable quantities, i18n keys consistent
+- Verified: Reorder footer: subtotal cells align with the column edges above
+- Verified: Reorder UI: Export CSV button, custom days input, and actions wired
+
 
 ## [v2.6] - 2026-11-08
 

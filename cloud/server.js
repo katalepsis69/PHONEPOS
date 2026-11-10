@@ -390,7 +390,7 @@ const ALLOWED_TABLES = new Map([
   // owner free text before it ever leaves (privacy contract, 2026-09-27).
   ['customer_profiles', ['customer_name', 'credit_limit']],
 ]);
-const MANAGER_ROW_TABLES = new Set(['inventory', 'sales', 'credit_payments', 'warranty_returns', 'day_reconciliations', 'cash_adjustments', 'customer_profiles']);
+const MANAGER_ROW_TABLES = new Set(['inventory', 'sales', 'credit_payments', 'warranty_returns', 'shifts', 'day_reconciliations', 'cash_adjustments', 'customer_profiles']);
 
 function positiveId(value) {
   return Number.isSafeInteger(value) && value > 0;
@@ -878,7 +878,12 @@ const server = http.createServer(async (req, res) => {
         const debtors = db.prepare(`
           SELECT MAX(json_extract(r.row_json,'$.customer_name')) AS name,
                  SUM(CAST(json_extract(r.row_json,'$.credit_balance') AS REAL)) AS balance,
-                 MAX(json_extract(r.row_json,'$.created_at')) AS last_at
+                 MAX(json_extract(r.row_json,'$.created_at')) AS last_at,
+                 MAX((SELECT json_extract(pf.row_json,'$.phone')
+                   FROM shop_rows pf
+                   WHERE pf.table_name = 'customer_profiles' AND pf.shop_id = r.shop_id
+                     AND ${NAMEFOLD}(json_extract(pf.row_json,'$.customer_name')) = ${NAMEFOLD}(json_extract(r.row_json,'$.customer_name'))
+                   LIMIT 1)) AS phone
           FROM shop_rows r
           WHERE r.table_name = 'sales'${filter.clause}
             AND COALESCE(CAST(json_extract(r.row_json,'$.voided') AS INTEGER), 0) = 0
@@ -896,16 +901,34 @@ const server = http.createServer(async (req, res) => {
           WHERE r.table_name = 'inventory'${filter.clause}
             AND COALESCE(CAST(json_extract(r.row_json,'$.archived') AS INTEGER), 0) = 0
         `).get(...filter.params);
+        // Mirror-wide counts: the low-stock card used to filter the newest-500
+        // /api/rows window client-side, which dropped older breaches once the
+        // catalog outgrew the window (same failure the debtor list fixed).
+        // /api/reorder serves the same population with buy quantities.
+        const invCounts = db.prepare(`
+          SELECT COUNT(*) AS types,
+                 COALESCE(SUM(CAST(json_extract(r.row_json,'$.stock_quantity') AS INTEGER)), 0) AS parts_stock,
+                 COALESCE(SUM(CASE WHEN COALESCE(CAST(json_extract(r.row_json,'$.archived') AS INTEGER), 0) = 0
+                   AND CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)
+                     <= CAST(json_extract(r.row_json,'$.min_stock_alert') AS REAL)
+                   THEN 1 ELSE 0 END), 0) AS low_stock
+          FROM shop_rows r
+          WHERE r.table_name = 'inventory'${filter.clause}
+        `).get(...filter.params);
         return json(res, 200, {
           outstanding_credit: Math.round(debt.outstanding * 100) / 100,
           debtors: debt.debtors,
           debtor_list: debtors.map(d => ({
             name: d.name,
             balance: Math.round((Number(d.balance) || 0) * 100) / 100,
-            last_at: d.last_at || ''
+            last_at: d.last_at || '',
+            phone: d.phone || ''
           })),
           inventory_retail_value: Math.round(inventory.retail_value * 100) / 100,
-          inventory_cost_value: Math.round(inventory.cost_value * 100) / 100
+          inventory_cost_value: Math.round(inventory.cost_value * 100) / 100,
+          inventory_types: invCounts.types,
+          total_parts_stock: invCounts.parts_stock,
+          low_stock_count: invCounts.low_stock
         });
       }
       if (p === '/api/rows') {
@@ -919,6 +942,22 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, out);
       }
 
+      // One sale plus its line items for the feed's tap-to-expand. /api/rows
+      // caps at the newest 500, so an older sale's items are not reachable
+      // from that window; this reads the full mirror instead.
+      if (p === '/api/sale' && req.method === 'GET') {
+        const shop = url.searchParams.get('shop');
+        const filter = getStoreShopFilter(session.storeId, shop, 'r');
+        const id = Number(url.searchParams.get('id'));
+        if (!positiveId(id)) return json(res, 400, { error: 'bad sale id' });
+        const sale = db.prepare(`SELECT r.row_json FROM shop_rows r WHERE r.table_name = 'sales' AND r.local_id = ?${filter.clause}`)
+          .get(id, ...filter.params);
+        if (!sale) return json(res, 404, { error: 'sale not found in this mirror' });
+        const items = db.prepare(`SELECT r.row_json FROM shop_rows r WHERE r.table_name = 'sale_items' AND CAST(json_extract(r.row_json,'$.sale_id') AS INTEGER) = ?${filter.clause}`)
+          .all(id, ...filter.params).map(r => JSON.parse(r.row_json));
+        return json(res, 200, { sale: JSON.parse(sale.row_json), items });
+      }
+
       // --- period analytics over the mirror -----------------------------
       // Same trailing-localtime-day windows and metric formulas as the shop's
       // src/analytics.js, computed with json_extract over the stored snapshots.
@@ -926,75 +965,230 @@ const server = http.createServer(async (req, res) => {
       // mirrored table once (fine at shop scale, tens of thousands of rows);
       // materialize typed tables if a multi-shop install ever makes it stutter.
       if (p === '/api/analytics') {
+        // Window shapes follow src/analytics.js periodWindows: trailing
+        // localtime-day windows ending on the shop's today, plus a custom
+        // from/to range whose previous window is the equal-length stretch
+        // before it (so delta chips keep their baseline). from/to are
+        // strict-regex validated before they are inlined.
+        const validDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(`${v}T00:00:00Z`));
+        const addDays = (dateStr, k) => new Date(Date.parse(`${dateStr}T00:00:00Z`) + k * 86400000).toISOString().slice(0, 10);
         const period = ['day', '7d', '30d'].includes(url.searchParams.get('period')) ? url.searchParams.get('period') : 'day';
-        const days = { day: 1, '7d': 7, '30d': 30 }[period];
-        const since = `date('now',${TZ_MODIFIER},'-${days - 1} days')`;
+        const fromParam = url.searchParams.get('from');
+        const toParam = url.searchParams.get('to');
+        const today = db.prepare(`SELECT date('now',${TZ_MODIFIER}) AS d`).get().d;
+        let from, to, days;
+        if (fromParam !== null || toParam !== null) {
+          if (!validDate(fromParam)) return json(res, 400, { error: 'custom range needs from=YYYY-MM-DD' });
+          if (toParam !== null && !validDate(toParam)) return json(res, 400, { error: 'to must be a YYYY-MM-DD date' });
+          from = fromParam;
+          to = toParam || today;
+          if (from > to) return json(res, 400, { error: 'custom start must be on or before the end date' });
+          days = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
+          if (days > 365) return json(res, 400, { error: 'custom range is limited to 365 days' });
+        } else {
+          days = { day: 1, '7d': 7, '30d': 30 }[period];
+          to = today;
+          from = addDays(today, -(days - 1));
+        }
+        const prevFrom = addDays(from, -days);
+        const prevTo = addDays(from, -1);
         const shop = url.searchParams.get('shop');
         const filterR = getStoreShopFilter(session.storeId, shop, 'r');
         const filterI = getStoreShopFilter(session.storeId, shop, 'i');
         const r2 = v => Math.round((Number(v) || 0) * 100) / 100;
         const num = (r, k) => `CAST(json_extract(${r}.row_json,'$.${k}') AS REAL)`;
+        const inWindow = (col, wFrom, wTo) =>
+          `date(json_extract(${col}.row_json,'$.created_at'),${TZ_MODIFIER}) >= '${wFrom}' AND date(json_extract(${col}.row_json,'$.created_at'),${TZ_MODIFIER}) <= '${wTo}'`;
 
-        const sales = db.prepare(`
-          SELECT COUNT(*) AS sale_count,
-                 COALESCE(SUM(${num('r','total_amount')}), 0) AS revenue,
-                 COALESCE(SUM(${num('r','amount_paid')} - ${num('r','change_amount')}), 0) AS paid_at_counter,
-                 COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'cash'
-                   THEN ${num('r','amount_paid')} - ${num('r','change_amount')} ELSE 0 END), 0) AS cash_collected,
-                 COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'gcash'
-                   THEN ${num('r','amount_paid')} - ${num('r','change_amount')} ELSE 0 END), 0) AS gcash_collected,
-                 COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'transfer'
-                   THEN ${num('r','amount_paid')} - ${num('r','change_amount')} ELSE 0 END), 0) AS transfer_collected
+        // Same formulas as getDashboardStats/windowKpis, parameterized by
+        // window: one row per sale for sales sums, separate passes for the
+        // line-item split and ledger movements.
+        const windowKpis = (wFrom, wTo) => {
+          const sales = db.prepare(`
+            SELECT COUNT(*) AS sale_count,
+                   COALESCE(SUM(${num('r','total_amount')}), 0) AS revenue,
+                   COALESCE(SUM(${num('r','amount_paid')} - ${num('r','change_amount')}), 0) AS paid_at_counter,
+                   COALESCE(SUM(${num('r','credit_balance')}), 0) AS credit_issued,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'cash'
+                     THEN ${num('r','amount_paid')} - ${num('r','change_amount')} ELSE 0 END), 0) AS cash_collected,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'gcash'
+                     THEN ${num('r','amount_paid')} - ${num('r','change_amount')} ELSE 0 END), 0) AS gcash_collected,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'transfer'
+                     THEN ${num('r','amount_paid')} - ${num('r','change_amount')} ELSE 0 END), 0) AS transfer_collected,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'credit'
+                     THEN ${num('r','amount_paid')} ELSE 0 END), 0) AS credit_downpayments
+            FROM shop_rows r
+            WHERE r.table_name = 'sales'${filterR.clause}
+              AND COALESCE(CAST(json_extract(r.row_json,'$.voided') AS INTEGER), 0) = 0
+              AND ${inWindow('r', wFrom, wTo)}
+          `).get(...filterR.params);
+
+          const settlements = db.prepare(`
+            SELECT COALESCE(SUM(${num('r','amount_paid')}), 0) AS total,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'cash' THEN ${num('r','amount_paid')} ELSE 0 END), 0) AS cash,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'gcash' THEN ${num('r','amount_paid')} ELSE 0 END), 0) AS gcash,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'transfer' THEN ${num('r','amount_paid')} ELSE 0 END), 0) AS transfer
+            FROM shop_rows r
+            WHERE r.table_name = 'credit_payments'${filterR.clause}
+              AND ${inWindow('r', wFrom, wTo)}
+          `).get(...filterR.params);
+
+          // The replacement cost only leaves the P&L while its sale stands:
+          // voiding the sale restores the part, matching windowKpis.
+          const refunds = db.prepare(`
+            SELECT COUNT(*) AS count,
+                   COALESCE(SUM(${num('r','refund_amount')}), 0) AS total,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.return_type') = 'cash_refund' THEN ${num('r','refund_amount')} ELSE 0 END), 0) AS cash,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.return_type') = 'credit_refund' THEN ${num('r','refund_amount')} ELSE 0 END), 0) AS credit,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.return_type') = 'replacement' THEN 1 ELSE 0 END), 0) AS replacements,
+                   COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.return_type') = 'replacement'
+                     AND COALESCE(CAST(json_extract(sv.row_json,'$.voided') AS INTEGER), 0) = 0
+                     THEN CAST(json_extract(r.row_json,'$.quantity') AS INTEGER) * COALESCE(CAST(json_extract(inv.row_json,'$.cost_price') AS REAL), 0.0)
+                     ELSE 0.0 END), 0.0) AS replacement_cost
+            FROM shop_rows r
+            LEFT JOIN shop_rows inv ON inv.table_name = 'inventory' AND inv.shop_id = r.shop_id
+              AND inv.local_id = CAST(json_extract(r.row_json,'$.replacement_inventory_id') AS INTEGER)
+            LEFT JOIN shop_rows sv ON sv.table_name = 'sales' AND sv.shop_id = r.shop_id
+              AND sv.local_id = CAST(json_extract(r.row_json,'$.sale_id') AS INTEGER)
+            WHERE r.table_name = 'warranty_returns'${filterR.clause}
+              AND ${inWindow('r', wFrom, wTo)}
+          `).get(...filterR.params);
+
+          const items = db.prepare(`
+            SELECT
+              COALESCE(SUM(CASE WHEN json_extract(i.row_json,'$.item_type') = 'part'
+                THEN CAST(json_extract(i.row_json,'$.quantity') AS INTEGER) * ${num('i','unit_cost')} ELSE 0 END), 0) AS cost,
+              COALESCE(SUM(CASE WHEN json_extract(i.row_json,'$.item_type') = 'part'
+                THEN ${num('i','total_price')} ELSE 0 END), 0) AS parts_revenue,
+              COALESCE(SUM(CASE WHEN json_extract(i.row_json,'$.item_type') = 'labor'
+                THEN ${num('i','total_price')} ELSE 0 END), 0) AS labor_revenue
+            FROM shop_rows i
+            JOIN shop_rows s ON s.table_name = 'sales' AND s.shop_id = i.shop_id
+              AND s.local_id = CAST(json_extract(i.row_json,'$.sale_id') AS INTEGER)
+            WHERE i.table_name = 'sale_items'${filterI.clause}
+              AND COALESCE(CAST(json_extract(s.row_json,'$.voided') AS INTEGER), 0) = 0
+              AND ${inWindow('s', wFrom, wTo)}
+          `).get(...filterI.params);
+
+          const movements = db.prepare(`
+            SELECT COALESCE(SUM(CAST(json_extract(r.row_json,'$.delta') AS INTEGER)), 0) AS units_received
+            FROM shop_rows r
+            WHERE r.table_name = 'stock_movements'${filterR.clause}
+              AND json_extract(r.row_json,'$.reason') = 'receive'
+              AND ${inWindow('r', wFrom, wTo)}
+          `).get(...filterR.params);
+
+          const adjustments = db.prepare(`
+            SELECT COALESCE(SUM(${num('r','amount')}), 0) AS total
+            FROM shop_rows r
+            WHERE r.table_name = 'cash_adjustments'${filterR.clause}
+              AND ${inWindow('r', wFrom, wTo)}
+              AND NOT EXISTS (
+                SELECT 1 FROM shop_rows s
+                WHERE s.shop_id = r.shop_id AND s.table_name = 'sales'
+                  AND json_extract(r.row_json,'$.source_kind') = 'sale_void'
+                  AND s.local_id = CAST(json_extract(r.row_json,'$.source_id') AS INTEGER)
+                  AND ${inWindow('s', wFrom, wTo)}
+              )
+          `).get(...filterR.params);
+
+          const grossProfit = sales.revenue - items.cost;
+          const netProfit = grossProfit - refunds.total - refunds.replacement_cost;
+          const netRevenue = sales.revenue - refunds.total;
+          const cashCollected = sales.cash_collected + sales.credit_downpayments + settlements.cash + adjustments.total - refunds.cash;
+          const gcashCollected = sales.gcash_collected + settlements.gcash;
+          const transferCollected = sales.transfer_collected + settlements.transfer;
+          const collectedTotal = sales.paid_at_counter + settlements.total + adjustments.total - refunds.cash;
+          return {
+            sale_count: sales.sale_count,
+            revenue: r2(sales.revenue),
+            avg_ticket: r2(sales.sale_count ? sales.revenue / sales.sale_count : 0),
+            gross_profit: r2(grossProfit),
+            net_profit: r2(netProfit),
+            net_revenue: r2(netRevenue),
+            parts_revenue: r2(items.parts_revenue),
+            labor_revenue: r2(items.labor_revenue),
+            cash_collected: r2(cashCollected),
+            gcash_collected: r2(gcashCollected),
+            transfer_collected: r2(transferCollected),
+            collected_total: r2(collectedTotal),
+            credit_downpayments: r2(sales.credit_downpayments),
+            credit_issued: r2(sales.credit_issued),
+            credit_settled: r2(settlements.total),
+            warranty_returns: refunds.count,
+            return_replacements: refunds.replacements,
+            refunded_total: r2(refunds.total),
+            return_cash: r2(refunds.cash),
+            return_credit: r2(refunds.credit),
+            replacement_cost: r2(refunds.replacement_cost),
+            units_received: movements.units_received
+          };
+        };
+
+        const current = windowKpis(from, to);
+        const previous = windowKpis(prevFrom, prevTo);
+        // prev === 0 means "no prior window": a 0 to X jump has no honest
+        // percentage (same rule as the workstation's delta chips).
+        const deltas = {};
+        for (const k of Object.keys(current)) {
+          deltas[k] = typeof current[k] === 'number' && previous[k] !== 0
+            ? Math.round(((current[k] - previous[k]) / Math.abs(previous[k])) * 1000) / 10
+            : null;
+        }
+
+        const trendSales = db.prepare(`
+          SELECT date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) AS bucket,
+                 COUNT(*) AS count,
+                 COALESCE(SUM(${num('r','total_amount')}), 0) AS revenue
           FROM shop_rows r
           WHERE r.table_name = 'sales'${filterR.clause}
             AND COALESCE(CAST(json_extract(r.row_json,'$.voided') AS INTEGER), 0) = 0
-            AND date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
-        `).get(...filterR.params);
-
-        const settlements = db.prepare(`
-          SELECT COALESCE(SUM(${num('r','amount_paid')}), 0) AS total,
-                 COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'cash' THEN ${num('r','amount_paid')} ELSE 0 END), 0) AS cash,
-                 COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'gcash' THEN ${num('r','amount_paid')} ELSE 0 END), 0) AS gcash,
-                 COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.payment_method') = 'transfer' THEN ${num('r','amount_paid')} ELSE 0 END), 0) AS transfer
-          FROM shop_rows r
-          WHERE r.table_name = 'credit_payments'${filterR.clause}
-            AND date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
-        `).get(...filterR.params);
-
-        const refunds = db.prepare(`
-          SELECT COUNT(*) AS count,
-                 COALESCE(SUM(${num('r','refund_amount')}), 0) AS total,
-                 COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.return_type') = 'cash_refund' THEN ${num('r','refund_amount')} ELSE 0 END), 0) AS cash,
-                 COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.return_type') = 'replacement' THEN 1 ELSE 0 END), 0) AS replacements,
-                 COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.return_type') = 'replacement'
-                   THEN CAST(json_extract(r.row_json,'$.quantity') AS INTEGER) * COALESCE(CAST(json_extract(inv.row_json,'$.cost_price') AS REAL), 0.0)
-                   ELSE 0.0 END), 0.0) AS replacement_cost
-          FROM shop_rows r
-          LEFT JOIN shop_rows inv ON inv.table_name = 'inventory' AND inv.shop_id = r.shop_id
-            AND inv.local_id = CAST(json_extract(r.row_json,'$.replacement_inventory_id') AS INTEGER)
-          WHERE r.table_name = 'warranty_returns'${filterR.clause}
-            AND date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
-        `).get(...filterR.params);
-
-        const items = db.prepare(`
-          SELECT
-            COALESCE(SUM(CASE WHEN json_extract(i.row_json,'$.item_type') = 'part'
-              THEN CAST(json_extract(i.row_json,'$.quantity') AS INTEGER) * ${num('i','unit_cost')} ELSE 0 END), 0) AS cost,
-            COALESCE(SUM(CASE WHEN json_extract(i.row_json,'$.item_type') = 'part'
-              THEN ${num('i','total_price')} ELSE 0 END), 0) AS parts_revenue,
-            COALESCE(SUM(CASE WHEN json_extract(i.row_json,'$.item_type') = 'labor'
-              THEN ${num('i','total_price')} ELSE 0 END), 0) AS labor_revenue
+            AND ${inWindow('r', from, to)}
+          GROUP BY bucket ORDER BY bucket
+        `).all(...filterR.params);
+        const costs = new Map(db.prepare(`
+          SELECT date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER}) AS bucket,
+                 COALESCE(SUM(CAST(json_extract(i.row_json,'$.quantity') AS INTEGER) * ${num('i','unit_cost')}), 0) AS cost
           FROM shop_rows i
           JOIN shop_rows s ON s.table_name = 'sales' AND s.shop_id = i.shop_id
             AND s.local_id = CAST(json_extract(i.row_json,'$.sale_id') AS INTEGER)
-          WHERE i.table_name = 'sale_items'${filterI.clause}
+          WHERE i.table_name = 'sale_items' AND json_extract(i.row_json,'$.item_type') = 'part'${filterI.clause}
             AND COALESCE(CAST(json_extract(s.row_json,'$.voided') AS INTEGER), 0) = 0
-            AND date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
-        `).get(...filterI.params);
+            AND ${inWindow('s', from, to)}
+          GROUP BY bucket ORDER BY bucket
+        `).all(...filterI.params).map(t => [t.bucket, t.cost]));
+        const refundBuckets = new Map(db.prepare(`
+          SELECT date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) AS bucket,
+                 COALESCE(SUM(${num('r','refund_amount')} + CASE WHEN json_extract(r.row_json,'$.return_type') = 'replacement'
+                   AND COALESCE(CAST(json_extract(sv.row_json,'$.voided') AS INTEGER), 0) = 0
+                   THEN CAST(json_extract(r.row_json,'$.quantity') AS INTEGER) * COALESCE(CAST(json_extract(inv.row_json,'$.cost_price') AS REAL), 0.0)
+                   ELSE 0.0 END), 0) AS refunded
+          FROM shop_rows r
+          LEFT JOIN shop_rows inv ON inv.table_name = 'inventory' AND inv.shop_id = r.shop_id
+            AND inv.local_id = CAST(json_extract(r.row_json,'$.replacement_inventory_id') AS INTEGER)
+          LEFT JOIN shop_rows sv ON sv.table_name = 'sales' AND sv.shop_id = r.shop_id
+            AND sv.local_id = CAST(json_extract(r.row_json,'$.sale_id') AS INTEGER)
+          WHERE r.table_name = 'warranty_returns'${filterR.clause}
+            AND ${inWindow('r', from, to)}
+          GROUP BY bucket ORDER BY bucket
+        `).all(...filterR.params).map(t => [t.bucket, t.refunded]));
+        const trendMap = new Map(trendSales.map(t => [t.bucket, t]));
+        const trend = [...new Set([...trendMap.keys(), ...costs.keys(), ...refundBuckets.keys()])].sort().map(b => {
+          const t = trendMap.get(b) || { count: 0, revenue: 0 };
+          return {
+            bucket: b,
+            count: t.count,
+            revenue: r2(t.revenue),
+            profit: r2(t.revenue - (costs.get(b) || 0) - (refundBuckets.get(b) || 0))
+          };
+        });
 
         const tops = db.prepare(`
           SELECT i.shop_id,
                  MAX(CAST(json_extract(i.row_json,'$.item_name') AS TEXT)) AS item_name,
+                 MAX(json_extract(inv_d.row_json,'$.brand')) AS brand,
+                 MAX(json_extract(inv_d.row_json,'$.model_name')) AS model_name,
+                 MAX(json_extract(inv_d.row_json,'$.part_type')) AS part_type,
                  -- Per-line parity with src/analytics.js getProductPerformance:
                  -- net units and net revenue clamp at zero per LINE, refunds are
                  -- all-time per sale_item (no window), zero subtotal allocates
@@ -1044,79 +1238,158 @@ const server = http.createServer(async (req, res) => {
           FROM shop_rows i
           JOIN shop_rows s ON s.table_name = 'sales' AND s.shop_id = i.shop_id
             AND s.local_id = CAST(json_extract(i.row_json,'$.sale_id') AS INTEGER)
+          LEFT JOIN shop_rows inv_d ON inv_d.table_name = 'inventory' AND inv_d.shop_id = i.shop_id
+            AND inv_d.local_id = CAST(json_extract(i.row_json,'$.inventory_id') AS INTEGER)
           WHERE i.table_name = 'sale_items' AND json_extract(i.row_json,'$.inventory_id') IS NOT NULL${filterI.clause}
             AND COALESCE(CAST(json_extract(s.row_json,'$.voided') AS INTEGER), 0) = 0
-            AND date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
+            AND ${inWindow('s', from, to)}
           GROUP BY i.shop_id, json_extract(i.row_json,'$.inventory_id')
           ORDER BY revenue DESC
           LIMIT 10
         `).all(...filterI.params);
 
-        const trend = db.prepare(`
-          SELECT date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) AS bucket,
-                 COUNT(*) AS count,
-                 COALESCE(SUM(${num('r','total_amount')}), 0) AS revenue
-          FROM shop_rows r
-          WHERE r.table_name = 'sales'${filterR.clause}
-            AND COALESCE(CAST(json_extract(r.row_json,'$.voided') AS INTEGER), 0) = 0
-            AND date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
-          GROUP BY bucket ORDER BY bucket
-        `).all(...filterR.params);
-
-        const creditDown = db.prepare(`
-          SELECT COALESCE(SUM(${num('r','amount_paid')}), 0) AS total
-          FROM shop_rows r
-          WHERE r.table_name = 'sales'${filterR.clause}
-            AND COALESCE(CAST(json_extract(r.row_json,'$.voided') AS INTEGER), 0) = 0
-            AND json_extract(r.row_json,'$.payment_method') = 'credit'
-            AND date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
-        `).get(...filterR.params);
-        const adjustments = db.prepare(`
-          SELECT COALESCE(SUM(${num('r','amount')}), 0) AS total
-          FROM shop_rows r
-          WHERE r.table_name = 'cash_adjustments'${filterR.clause}
-            AND date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
-            AND NOT EXISTS (
-              SELECT 1 FROM shop_rows s
-              WHERE s.shop_id = r.shop_id AND s.table_name = 'sales'
-                AND json_extract(r.row_json,'$.source_kind') = 'sale_void'
-                AND s.local_id = CAST(json_extract(r.row_json,'$.source_id') AS INTEGER)
-                AND date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
-            )
-        `).get(...filterR.params);
-        const cashCollected = sales.cash_collected + creditDown.total + settlements.cash + adjustments.total - refunds.cash;
-        const gcashCollected = sales.gcash_collected + settlements.gcash;
-        const transferCollected = sales.transfer_collected + settlements.transfer;
-        const collectedTotal = sales.paid_at_counter + settlements.total + adjustments.total - refunds.cash;
-        const grossProfit = sales.revenue - items.cost;
-        const netProfit = grossProfit - refunds.total - refunds.replacement_cost;
         return json(res, 200, {
           generated_at: new Date().toISOString(),
-          period,
+          period: fromParam !== null || toParam !== null ? 'custom' : period,
           days,
-          current: {
-            sale_count: sales.sale_count,
-            revenue: r2(sales.revenue),
-            avg_ticket: r2(sales.sale_count ? sales.revenue / sales.sale_count : 0),
-            gross_profit: r2(grossProfit),
-            net_profit: r2(netProfit),
-            net_revenue: r2(sales.revenue - refunds.total),
-            parts_revenue: r2(items.parts_revenue),
-            labor_revenue: r2(items.labor_revenue),
-            cash_collected: r2(cashCollected),
-            gcash_collected: r2(gcashCollected),
-            transfer_collected: r2(transferCollected),
-            collected_total: r2(collectedTotal),
-            credit_downpayments: r2(creditDown.total),
-            credit_settled: r2(settlements.total),
-            warranty_returns: refunds.count,
-            return_replacements: refunds.replacements,
-            refunded_total: r2(refunds.total),
-            replacement_cost: r2(refunds.replacement_cost)
-          },
-          trend: trend.map(t => ({ bucket: t.bucket, count: t.count, revenue: r2(t.revenue) })),
-          top_products: tops.map(p => ({ shop_id: p.shop_id, item_name: p.item_name, units: p.units, revenue: r2(p.revenue), profit: r2(p.profit) }))
+          range: { from, to },
+          previous_range: { from: prevFrom, to: prevTo },
+          current,
+          previous,
+          deltas,
+          trend,
+          top_products: tops.map(p => ({
+            shop_id: p.shop_id,
+            item_name: p.item_name,
+            brand: p.brand || '',
+            model_name: p.model_name || '',
+            part_type: p.part_type || '',
+            units: p.units,
+            revenue: r2(p.revenue),
+            profit: r2(p.profit),
+            margin_pct: p.revenue > 0 ? Math.round((p.profit / p.revenue) * 1000) / 10 : null
+          }))
         });
+      }
+
+      // --- reorder & dead stock over the whole mirror ----------------------
+      // The workstation's getReorderList/getDeadStock recomputed here so the
+      // manager phone sees them without walking to the register. The old
+      // client-side low-stock filter ran on the newest-500 /api/rows window
+      // and dropped older breaches once the catalog outgrew the window.
+      if (p === '/api/reorder') {
+        const period = url.searchParams.get('period');
+        const days = ['day', '7d', '30d'].includes(period) ? { day: 1, '7d': 7, '30d': 30 }[period] : 30;
+        const since = `date('now',${TZ_MODIFIER},'-${days - 1} days')`;
+        const shop = url.searchParams.get('shop');
+        const filter = getStoreShopFilter(session.storeId, shop, 'i');
+        const rows = db.prepare(`
+          SELECT CAST(json_extract(i.row_json,'$.id') AS INTEGER) AS id,
+                 json_extract(i.row_json,'$.brand') AS brand,
+                 json_extract(i.row_json,'$.model_name') AS model_name,
+                 json_extract(i.row_json,'$.part_type') AS part_type,
+                 CAST(json_extract(i.row_json,'$.stock_quantity') AS INTEGER) AS stock_quantity,
+                 CAST(json_extract(i.row_json,'$.min_stock_alert') AS INTEGER) AS min_stock_alert,
+                 CAST(json_extract(i.row_json,'$.cost_price') AS REAL) AS cost_price,
+                 COALESCE(v.units, 0) AS units_sold
+          FROM shop_rows i
+          LEFT JOIN (
+            SELECT si.shop_id, CAST(json_extract(si.row_json,'$.inventory_id') AS INTEGER) AS inv_id,
+                   SUM(CAST(json_extract(si.row_json,'$.quantity') AS INTEGER)) AS units
+            FROM shop_rows si
+            JOIN shop_rows s ON s.table_name = 'sales' AND s.shop_id = si.shop_id
+              AND s.local_id = CAST(json_extract(si.row_json,'$.sale_id') AS INTEGER)
+            WHERE si.table_name = 'sale_items' AND json_extract(si.row_json,'$.inventory_id') IS NOT NULL
+              AND COALESCE(CAST(json_extract(s.row_json,'$.voided') AS INTEGER), 0) = 0
+              AND date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
+            GROUP BY si.shop_id, inv_id
+          ) v ON v.shop_id = i.shop_id AND v.inv_id = CAST(json_extract(i.row_json,'$.id') AS INTEGER)
+          WHERE i.table_name = 'inventory'${filter.clause}
+            AND COALESCE(CAST(json_extract(i.row_json,'$.archived') AS INTEGER), 0) = 0
+            AND (CAST(json_extract(i.row_json,'$.stock_quantity') AS INTEGER) <= CAST(json_extract(i.row_json,'$.min_stock_alert') AS INTEGER)
+              OR v.units > 0)
+        `).all(...filter.params);
+        const list = rows
+          .map(r => {
+            const restockQty = Math.max(1, (r.min_stock_alert - r.stock_quantity) + 1);
+            return {
+              id: r.id,
+              name: [r.brand, r.model_name, r.part_type].filter(Boolean).join(' '),
+              stock_quantity: r.stock_quantity,
+              min_stock_alert: r.min_stock_alert,
+              units_sold: r.units_sold,
+              cover_days: r.units_sold > 0 ? Math.round((r.stock_quantity * days / r.units_sold) * 10) / 10 : null,
+              below_min: r.stock_quantity <= r.min_stock_alert,
+              restock_qty: restockQty,
+              restock_cost: Math.round(restockQty * (Number(r.cost_price) || 0) * 100) / 100
+            };
+          })
+          .filter(r => r.below_min || (r.cover_days !== null && r.cover_days < 14))
+          .sort((a, b) => ((b.below_min ? 1 : 0) - (a.below_min ? 1 : 0)) || (a.stock_quantity - b.stock_quantity))
+          .slice(0, 300);
+        return json(res, 200, list);
+      }
+
+      if (p === '/api/dead-stock') {
+        const period = url.searchParams.get('period');
+        const days = ['day', '7d', '30d'].includes(period) ? { day: 1, '7d': 7, '30d': 30 }[period] : 30;
+        const since = `date('now',${TZ_MODIFIER},'-${days - 1} days')`;
+        const today = db.prepare(`SELECT date('now',${TZ_MODIFIER}) AS d`).get().d;
+        const shop = url.searchParams.get('shop');
+        const filter = getStoreShopFilter(session.storeId, shop, 'r');
+        const lastSold = new Map(db.prepare(`
+          SELECT si.shop_id, CAST(json_extract(si.row_json,'$.inventory_id') AS INTEGER) AS inv_id,
+                 MAX(date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER})) AS last_day
+          FROM shop_rows si
+          JOIN shop_rows s ON s.table_name = 'sales' AND s.shop_id = si.shop_id
+            AND s.local_id = CAST(json_extract(si.row_json,'$.sale_id') AS INTEGER)
+          WHERE si.table_name = 'sale_items' AND json_extract(si.row_json,'$.inventory_id') IS NOT NULL
+            AND COALESCE(CAST(json_extract(s.row_json,'$.voided') AS INTEGER), 0) = 0
+          GROUP BY si.shop_id, inv_id
+        `).all().map(r => [`${r.shop_id}:${r.inv_id}`, r.last_day]));
+        const soldInWindow = new Set(db.prepare(`
+          SELECT DISTINCT si.shop_id || ':' || CAST(json_extract(si.row_json,'$.inventory_id') AS INTEGER) AS key
+          FROM shop_rows si
+          JOIN shop_rows s ON s.table_name = 'sales' AND s.shop_id = si.shop_id
+            AND s.local_id = CAST(json_extract(si.row_json,'$.sale_id') AS INTEGER)
+          WHERE si.table_name = 'sale_items' AND json_extract(si.row_json,'$.inventory_id') IS NOT NULL
+            AND COALESCE(CAST(json_extract(s.row_json,'$.voided') AS INTEGER), 0) = 0
+            AND date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
+        `).all().map(r => r.key));
+        const rows = db.prepare(`
+          SELECT r.shop_id,
+                 CAST(json_extract(r.row_json,'$.id') AS INTEGER) AS id,
+                 json_extract(r.row_json,'$.brand') AS brand,
+                 json_extract(r.row_json,'$.model_name') AS model_name,
+                 json_extract(r.row_json,'$.part_type') AS part_type,
+                 CAST(json_extract(r.row_json,'$.stock_quantity') AS INTEGER) AS stock_quantity,
+                 CAST(json_extract(r.row_json,'$.cost_price') AS REAL) AS cost_price,
+                 date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) AS stocked_at
+          FROM shop_rows r
+          WHERE r.table_name = 'inventory'${filter.clause}
+            AND COALESCE(CAST(json_extract(r.row_json,'$.archived') AS INTEGER), 0) = 0
+            AND CAST(json_extract(r.row_json,'$.stock_quantity') AS INTEGER) > 0
+        `).all(...filter.params);
+        const dead = rows
+          .filter(r => !soldInWindow.has(`${r.shop_id}:${r.id}`))
+          .map(r => {
+            const stockedSince = r.stocked_at || today;
+            const last = lastSold.get(`${r.shop_id}:${r.id}`) || stockedSince;
+            const daysNoSale = Math.max(0, Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${last}T00:00:00Z`)) / 86400000));
+            return {
+              id: r.id,
+              shop_id: r.shop_id,
+              name: [r.brand, r.model_name, r.part_type].filter(Boolean).join(' '),
+              stock_quantity: r.stock_quantity,
+              tied_up_capital: Math.round(r.stock_quantity * (Number(r.cost_price) || 0) * 100) / 100,
+              last_sold: lastSold.has(`${r.shop_id}:${r.id}`) ? last : null,
+              days_no_sale: daysNoSale,
+              age_band: daysNoSale >= 90 ? '90+' : daysNoSale >= 60 ? '60+' : daysNoSale >= 30 ? '30+' : '<30'
+            };
+          })
+          .sort((a, b) => b.tied_up_capital - a.tied_up_capital)
+          .slice(0, 20);
+        return json(res, 200, dead);
       }
       return json(res, 404, { error: 'unknown endpoint' });
     }

@@ -497,6 +497,7 @@ function listReorderSuggestions(db, { days = 3 } = {}) {
   const rows = db.prepare(`
     SELECT i.id, i.brand, i.model_name, i.part_type, i.sku_barcode,
            i.supplier, i.stock_quantity, i.cost_price,
+           i.price_retail, i.price_technician, i.min_stock_alert, i.location,
            COALESCE(SUM(si.quantity), 0) AS qty_sold
     FROM sale_items si
     JOIN sales s ON s.id = si.sale_id AND s.voided = 0

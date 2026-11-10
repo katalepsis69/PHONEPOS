@@ -409,21 +409,43 @@ function updateAuditBanner({ sales, rets, reconciliations, adjustments }) {
     : 'No drawer shortages, voids, or returns logged';
 }
 
+function setDeltaPill(el, delta) {
+  if (!el) return;
+  const v = Number(delta);
+  // delta === null means "no previous window": Number(null) is 0, so the
+  // null must be checked before the finite test or an empty baseline
+  // renders as a fake "0% vs prev".
+  if (delta === null || delta === undefined || !Number.isFinite(v)) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.textContent = `${v >= 0 ? '▲' : '▼'} ${Math.abs(v)}% vs prev`;
+  el.classList.toggle('delta-up', v >= 0);
+  el.classList.toggle('delta-down', v < 0);
+}
+
 async function refresh() {
   if (!loggedIn) return;
   try {
     const shopQuery = selectedShop ? `&shop=${encodeURIComponent(selectedShop)}` : '';
+    const shopParam = selectedShop ? `?shop=${encodeURIComponent(selectedShop)}` : '';
     const standingPath = selectedShop ? `/api/standing?shop=${encodeURIComponent(selectedShop)}` : '/api/standing';
-    const [sales, utang, stock, rets, reconciliations, adjustments, overview, analytics, standing] = await Promise.all([
+    let analyticsQuery = 'period=' + period + shopQuery;
+    if (period === 'custom') {
+      const f = document.getElementById('range-from')?.value;
+      const t = document.getElementById('range-to')?.value;
+      analyticsQuery = `period=custom&from=${encodeURIComponent(f || '')}` + (t ? `&to=${encodeURIComponent(t)}` : '') + shopQuery;
+    }
+    const [sales, utang, reorder, rets, reconciliations, adjustments, shifts, overview, analytics, standing, deadStock] = await Promise.all([
       api('/api/rows?table=sales' + shopQuery),
       api('/api/rows?table=credit_payments' + shopQuery),
-      api('/api/rows?table=inventory' + shopQuery),
+      api('/api/reorder' + shopParam),
       api('/api/rows?table=warranty_returns' + shopQuery),
       api('/api/rows?table=day_reconciliations' + shopQuery),
       api('/api/rows?table=cash_adjustments' + shopQuery),
+      api('/api/rows?table=shifts' + shopQuery),
       api('/api/overview'),
-      api('/api/analytics?period=' + period + shopQuery),
+      api('/api/analytics?' + analyticsQuery),
       api(standingPath),
+      api('/api/dead-stock' + shopParam),
     ]);
 
     const shopsBadge = document.getElementById('shops-badge');
@@ -446,7 +468,7 @@ async function refresh() {
     }
 
     const c = analytics.current || {};
-    const periodLabel = { day: 'Today', '7d': '7 Days', '30d': '30 Days' }[period] || 'Today';
+    const periodLabel = { day: 'Today', '7d': '7 Days', '30d': '30 Days', custom: 'Custom' }[period] || 'Today';
     document.getElementById('hero-label-title').textContent = `Takings (${periodLabel})`;
     document.getElementById('hero-revenue').textContent = fmtMoney(c.net_revenue ?? c.revenue);
     document.getElementById('hero-cash').textContent = fmtMoney(c.cash_collected);
@@ -461,20 +483,23 @@ async function refresh() {
     if (colEl) colEl.textContent = `Collected ${fmtMoney(c.collected_total)}`;
     if (setEl) setEl.textContent = `Utang paid ${fmtMoney(c.credit_settled)}`;
 
+    setDeltaPill(document.getElementById('hero-revenue-delta'), analytics.deltas?.revenue);
+    setDeltaPill(document.getElementById('hero-profit-delta'), analytics.deltas?.net_profit);
+    const unitsEl = document.getElementById('hero-units');
+    if (unitsEl) unitsEl.textContent = `Delivered ${analytics.current.units_received || 0} units`;
+
     renderTrendAndMix(analytics);
 
     document.getElementById('card-utang').textContent = fmtMoney(standing.outstanding_credit);
     document.getElementById('card-utang-sub').textContent = `${standing.debtors || 0} open debtors`;
 
-    const lowStockItems = (stock || []).filter(i => !Number(i.archived) && Number(i.stock_quantity) <= Number(i.min_stock_alert));
+    // Server-computed over the whole mirror (/api/reorder + standing). The old
+    // client-side filter ran on the newest-500 /api/rows window and dropped
+    // older breaches once the catalog outgrew the window.
+    const lowStockItems = (reorder || []).filter(i => i.below_min);
     const stockoutCount = lowStockItems.filter(i => Number(i.stock_quantity) <= 0).length;
-    const restockBudget = lowStockItems.reduce((sum, i) => {
-      const qty = Number(i.stock_quantity) || 0;
-      const min = Number(i.min_stock_alert) || 0;
-      const deficit = Math.max(1, (min - qty) + 1);
-      return sum + deficit * (Number(i.cost_price) || 0);
-    }, 0);
-    document.getElementById('card-stock').textContent = `${lowStockItems.length} parts`;
+    const restockBudget = lowStockItems.reduce((sum, i) => sum + (Number(i.restock_cost) || 0), 0);
+    document.getElementById('card-stock').textContent = `${standing.low_stock_count} parts`;
     document.getElementById('card-stock-sub').textContent = lowStockItems.length
       ? `${stockoutCount} out · Restock ${fmtMoney(restockBudget)}`
       : 'Healthy inventory';
@@ -504,11 +529,12 @@ async function refresh() {
       analytics,
       sales,
       utang,
-      stock,
+      reorder,
       rets,
       reconciliations,
       adjustments,
-      lowStockItems,
+      shifts,
+      deadStock,
       debtors: standing.debtor_list
     };
     renderTab(lastLoadedData);
@@ -536,15 +562,23 @@ const CHIP_CONFIG = {
   stock: [
     { id: 'all', label: 'All Alerts' },
     { id: 'out', label: 'Stockout (0)' },
-    { id: 'low', label: 'Low Stock (1+)' }
+    { id: 'low', label: 'Low Stock (1+)' },
+    { id: 'fast', label: 'Fast Movers' }
+  ],
+  reorder: [
+    { id: 'all', label: 'All' },
+    { id: 'below', label: 'Below Minimum' },
+    { id: 'fast', label: 'Fast Movers' }
   ],
   reports: [
     { id: 'all', label: 'By Revenue' },
-    { id: 'profit', label: 'By Profit' }
+    { id: 'profit', label: 'By Profit' },
+    { id: 'dead', label: 'Dead Stock' }
   ],
   audit: [
     { id: 'all', label: 'All Events' },
     { id: 'drawer', label: 'Drawer Counts' },
+    { id: 'shifts', label: 'Shifts' },
     { id: 'voids', label: 'Voided Sales' },
     { id: 'cash_adj', label: 'Cash In/Out' },
     { id: 'rma', label: 'RMA Returns' }
@@ -573,12 +607,58 @@ function matchesQuery(text) {
   return String(text || '').toLowerCase().includes(feedSearchQuery);
 }
 
+// Sale tap-to-expand cache, keyed shop:id because /api/sale scopes by shop
+// when the manager is filtering one register. null = fetch in flight;
+// capped so a long session cannot grow it without bound.
+const expandedSales = new Map();
+
+function saleDetailHtml(detail) {
+  const s = detail.sale || {};
+  const lines = (detail.items || []).map(it => `
+    <div class="sale-detail-row">
+      <span>${esc(it.item_name || (it.item_type === 'labor' ? 'Repair labor' : 'Part'))}</span>
+      <span>x${Number(it.quantity) || 0}</span>
+      <span>${fmtMoney(it.total_price)}</span>
+    </div>`).join('');
+  const moneyRow = (label, val, cls = '') => `
+    <div class="sale-detail-row${cls}"><span>${esc(label)}</span><span></span><span>${fmtMoney(val)}</span></div>`;
+  return `
+    <div class="sale-detail">
+      ${lines || '<div class="sale-detail-row"><span>No line items synced for this sale.</span></div>'}
+      ${moneyRow('Subtotal', s.subtotal)}
+      ${Number(s.discount) > 0 ? moneyRow('Discount', -Number(s.discount)) : ''}
+      ${moneyRow('Total', s.total_amount, ' sale-detail-total')}
+    </div>`;
+}
+
+async function toggleSaleDetail(item) {
+  const saleId = item.getAttribute('data-sale-id');
+  if (!saleId) return;
+  const shopId = item.getAttribute('data-sale-shop') || selectedShop || '';
+  const key = `${shopId}:${saleId}`;
+  if (expandedSales.has(key)) {
+    expandedSales.delete(key);
+    renderTab(lastLoadedData);
+    return;
+  }
+  if (expandedSales.size > 50) expandedSales.clear();
+  expandedSales.set(key, null);
+  renderTab(lastLoadedData);
+  try {
+    expandedSales.set(key, await api(`/api/sale?id=${encodeURIComponent(saleId)}${shopId ? `&shop=${encodeURIComponent(shopId)}` : ''}`));
+  } catch (err) {
+    expandedSales.set(key, { error: err.message || 'request failed' });
+  }
+  renderTab(lastLoadedData);
+}
+
 function renderTab(data) {
   if (!data) return;
   const titleMap = {
     sales: 'Live Sales Stream',
     utang: 'Open Utang Balances',
     stock: 'Critical Stock Radar',
+    reorder: 'Reorder List',
     reports: 'Top Selling Parts',
     audit: 'Cashier & Drawer Audit'
   };
@@ -619,8 +699,15 @@ function renderTab(data) {
         : (isUtang
           ? 'Utang'
           : (s.payment_method === 'transfer' ? 'Transfer' : esc(s.payment_method || 'Cash')));
+      const key = `${s.shop_id || selectedShop || ''}:${s.id}`;
+      const detail = expandedSales.get(key);
+      const detailHtml = detail === undefined ? '' : (detail === null
+        ? '<div class="sale-detail">Loading items...</div>'
+        : (detail.error
+          ? `<div class="sale-detail">Could not load items: ${esc(detail.error)}</div>`
+          : saleDetailHtml(detail)));
       return `
-        <div class="feed-item">
+        <div class="feed-item sale-row" data-sale-id="${esc(s.id)}" data-sale-shop="${esc(s.shop_id || selectedShop || '')}" role="button" tabindex="0" aria-expanded="${detail === undefined ? 'false' : 'true'}">
           <div class="feed-left">
             <div class="feed-code-row">
               <span class="feed-code">${esc(s.sale_code || '#SALE')}</span>
@@ -632,7 +719,7 @@ function renderTab(data) {
             <div class="feed-amt ${isUtang ? 'debt' : ''}"${voided ? ' style="text-decoration:line-through;opacity:.55"' : ''}>${fmtMoney(s.total_amount)}</div>
             <div class="feed-time">${timeAgo(s.created_at)}</div>
           </div>
-        </div>
+        </div>${detailHtml}
       `;
     }).join('');
   } else if (currentTab === 'utang') {
@@ -676,38 +763,38 @@ function renderTab(data) {
       <div class="feed-item">
         <div class="feed-left">
           <span class="feed-code">${esc(d.name || 'Walk-in')}</span>
-          <div class="feed-meta">Last transaction ${timeAgo(d.last_at)}</div>
+          <div class="feed-meta">Last transaction ${timeAgo(d.last_at)}${d.phone ? ` · <a class="debtor-tel" href="tel:${esc(d.phone)}">${esc(d.phone)}</a>` : ''}</div>
         </div>
         <div class="feed-right" style="display: flex; align-items: center; gap: 8px;">
           <div class="feed-amt debt">${fmtMoney(d.balance)}</div>
         </div>
       </div>
     `).join('');
-  } else if (currentTab === 'stock') {
-    const filtered = (data.lowStockItems || []).filter(item => {
+  } else if (currentTab === 'stock' || currentTab === 'reorder') {
+    const filtered = (data.reorder || []).filter(item => {
       const qty = Number(item.stock_quantity) || 0;
       if (feedChip === 'out' && qty > 0) return false;
       if (feedChip === 'low' && qty <= 0) return false;
-      return matchesQuery(`${item.brand || ''} ${item.model_name || ''} ${item.part_type || ''}`);
+      if (feedChip === 'below' && !item.below_min) return false;
+      if (feedChip === 'fast' && !(!item.below_min && Number(item.units_sold) > 0)) return false;
+      return matchesQuery(item.name);
     });
     const rows = filtered.slice(0, 50);
-    if (countEl) countEl.textContent = `${rows.length} alerts`;
+    if (countEl) countEl.textContent = `${rows.length} ${currentTab === 'reorder' ? 'parts' : 'alerts'}`;
     if (!rows.length) {
-      box.innerHTML = '<div class="empty-state">All parts are at or above healthy stock levels.</div>';
+      box.innerHTML = `<div class="empty-state">${feedChip === 'fast' ? 'No fast movers are running low on cover.' : 'All parts are at or above healthy stock levels.'}</div>`;
       return;
     }
     box.innerHTML = rows.map(item => {
       const qty = Number(item.stock_quantity) || 0;
-      const min = Number(item.min_stock_alert) || 0;
-      const cost = Number(item.cost_price) || 0;
-      const restockQty = Math.max(1, (min - qty) + 1);
-      const restockCost = restockQty * cost;
-      const costNote = cost > 0 ? ` · Restock ${restockQty} (${fmtMoney(restockCost)})` : '';
+      const coverNote = item.cover_days !== null && item.cover_days !== undefined
+        ? ` · ${item.units_sold} sold/30d · ${item.cover_days}d cover`
+        : '';
       return `
         <div class="feed-item">
           <div class="feed-left">
-            <span class="feed-code">${esc(item.brand)} ${esc(item.model_name)}</span>
-            <div class="feed-meta">${esc(item.part_type)} · Alert threshold: ${esc(item.min_stock_alert)}${costNote}</div>
+            <span class="feed-code">${esc(item.name || 'Part')}</span>
+            <div class="feed-meta">Alert threshold: ${esc(item.min_stock_alert)} · Restock ${esc(item.restock_qty)} (${fmtMoney(item.restock_cost)})${coverNote}</div>
           </div>
           <div class="feed-right">
             <span class="badge ${qty <= 0 ? 'utang' : 'warn'}">${esc(item.stock_quantity)} units left</span>
@@ -716,6 +803,27 @@ function renderTab(data) {
       `;
     }).join('');
   } else if (currentTab === 'reports') {
+    if (feedChip === 'dead') {
+      const dead = (data.deadStock || []).filter(p => matchesQuery(p.name));
+      if (countEl) countEl.textContent = `${dead.length} parts`;
+      if (!dead.length) {
+        box.innerHTML = '<div class="empty-state">Everything on the shelf sold within this window.</div>';
+        return;
+      }
+      box.innerHTML = dead.map(p => `
+        <div class="feed-item">
+          <div class="feed-left">
+            <span class="feed-code">${esc(p.name || 'Part')}</span>
+            <div class="feed-meta">${p.stock_quantity} in stock · no sale for ${p.days_no_sale}d · last ${p.last_sold ? esc(p.last_sold) : 'never recorded'}</div>
+          </div>
+          <div class="feed-right">
+            <div class="feed-amt debt">${fmtMoney(p.tied_up_capital)}</div>
+            <div class="feed-time">band ${esc(p.age_band)}</div>
+          </div>
+        </div>
+      `).join('');
+      return;
+    }
     const raw = (data.analytics?.top_products || []).slice();
     if (feedChip === 'profit') {
       raw.sort((a, b) => (Number(b.profit) || 0) - (Number(a.profit) || 0));
@@ -755,6 +863,23 @@ function renderTab(data) {
           meta: `Counted ${fmtMoney(r.counted_cash)} vs Expected ${fmtMoney(r.expected_cash)}`,
           amt: fmtMoney(v),
           amtClass: Math.abs(v) < 0.01 ? '' : (v < 0 ? 'debt' : 'warn')
+        });
+      }
+    }
+    if (feedChip === 'all' || feedChip === 'shifts') {
+      for (const sh of (data.shifts || [])) {
+        const open = sh.status !== 'closed';
+        const variance = Number(sh.variance) || 0;
+        events.push({
+          ts: open ? (sh.opened_at || '') : (sh.closed_at || sh.opened_at || ''),
+          code: open ? 'Shift Open' : 'Shift Close',
+          badge: open ? 'Open' : (Math.abs(variance) < 0.01 ? 'Balanced' : (variance < 0 ? 'Shortage' : 'Overage')),
+          badgeClass: open ? 'gcash' : (Math.abs(variance) < 0.01 ? 'cash' : (variance < 0 ? 'utang' : 'warn')),
+          meta: open
+            ? `${sh.staff_name || 'Counter'} opened with float ${fmtMoney(sh.opening_float)}`
+            : `${sh.staff_name || 'Counter'} · Counted ${fmtMoney(sh.counted_cash)} vs Expected ${fmtMoney(sh.expected_cash)}`,
+          amt: open ? '' : fmtMoney(variance),
+          amtClass: variance < 0 ? 'debt' : 'warn'
         });
       }
     }
@@ -1057,8 +1182,28 @@ document.querySelectorAll('.period-tab').forEach(tab => {
     tab.classList.add('active');
     tab.setAttribute('aria-selected', 'true');
     period = tab.dataset.period;
+    const customRow = document.getElementById('custom-range-row');
+    if (customRow) customRow.classList.toggle('hidden', period !== 'custom');
+    if (period === 'custom') {
+      const fromInput = document.getElementById('range-from');
+      if (fromInput && !fromInput.value) fromInput.value = new Date().toLocaleDateString('en-CA');
+    }
     refresh();
   });
+});
+
+document.getElementById('range-from')?.addEventListener('change', () => refresh());
+document.getElementById('range-to')?.addEventListener('change', () => refresh());
+
+document.getElementById('rows')?.addEventListener('click', e => {
+  if (currentTab !== 'sales') return;
+  const item = e.target.closest('.sale-row');
+  if (item) toggleSaleDetail(item);
+});
+document.getElementById('rows')?.addEventListener('keydown', e => {
+  if (currentTab !== 'sales' || (e.key !== 'Enter' && e.key !== ' ')) return;
+  const item = e.target.closest('.sale-row');
+  if (item) { e.preventDefault(); toggleSaleDetail(item); }
 });
 
 document.querySelectorAll('.nav-btn, .desk-tab').forEach(btn => {
