@@ -225,8 +225,10 @@ export async function downloadCsvFile(url, filename) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    return true;
   } catch (err) {
     showToast(`Error exporting: ${err.message}`, 'error');
+    return false;
   }
 }
 

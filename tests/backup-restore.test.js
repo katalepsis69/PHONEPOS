@@ -186,7 +186,10 @@ serverTest('GET /api/backup/download guards, traversal rejection, integrity chec
   fs.writeFileSync(path.join(dir, 'shop_backup_corrupt.db'), 'definitely not a valid sqlite database');
   const corruptRes = await fetch(`${baseUrl}/api/backup/download?file=shop_backup_corrupt.db`, { headers: { ...managerAuth } });
   assert.equal(corruptRes.status, 400);
-  assert.match((await corruptRes.json()).error, /integrity/i);
+  const corruptBody = await corruptRes.json();
+  assert.match(corruptBody.error, /integrity/i);
+  assert.match(corruptBody.error, /cannot be downloaded/i);
+  assert.doesNotMatch(corruptBody.error, /restored/i);
 
   // 6. Create valid backup, then download with ?file=
   const bRes = await fetch(`${baseUrl}/api/backup`, { method: 'POST', headers: { ...managerAuth } });

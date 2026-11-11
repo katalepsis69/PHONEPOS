@@ -1332,7 +1332,7 @@ function createServer(opts = {}) {
           let name;
           let source;
           if (fileParam) {
-            const resolved = resolveVerifiedBackup(backupDir, fileParam);
+            const resolved = resolveVerifiedBackup(backupDir, fileParam, 'downloaded');
             name = resolved.name;
             source = resolved.source;
           } else {
@@ -1803,7 +1803,7 @@ function verifyBackupFile(filePath) {
   }
 }
 
-function resolveVerifiedBackup(backupDir, rawFile) {
+function resolveVerifiedBackup(backupDir, rawFile, action = 'restored') {
   const name = String(rawFile || '');
   if (!/^(shop-|shop_backup_).*\.db$/.test(name) || path.basename(name) !== name) {
     const err = new Error('Pick a backup from the list');
@@ -1817,7 +1817,7 @@ function resolveVerifiedBackup(backupDir, rawFile) {
     throw err;
   }
   if (!verifyBackupFile(source)) {
-    const err = new Error('That backup file failed its integrity check and cannot be restored');
+    const err = new Error(`That backup file failed its integrity check and cannot be ${action}`);
     err.statusCode = 400;
     throw err;
   }

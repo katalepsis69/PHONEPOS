@@ -1496,6 +1496,7 @@ test('Task 3: downloadBackup requires elevation, creates backup, and triggers br
   let downloadedFile = '';
   let elevated = false;
 
+  let toastCalls = [];
   const ctx = vm.createContext({
     hasElevation: () => elevated,
     requireManagerPin: (reason, cb) => {
@@ -1513,8 +1514,9 @@ test('Task 3: downloadBackup requires elevation, creates backup, and triggers br
     downloadCsvFile: async (url, file) => {
       downloadedUrl = url;
       downloadedFile = file;
+      return true;
     },
-    showToast: () => {}
+    showToast: (msg, type) => { toastCalls.push({ msg, type }); }
   });
   vm.runInContext(code, ctx);
 
@@ -1523,6 +1525,59 @@ test('Task 3: downloadBackup requires elevation, creates backup, and triggers br
   assert.equal(backupPostCalled, true, 'must call POST /api/backup');
   assert.equal(downloadedFile, 'shop-20261111-test.db');
   assert.ok(downloadedUrl.includes('/api/backup/download?file=shop-20261111-test.db'));
+  assert.ok(toastCalls.some(t => t.type === 'success' && t.msg.includes('Backup downloaded')), 'emits success toast when download succeeds');
+
+  // When downloadCsvFile returns false (failed/rejected download), NO success toast must be emitted
+  toastCalls = [];
+  const ctxFailed = vm.createContext({
+    hasElevation: () => true,
+    requireManagerPin: (_reason, cb) => cb(),
+    fetch: async () => ({ ok: true, json: async () => ({ success: true, backup_file: 'shop-20261111-fail.db' }) }),
+    downloadCsvFile: async () => false,
+    showToast: (msg, type) => { toastCalls.push({ msg, type }); }
+  });
+  vm.runInContext(code, ctxFailed);
+  await ctxFailed.downloadBackup();
+  assert.equal(toastCalls.filter(t => t.type === 'success').length, 0, 'must NOT emit success toast when downloadCsvFile returns false');
+});
+
+test('downloadCsvFile returns true on success and false on error', async () => {
+  const mainSrc = source('public/js/main.js');
+  const start = mainSrc.indexOf('export async function downloadCsvFile(');
+  const end = mainSrc.indexOf('\nexport ', start + 1);
+  const code = mainSrc.slice(start, end > -1 ? end : undefined).replace('export ', '');
+
+  let clicked = false;
+  const fakeElement = {
+    set href(v) {},
+    set download(v) {},
+    click: () => { clicked = true; },
+    remove: () => {}
+  };
+  const makeCtx = (fetchImpl) => vm.createContext({
+    fetch: fetchImpl,
+    document: {
+      createElement: () => fakeElement,
+      body: { appendChild: () => {} }
+    },
+    URL: {
+      createObjectURL: () => 'blob:test',
+      revokeObjectURL: () => {}
+    },
+    setTimeout: (fn) => fn(),
+    showToast: () => {}
+  });
+
+  const ctxSuccess = makeCtx(async () => ({ ok: true, blob: async () => ({}) }));
+  vm.runInContext(code, ctxSuccess);
+  const successResult = await ctxSuccess.downloadCsvFile('/test', 'test.csv');
+  assert.equal(successResult, true, 'downloadCsvFile must return true on success');
+  assert.equal(clicked, true, 'download trigger clicked');
+
+  const ctxFail = makeCtx(async () => ({ ok: false }));
+  vm.runInContext(code, ctxFail);
+  const failResult = await ctxFail.downloadCsvFile('/test', 'test.csv');
+  assert.equal(failResult, false, 'downloadCsvFile must return false on HTTP failure');
 });
 
 test('Task 3: submitPinChange prompts for recovery password when !S.recoveryConfigured', async () => {

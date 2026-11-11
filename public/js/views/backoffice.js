@@ -1763,8 +1763,10 @@ export async function downloadBackup() {
       throw new Error(data.error || 'Backup creation failed');
     }
     const dl = typeof downloadCsvFile === 'function' ? downloadCsvFile : (await import('../main.js')).downloadCsvFile;
-    await dl('/api/backup/download?file=' + encodeURIComponent(data.backup_file), data.backup_file);
-    showToast(`Backup downloaded: ${data.backup_file}`, 'success');
+    const downloaded = await dl('/api/backup/download?file=' + encodeURIComponent(data.backup_file), data.backup_file);
+    if (downloaded) {
+      showToast(`Backup downloaded: ${data.backup_file}`, 'success');
+    }
   } catch (err) {
     showToast(`Error creating backup download: ${err.message}`, 'error');
   }

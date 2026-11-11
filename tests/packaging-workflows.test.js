@@ -251,6 +251,9 @@ test('Inno Setup installer script configures SYSTEM service, ACLs, and preserves
   assert.match(iss, /TechPartsPOS-Server/, 'scheduled task name must be TechPartsPOS-Server');
   assert.match(iss, /PrepareToInstall/, 'installer must implement PrepareToInstall to stop service');
   assert.match(iss, /InitializeUninstall/, 'installer must implement InitializeUninstall to stop service');
+  assert.match(iss, /<\?xml version="1\.0" encoding="UTF-8"\?>/, 'task XML must include UTF-8 XML declaration');
+  assert.doesNotMatch(iss, /ssPostInstall[\s\S]*?DeleteFile\s*\(\s*XmlFile\s*\)/i, 'must not delete temporary task XML during ssPostInstall before [Run]');
+  assert.match(iss, /CurStep\s*=\s*ssDone[\s\S]*?DeleteFile\s*\(\s*XmlFile\s*\)/i, 'must delete temporary task XML during ssDone after [Run]');
 
   const uninstallDeleteSection = iss.split(/\[UninstallDelete\]/i)[1]?.split(/\[/)[0] || '';
   assert.doesNotMatch(uninstallDeleteSection, /\{commonappdata\}\\TechPartsPOS|ProgramData\\TechPartsPOS/i, 'UninstallDelete must never delete ProgramData/TechPartsPOS');
