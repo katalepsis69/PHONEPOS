@@ -283,7 +283,7 @@ function createServer(opts = {}) {
   const options = typeof opts === 'string' ? { dbPath: opts } : (opts || {});
   const dbPath = options.dbPath || RUNTIME_DB_PATH;
   const backupDir = options.backupDir || RUNTIME_BACKUP_DIR;
-  const isServiceMode = Boolean(options.serviceMode ?? (process.argv.includes('--service') || process.env.POS_TEST_SERVICE_MODE === '1' || process.env.POS_SERVICE_MODE === '1'));
+  const isServiceMode = Boolean(options.serviceMode ?? serviceModeFromEnv());
   // let, not const: /api/backup/restore swaps the handle after loading a
   // backup file; every handler reads this binding at request time.
   let db = initDb(dbPath);
@@ -1907,6 +1907,13 @@ let hasReceivedInitialHeartbeat = false;
 let autoExitWatchdog = null;
 let listenerUp = false;
 
+function serviceModeFromEnv(argv = process.argv) {
+  // One derivation for every service-mode check: the --service argv flag or
+  // the documented POS_SERVICE_MODE / POS_TEST_SERVICE_MODE env overrides.
+  // Splitting this expression across call sites let one site forget the env
+  // vars and read the wrong staging dir.
+  return (argv || []).includes('--service') || process.env.POS_TEST_SERVICE_MODE === '1' || process.env.POS_SERVICE_MODE === '1';
+}
 function resolveLaunchMode({ execPath = process.execPath, argv = process.argv, env = process.env } = {}) {
   if ((argv || []).includes('--service')) return 'service';
   if (!/^node(\.exe)?$/i.test(path.basename(execPath || '')) && isProgramFilesPath(path.dirname(execPath || '')) && !env?.POS_DB_PATH) {
@@ -1927,7 +1934,7 @@ function browserProfileDir(env = process.env) {
 // lock next to the DB makes a second double-click hand off: it reopens the
 // browser on the running instance's port and exits. Tests (NODE_ENV=test) and
 // deliberate multi-instance runs (POS_ALLOW_MULTI=1) bypass the hand-off.
-function instanceLockPath(serviceMode = Boolean((process.argv && process.argv.includes('--service')) || process.env.POS_TEST_SERVICE_MODE === '1' || process.env.POS_SERVICE_MODE === '1')) {
+function instanceLockPath(serviceMode = serviceModeFromEnv()) {
   if (serviceMode) {
     return path.join(getBaseDir(), 'runtime', 'server.lock');
   }
@@ -2249,7 +2256,7 @@ function startServer(preferredPort = process.env.PORT ? parseInt(process.env.POR
 
     // The previous update's helper wrote its milestones here; the swap outcome
     // is otherwise invisible (detached process, stdio ignored).
-    consumeHandoffStatus(defaultUpdateStagingDir(process.argv.includes('--service')));
+    consumeHandoffStatus(defaultUpdateStagingDir(serviceModeFromEnv()));
 
     // Hourly tick on the date-idempotent guard: a startup-only backup lets the
     // data-loss window grow with uptime on a workstation left running for days.
@@ -2295,7 +2302,7 @@ function startServer(preferredPort = process.env.PORT ? parseInt(process.env.POR
     // not write the machine lock either — keeps %LOCALAPPDATA% clean.
     if (!isTestEnv()) {
       writeInstanceLock(currentPort);
-      const isService = Boolean((process.argv && process.argv.includes('--service')) || process.env.POS_TEST_SERVICE_MODE === '1' || process.env.POS_SERVICE_MODE === '1');
+      const isService = serviceModeFromEnv();
       if (isService) {
         writeRuntimeState(currentPort);
       }
