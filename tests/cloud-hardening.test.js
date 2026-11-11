@@ -1104,3 +1104,13 @@ test('cloud csvCell escapes spreadsheet formulas, cloud/ matches cloud-deploy/, 
     try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+test('manager app escapes debtor identity fields, including the tel: href', () => {
+  const appSrc = fs.readFileSync(path.join(ROOT, 'cloud', 'public', 'app.js'), 'utf8');
+  assert.match(appSrc, /href="tel:\$\{esc\(d\.phone\)\}"/, 'the tel: href must interpolate through esc');
+  assert.match(appSrc, /\$\{esc\(d\.name \|\| 'Walk-in'\)\}/, 'the debtor name must interpolate through esc');
+  // The pin must hold for both deploy trees (the byte-identity test above
+  // already proves they move together; this names the rule for readers).
+  const deploySrc = fs.readFileSync(path.join(ROOT, 'cloud-deploy', 'public', 'app.js'), 'utf8');
+  assert.strictEqual(appSrc, deploySrc, 'cloud/ and cloud-deploy/ app.js must stay identical');
+});
