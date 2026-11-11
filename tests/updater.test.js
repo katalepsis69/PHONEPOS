@@ -14,12 +14,15 @@ const {
   digestUrlFor,
   digestMatches,
   buildApplyScript,
+  defaultUpdateStagingDir,
+  consumeHandoffStatus,
   setUpdateTestHooks,
   checkForUpdates,
   applyUpdate,
   CURRENT_VERSION,
   REPO
 } = require('../src/updater');
+const { getBaseDir } = require('../src/db');
 // The route test goes through the shared harness so it gets a temp database and the
 // sentinel printer queue, exactly like every other server test in this suite.
 const { serverTest, ensurePinChanged } = require('./helper');
@@ -314,6 +317,38 @@ test('updater: the apply helper is cmd builtins only, so it can never open a win
   assert.ok(restore.includes('restore size mismatch'), 'a foreign .old is flagged in the handoff log');
   assert.ok(script.includes('del "%~f0"'), 'the script deletes itself');
   assert.ok(script.endsWith('\r\n'), 'batch files need CRLF');
+});
+
+test('updater: buildApplyScript with serviceMode: true relaunches via schtasks in both branches and omits start', () => {
+  const script = buildApplyScript({
+    stagingExe: 'C:/stage/TechPartsPOS_update.exe',
+    targetExe: 'C:/app/TechPartsPOS.exe',
+    resumeMarker: 'C:/stage/TechPartsPOS_update.resume',
+    handoffLog: 'C:/stage/TechPartsPOS_update.handoff.log',
+    oldSizePath: 'C:/stage/TechPartsPOS_update.oldsize.txt',
+    serviceMode: true
+  });
+
+  assert.ok(script.includes('schtasks /Run /TN "TechPartsPOS-Server" >nul 2>&1'), 'emits schtasks relaunch');
+  assert.ok(!script.includes('start ""'), 'omits start "" when serviceMode is true');
+  assert.ok(!script.includes('NO_LAUNCH_BROWSER'), 'omits NO_LAUNCH_BROWSER when serviceMode is true');
+
+  const startnew = script.slice(script.indexOf(':startnew'), script.indexOf('goto done'));
+  assert.ok(startnew.includes('schtasks /Run /TN "TechPartsPOS-Server" >nul 2>&1'), ':startnew branch relaunches via schtasks');
+  assert.ok(!startnew.includes('start ""'), ':startnew branch omits start ""');
+
+  const restore = script.slice(script.indexOf(':restore'), script.indexOf(':done'));
+  assert.ok(restore.includes('schtasks /Run /TN "TechPartsPOS-Server" >nul 2>&1'), ':restore branch relaunches via schtasks');
+  assert.ok(!restore.includes('start ""'), ':restore branch omits start ""');
+});
+
+test('updater: defaultUpdateStagingDir resolves service updates dir vs LocalAppData', () => {
+  assert.equal(typeof defaultUpdateStagingDir, 'function');
+  const serviceDir = defaultUpdateStagingDir(true);
+  assert.equal(serviceDir, path.join(getBaseDir(), 'updates'));
+
+  const userDir = defaultUpdateStagingDir(false);
+  assert.equal(userDir, path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'TechPartsPOS'));
 });
 
 // The download, size check, digest fetch and staging used to be unreachable from
@@ -680,6 +715,93 @@ test('updater: the retry ladder runs past two attempts when the seam raises maxA
     assert.equal(calls, 4, 'the ladder retried past the old two-attempt seam cap');
   } finally {
     setUpdateTestHooks(null);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('updater: applyUpdate with serviceMode: true writes apply_update.cmd with schtasks and uses service staging dir when stagingDir hook is unset', async () => {
+  const serviceStaging = path.join(getBaseDir(), 'updates');
+  const bytes = Buffer.alloc(1024 * 1024 + 20, 0x5a);
+  const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith('.sha256')) return new Response(digest, { status: 200 });
+    if (String(url).includes('api.github.com')) throw new Error('no feed in this test');
+    return new Response(bytes, { status: 200 });
+  };
+
+  setUpdateTestHooks({ fetchImpl, allowUnpackaged: true, skipSpawn: true });
+  try {
+    const res = await applyUpdate({ downloadUrl: assetUrl(), expectedBytes: bytes.length, serviceMode: true });
+    assert.equal(res.success, true);
+    const scriptPath = path.join(serviceStaging, 'apply_update.cmd');
+    assert.ok(fs.existsSync(scriptPath), 'apply_update.cmd written in service staging updates dir');
+    const script = fs.readFileSync(scriptPath, 'utf8');
+    assert.ok(script.includes('schtasks /Run /TN "TechPartsPOS-Server" >nul 2>&1'), 'apply script relaunches via schtasks');
+    assert.ok(!script.includes('start ""'), 'apply script omits start ""');
+  } finally {
+    setUpdateTestHooks(null);
+    try { fs.rmSync(path.join(serviceStaging, 'TechPartsPOS_update.exe'), { force: true }); } catch (_) {}
+    try { fs.rmSync(path.join(serviceStaging, 'TechPartsPOS_update.resume'), { force: true }); } catch (_) {}
+    try { fs.rmSync(path.join(serviceStaging, 'apply_update.cmd'), { force: true }); } catch (_) {}
+    try { fs.rmSync(path.join(serviceStaging, 'TechPartsPOS_update.handoff.log'), { force: true }); } catch (_) {}
+    try { fs.rmSync(path.join(serviceStaging, 'oldsize.txt'), { force: true }); } catch (_) {}
+  }
+});
+
+test('updater: consumeHandoffStatus reads and unlinks handoff log from staging dir', () => {
+  const dir = tempStagingDir();
+  try {
+    const logPath = path.join(dir, 'TechPartsPOS_update.handoff.log');
+    fs.writeFileSync(logPath, 'handoff started\r\ncopy ok\r\n');
+    consumeHandoffStatus(dir);
+    assert.equal(fs.existsSync(logPath), false, 'handoff log should be unlinked after consumption');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('updater: /api/system/update/apply forwards serviceMode to applyUpdate and helper script', async () => {
+  const { createServer } = require('../src/server');
+  const dir = tempStagingDir();
+  const dbPath = path.join(dir, 'test.db');
+  const { server, db } = createServer({ dbPath, serviceMode: true });
+  try {
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    let auth = {};
+    const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: '1234' })
+    });
+    const loginData = await loginRes.json();
+    auth['Authorization'] = `Bearer ${loginData.token}`;
+    auth = await ensurePinChanged(baseUrl, auth);
+
+    const bytes = Buffer.alloc(1024 * 1024 + 11, 4);
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    const fetchImpl = async (url) => {
+      if (String(url).endsWith('.sha256')) return new Response(`${digest}  TechPartsPOS.exe`, { status: 200 });
+      if (String(url).includes('api.github.com')) throw new Error('no feed in this test');
+      return new Response(bytes, { status: 200 });
+    };
+    setUpdateTestHooks({ fetchImpl, stagingDir: dir, allowUnpackaged: true, skipSpawn: true });
+
+    const res = await fetch(`${baseUrl}/api/system/update/apply`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ downloadUrl: `https://github.com/${REPO}/releases/download/${NEWER_TAG}/TechPartsPOS.exe`, expectedBytes: bytes.length })
+    });
+    assert.equal(res.status, 200);
+    const script = fs.readFileSync(path.join(dir, 'apply_update.cmd'), 'utf8');
+    assert.ok(script.includes('schtasks /Run /TN "TechPartsPOS-Server" >nul 2>&1'), 'service mode apply route generated schtasks relaunch');
+    assert.ok(!script.includes('start ""'), 'service mode apply route omitted start ""');
+  } finally {
+    setUpdateTestHooks(null);
+    await new Promise((resolve) => server.close(resolve));
+    db?.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

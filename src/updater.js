@@ -5,6 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { getBaseDir } = require('./db');
 
 const REPO = 'katalepsis69/PHONEPOS';
 const CURRENT_VERSION = '2.8';
@@ -392,7 +393,13 @@ async function checkForUpdatesInner(currentVer = CURRENT_VERSION) {
  * the running exe to "<exe>.old" first, which frees the target path and leaves
  * behind the twin whose deletion tells the helper this process is gone.
  */
-function buildApplyScript({ stagingExe, targetExe, resumeMarker, handoffLog, oldSizePath }) {
+function defaultUpdateStagingDir(serviceMode = process.argv.includes('--service')) {
+  return serviceMode
+    ? path.join(getBaseDir(), 'updates')
+    : path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'TechPartsPOS');
+}
+
+function buildApplyScript({ stagingExe, targetExe, resumeMarker, handoffLog, oldSizePath, serviceMode = false }) {
   const winStaging = String(stagingExe).replace(/\//g, '\\');
   const winExe = String(targetExe).replace(/\//g, '\\');
   const winOld = `${winExe}.old`;
@@ -400,6 +407,9 @@ function buildApplyScript({ stagingExe, targetExe, resumeMarker, handoffLog, old
   const winHandoff = String(handoffLog).replace(/\//g, '\\');
   const winOldSize = String(oldSizePath).replace(/\//g, '\\');
   const exeName = path.basename(winExe);
+  const relaunchLines = serviceMode
+    ? ['schtasks /Run /TN "TechPartsPOS-Server" >nul 2>&1']
+    : ['set NO_LAUNCH_BROWSER=1', `start "" "${winExe}"`];
   // Every milestone appends one line to the handoff log: the helper runs with
   // stdio ignored and dies with the old process, so this file is the only
   // durable record of what the swap actually did. The next boot reads it.
@@ -430,8 +440,7 @@ function buildApplyScript({ stagingExe, targetExe, resumeMarker, handoffLog, old
     `del "${winStaging}" >nul 2>&1`,
     `del "${winResume}" >nul 2>&1`,
     ':startnew',
-    'set NO_LAUNCH_BROWSER=1',
-    `start "" "${winExe}"`,
+    ...relaunchLines,
     'goto done',
     ':restore',
     // A failed copy can leave a partial file at the target path, and a rename
@@ -451,8 +460,7 @@ function buildApplyScript({ stagingExe, targetExe, resumeMarker, handoffLog, old
     `if exist "${winExe}" >> "${winHandoff}" echo restore blocked: the partial target could not be cleared`,
     `ren "${winOld}" "${exeName}"`,
     `if errorlevel 1 (>> "${winHandoff}" echo restore FAILED: the previous exe could not be renamed back)`,
-    'set NO_LAUNCH_BROWSER=1',
-    `start "" "${winExe}"`,
+    ...relaunchLines,
     ':done',
     '(goto) 2>nul & del "%~f0"'
   ].join('\r\n') + '\r\n';
@@ -461,7 +469,7 @@ function buildApplyScript({ stagingExe, targetExe, resumeMarker, handoffLog, old
 // The detached helper cannot log anywhere the next process will read through
 // console transports, so it appends to this file instead. The next boot prints
 // and clears it: one line per milestone, newest last.
-function consumeHandoffStatus(stagingDir = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'TechPartsPOS')) {
+function consumeHandoffStatus(stagingDir = defaultUpdateStagingDir()) {
   const handoffLog = path.join(stagingDir, 'TechPartsPOS_update.handoff.log');
   try {
     if (!fs.existsSync(handoffLog)) return;
@@ -495,7 +503,7 @@ async function applyUpdate(options = {}) {
   }
 }
 
-async function applyUpdateInner({ downloadUrl, expectedBytes = 0, currentVer = CURRENT_VERSION } = {}) {
+async function applyUpdateInner({ downloadUrl, expectedBytes = 0, currentVer = CURRENT_VERSION, serviceMode = process.argv.includes('--service') } = {}) {
   // If no downloadUrl passed, fetch latest
   let targetUrl = downloadUrl;
   let targetBytes = expectedBytes;
@@ -571,9 +579,9 @@ async function applyUpdateInner({ downloadUrl, expectedBytes = 0, currentVer = C
     };
   }
 
-  // Staging folder in %LOCALAPPDATA%\TechPartsPOS
+  // Staging folder in %LOCALAPPDATA%\TechPartsPOS (or getBaseDir()/updates in service mode)
   const stagingDir = (testHooks && testHooks.stagingDir)
-    || path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'TechPartsPOS');
+    || defaultUpdateStagingDir(serviceMode);
   fs.mkdirSync(stagingDir, { recursive: true });
   const stagingExe = path.join(stagingDir, 'TechPartsPOS_update.exe');
   const resumeMarker = path.join(stagingDir, 'TechPartsPOS_update.resume');
@@ -653,7 +661,7 @@ async function applyUpdateInner({ downloadUrl, expectedBytes = 0, currentVer = C
   const handoffLog = path.join(stagingDir, 'TechPartsPOS_update.handoff.log');
   const oldSizePath = path.join(stagingDir, 'oldsize.txt');
   fs.writeFileSync(scriptPath, buildApplyScript({
-    stagingExe, targetExe: currentExe, resumeMarker, handoffLog, oldSizePath
+    stagingExe, targetExe: currentExe, resumeMarker, handoffLog, oldSizePath, serviceMode
   }), 'utf8');
 
   // Detached and unref'd below. Tests never reach here: they set skipSpawn so a
@@ -710,6 +718,7 @@ module.exports = {
   digestUrlFor,
   digestMatches,
   buildApplyScript,
+  defaultUpdateStagingDir,
   consumeHandoffStatus,
   setUpdateLogSink,
   setUpdateTestHooks,

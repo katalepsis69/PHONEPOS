@@ -86,7 +86,7 @@ function samplePreviewSale() {
 }
 const { listPrinters, defaultPrinter, encode, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, DEVICE_LINE_PREFIX } = printer;
 const { resetDemoData, seedInitialParts } = require('./seed');
-const { checkForUpdates, applyUpdate, getUpdateProgress, consumeHandoffStatus, setUpdateLogSink, CURRENT_VERSION } = require('./updater');
+const { checkForUpdates, applyUpdate, getUpdateProgress, consumeHandoffStatus, setUpdateLogSink, defaultUpdateStagingDir, CURRENT_VERSION } = require('./updater');
 // [update] lines belong in pos-server.log, which console.log cannot reach in the packaged exe.
 setUpdateLogSink(logLine);
 require('./db').setDbLogSink(logLine);
@@ -1689,7 +1689,8 @@ function createServer(opts = {}) {
           try {
             applyRes = await applyUpdate({
               downloadUrl: body?.downloadUrl,
-              expectedBytes: body?.expectedBytes
+              expectedBytes: body?.expectedBytes,
+              serviceMode: isServiceMode
             });
           } catch (err) {
             // The audit row is written AFTER applyUpdate validates, and only ever
@@ -2247,7 +2248,7 @@ function startServer(preferredPort = process.env.PORT ? parseInt(process.env.POR
 
     // The previous update's helper wrote its milestones here; the swap outcome
     // is otherwise invisible (detached process, stdio ignored).
-    consumeHandoffStatus();
+    consumeHandoffStatus(defaultUpdateStagingDir(process.argv.includes('--service')));
 
     // Hourly tick on the date-idempotent guard: a startup-only backup lets the
     // data-loss window grow with uptime on a workstation left running for days.
