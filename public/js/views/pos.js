@@ -242,12 +242,14 @@ export function handleBarcodeScan(scannedCode) {
 
   if (!item) {
     playScanSound(false);
+    recordRefusedScan(code, 'pos.refuse_unknown');
     showToast(`Unknown barcode / SKU: "${code}"`, 'warning');
     return false;
   }
 
   if (item.stock_quantity <= 0) {
     playScanSound(false);
+    recordRefusedScan(code, 'pos.refuse_out');
     showToast(`Cannot add "${item.brand} ${item.model_name}" — Out of stock!`, 'error');
     return false;
   }
@@ -255,6 +257,7 @@ export function handleBarcodeScan(scannedCode) {
   const currentQty = cartQtyFor(item.id);
   if (currentQty >= item.stock_quantity) {
     playScanSound(false);
+    recordRefusedScan(code, 'pos.refuse_max');
     showToast(`Max stock reached for "${item.brand} ${item.model_name}" (${item.stock_quantity} available)`, 'warning');
     return false;
   }
@@ -270,6 +273,56 @@ export function handleBarcodeScan(scannedCode) {
     renderPartsTable();
   }
   return true;
+}
+
+// Refused scans the counter could not act on, kept for the shift: a cashier
+// cannot read a toast at speed, so afterwards nobody could say why a scanned
+// part never landed on the ticket. Last 50, tab-session lifetime.
+const REFUSED_SCANS_KEY = 'pos_refused_scans';
+const REFUSED_REASONS = {
+  'pos.refuse_unknown': 'Unknown barcode / SKU',
+  'pos.refuse_out': 'Out of stock',
+  'pos.refuse_max': 'Max stock reached'
+};
+function recordRefusedScan(code, reasonKey) {
+  try {
+    const store = typeof sessionStorage === 'undefined' ? null : sessionStorage;
+    if (!store) return;
+    const list = JSON.parse(store.getItem(REFUSED_SCANS_KEY) || '[]');
+    list.push({ code: String(code).slice(0, 64), reason: reasonKey, at: new Date().toISOString() });
+    store.setItem(REFUSED_SCANS_KEY, JSON.stringify(list.slice(-50)));
+    renderScanRefusalChip(list.length);
+  } catch (_) {}
+}
+function refusedScanList() {
+  try {
+    const store = typeof sessionStorage === 'undefined' ? null : sessionStorage;
+    return store ? JSON.parse(store.getItem(REFUSED_SCANS_KEY) || '[]') : [];
+  } catch (_) { return []; }
+}
+export function clearRefusedScans() {
+  try { sessionStorage.removeItem(REFUSED_SCANS_KEY); } catch (_) {}
+  renderScanRefusalChip(0);
+}
+export function renderScanRefusalChip(count = refusedScanList().length) {
+  const chip = document.getElementById('scan-refusals-chip');
+  if (!chip) return;
+  chip.classList.toggle('hidden', count <= 0);
+  const label = chip.querySelector('span');
+  if (label) label.textContent = t('pos.refused_scans', '{n} refused scans').replace('{n}', count);
+}
+export function openScanRefusals() {
+  const list = refusedScanList();
+  const box = document.getElementById('scan-refusals-list');
+  if (box) {
+    box.innerHTML = list.length === 0
+      ? `<p class="empty__body">${escHtml(t('pos.refused_empty', 'No refused scans this session.'))}</p>`
+      : list.slice().reverse().map(r => `<div class="flex justify-between gap-2 py-1 border-b border-[var(--line-soft)] last:border-0">
+          <span class="font-mono text-xs">${escHtml(r.code)}</span>
+          <span class="text-xs text-slate-400">${escHtml(t(r.reason, REFUSED_REASONS[r.reason] || r.reason))} · ${escHtml(String(r.at).slice(11, 19))}</span>
+        </div>`).join('');
+  }
+  openModal('modal-scan-refusals');
 }
 
 let highlightedPartIndex = -1;
@@ -454,6 +507,8 @@ export function initScanListeners() {
 }
 
 export async function loadPosCatalog() {
+  // A reload keeps the session's refusal list alive: restore the chip with it.
+  renderScanRefusalChip();
   try {
     const res = await fetch('/api/inventory');
     if (!res.ok) throw new Error('Inventory unavailable');
@@ -754,12 +809,12 @@ export function renderPartsTable() {
     if (S.posInStockOnly) active.push('in-stock');
     const countUnit = t('inv.parts_count', 'items');
     const why = active.length
-      ? `Nothing matches the ${active.join(', ')} filter${active.length > 1 ? 's' : ''}. Reset them, or add the item to inventory.`
-      : 'Nothing matches yet. Add the item to inventory.';
+      ? t('pos.filter_why_filters', 'Nothing matches the {filters} filter. Reset them, or add the item to inventory.').replace('{filters}', active.join(', '))
+      : t('pos.filter_why_plain', 'Nothing matches yet. Add the item to inventory.');
     const isOnlyInStock = active.length === 1 && S.posInStockOnly;
     const resetText = (isOnlyInStock && catalog.length > 0)
-      ? `Show all ${catalog.length} parts`
-      : 'Reset filters';
+      ? t('pos.reset_show_all', 'Show all {n} items').replace('{n}', catalog.length)
+      : t('pos.reset_filters', 'Reset filters');
     body.innerHTML = `
       <tr>
         <td colspan="5">
@@ -818,14 +873,14 @@ export function quickAddPart(partId) {
   const part = catalog.find(p => p.id === partId);
   if (!part) return;
   if (part.stock_quantity <= 0) {
-    showToast(`${part.brand} ${part.model_name} ${part.part_type} is out of stock`, 'warning');
+    showToast(t('pos.out_of_stock', '{name} is out of stock').replace('{name}', `${part.item_name || [part.brand, part.model_name, part.part_type].filter(Boolean).join(' ')}`), 'warning');
     return;
   }
   const maxStock = Number(part.stock_quantity) || 0;
   const existing = S.cart.find(c => !c.is_labor && c.id === part.id);
   if (existing) {
     if (existing.qty >= maxStock - 1e-6) {
-      showToast(`Cannot add more than available stock (${part.stock_quantity})`, 'warning');
+      showToast(t('pos.add_over_stock', 'Cannot add more than available stock ({n})').replace('{n}', part.stock_quantity), 'warning');
       return;
     }
     existing.qty = part.allow_fractional && existing.qty + 1 > maxStock
@@ -854,7 +909,7 @@ export function quickAddPart(partId) {
   }
   renderCart();
   renderPartsTable();
-  showToast(`Added ${part.item_name || part.part_type}`, 'success');
+  showToast(t('pos.added', 'Added {name}').replace('{name}', part.item_name || part.part_type), 'success');
 }
 
 export function setPartQty(itemId, delta) {
@@ -1500,10 +1555,10 @@ export async function completeSale() {
         }
       });
     }
-    showToast(`Sale #${sale.sale_code} completed`, 'success');
+    showToast(t('pos.sale_completed', 'Sale #{code} completed').replace('{code}', sale.sale_code), 'success');
     if (typeof window.refreshSyncChip === 'function') window.refreshSyncChip();
   } catch (err) {
-    showToast(`Error completing sale: ${err.message}`, 'error');
+    showToast(t('pos.sale_error', 'Error completing sale: {msg}').replace('{msg}', err.message), 'error');
   } finally {
     S.saleInFlight = false;
     if (checkoutBtn) { checkoutBtn.disabled = false; if (checkoutLabel) checkoutLabel.textContent = checkoutOrig; }

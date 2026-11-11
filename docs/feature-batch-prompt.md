@@ -79,8 +79,10 @@ A gate stays red on rerun; an item turns out to need a dependency or a framework
 shows concurrent interference. Report and stop.
 
 TREE STATE (measured 2026-11-12; refresh to observed state on every run)
-- HEAD: 533f07a (on main, 10 commits ahead of origin/main 94d1206). Full source is tracked
-  in git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 610/610 pass, 0 fail, exit 0 across 49 test
+- HEAD: f7521be (on main, 16 commits ahead of origin/main 94d1206; the five quality
+  passes of the 2026-11-12 full order landed first: audit + remediation + refactoring
+  + cleaning + test hardening, suite now 617/617). Full source is tracked in git
+  (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
+- Gates: npm run build:css exit 0; npm test 617/617 pass, 0 fail, exit 0 across 49 test
   files (all tracked).
 - Working tree: clean at measurement (`git status --short` empty).

@@ -170,6 +170,11 @@
           </button>
           <button type="button" id="sync-status-chip" class="draft-chip hidden cursor-pointer" data-action="open-cloud-settings"
             title="Cloud sync state. Click to manage."></button>
+          <button type="button" id="scan-refusals-chip" class="draft-chip hidden cursor-pointer" data-action="open-scan-refusals"
+            title="Scans the counter refused this session. Click to review.">
+            <i class="ph ph-barcode w-3.5 h-3.5 text-amber-400"></i>
+            <span>Refused scans</span>
+          </button>
           <button type="button" id="update-status-chip" class="draft-chip hidden" data-action="open-settings-updates"
             title="A new update is available. Click to review.">
             <i class="ph ph-arrow-circle-up w-3.5 h-3.5 text-emerald-400"></i>
@@ -2652,7 +2657,22 @@
   </div>
 
   <!-- 10. REPORT A PROBLEM / REQUEST A FEATURE -->
-  <div id="modal-feedback" class="modal-backdrop gate z-[110] hidden">
+  <div id="modal-scan-refusals" class="modal-backdrop gate z-[110] hidden">
+  <div class="gate__card" style="max-width: 460px;">
+    <div class="gate__icon">
+      <i class="ph ph-barcode"></i>
+    </div>
+    <h3 data-i18n="pos.refused_title">Refused scans this session</h3>
+    <p class="gate__hint" data-i18n="pos.refused_hint">Codes the scanner read that the counter could not act on: unknown, out of stock, or max stock reached. Newest first.</p>
+    <div id="scan-refusals-list" class="max-h-64 overflow-y-auto text-left w-full"></div>
+    <div class="flex gap-2 justify-end w-full">
+      <button type="button" class="btn-quiet" data-action="clear-scan-refusals" data-i18n="pos.refused_clear">Clear list</button>
+      <button type="button" class="btn-primary" data-action="close-modal" data-modal="modal-scan-refusals" data-i18n="common.close">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-feedback" class="modal-backdrop gate z-[110] hidden">
     <div class="gate__card" style="max-width: 430px;">
       <div class="gate__icon">
         <i class="ph ph-chat-circle-text"></i>

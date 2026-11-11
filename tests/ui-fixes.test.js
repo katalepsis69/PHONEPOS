@@ -1821,3 +1821,22 @@ test('API_REFERENCE appendix covers every literal route in the router', () => {
   const missing = routes.filter(r => !doc.includes(r));
   assert.deepStrictEqual(missing, [], `routes missing from API_REFERENCE.md: ${missing.join(', ')}`);
 });
+
+test('refused scans are captured, capped and reviewable from the POS toolbar', () => {
+  // Capture: every refusal branch records before the toast.
+  for (const reason of ['pos.refuse_unknown', 'pos.refuse_out', 'pos.refuse_max']) {
+    assert.equal(pos.split(`recordRefusedScan(code, '${reason}')`).length - 1, 1, `${reason} must record exactly once`);
+  }
+  // Cap: the list holds the last 50, not unbounded session growth.
+  assert.match(pos, /list\.slice\(-50\)/);
+  // The chip and the modal both render through escHtml, and the wiring exists.
+  assert.match(pos, /renderScanRefusalChip\(list\.length\)/);
+  assert.match(pos, /openModal\('modal-scan-refusals'\)/);
+  const html = source('public/index.html');
+  assert.match(html, /id="scan-refusals-chip"/);
+  assert.match(html, /id="modal-scan-refusals"/);
+  assert.match(html, /id="scan-refusals-list"/);
+  const main = source('public/js/main.js');
+  assert.match(main, /'open-scan-refusals': \(\) => openScanRefusals\(\)/);
+  assert.match(main, /'clear-scan-refusals': \(\) => clearRefusedScans\(\)/);
+});

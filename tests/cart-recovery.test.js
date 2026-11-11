@@ -20,7 +20,8 @@ async function harness(raw, cart = []) {
   const messages = [];
   const getElementById = id => {
     if (!elements.has(id)) elements.set(id, {
-      value: '', textContent: '', innerHTML: '', closest: () => null
+      value: '', textContent: '', innerHTML: '', closest: () => null, querySelector: () => null,
+      classList: { toggle: () => {}, add: () => {}, remove: () => {} }
     });
     return elements.get(id);
   };
@@ -46,8 +47,11 @@ async function harness(raw, cart = []) {
   });
   // Execute actual rendering/recovery and catalog functions, avoiding circular UI imports.
   const rendering = pos.slice(pos.indexOf('export function renderOrderLines()'), pos.indexOf('export function setPaymentMethod('));
+  // loadPosCatalog restores the refused-scan chip, so the helpers block that
+  // defines it rides along with the slices that run it.
+  const refusals = pos.slice(pos.indexOf('// Refused scans the counter could not act on'), pos.indexOf('let highlightedPartIndex = -1;'));
   const catalog = pos.slice(pos.indexOf('export async function loadPosCatalog()'), pos.indexOf('export function renderRepairRef()'));
-  vm.runInContext(`${rendering}\n${catalog}`.replace(/export /g, ''), context);
+  vm.runInContext(`${refusals}\n${rendering}\n${catalog}`.replace(/export /g, ''), context);
   return { context, storage, writes, elements, messages };
 }
 

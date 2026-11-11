@@ -29,6 +29,8 @@ function harness({ tab = 'pos', item = SCANNED, modal = null, gate = null, filte
     inventoryItems: [item], posCatalog: [item], cart: []
   };
   const toasts = [];
+  const calls = [];
+  const store = { data: {}, setItem(k, v) { calls.push([k, v]); this.data[k] = v; }, getItem(k) { return this.data[k] ?? null; }, removeItem(k) { delete this.data[k]; } };
   const clock = { t: 1000 };
   let keydown = null;
   let pasteHandler = null;
@@ -43,10 +45,13 @@ function harness({ tab = 'pos', item = SCANNED, modal = null, gate = null, filte
 
   const ctx = vm.createContext({
     S,
-    Date: { now: () => clock.t },
+    // A real Date subclass: refusal records call new Date().toISOString(), a
+    // plain { now } stub cannot satisfy.
+    Date: class extends Date { static now() { return clock.t; } },
     window: { addEventListener: (type, fn) => { if (type === 'keydown') keydown = fn; } },
     setTimeout: (fn) => { const id = nextTimerId++; timers.push({ id, fn }); return id; },
     clearTimeout: (id) => { const t = timers.find(x => x.id === id); if (t) t.dead = true; },
+    sessionStorage: store,
     document: {
       getElementById: () => null,
       querySelector: () => modal || gate || null,
@@ -110,7 +115,7 @@ function harness({ tab = 'pos', item = SCANNED, modal = null, gate = null, filte
   };
   const firePaste = () => { if (pasteHandler) pasteHandler(); };
 
-  return { S, toasts, field, scan, scanIntoSearch, searchEnter, typeSlowly, sendChars, pressEnter, drainTimers, firePaste };
+  return { S, toasts, store, calls, field, scan, scanIntoSearch, searchEnter, typeSlowly, sendChars, pressEnter, drainTimers, firePaste };
 }
 
 test('a scan burst typed into a counter field looks the part up instead of filling the field', () => {
@@ -353,4 +358,28 @@ test('a stuck modifier key does not keep a stale burst buffer alive (F35)', () =
   h.state.t += 500;
   h.drain();
   assert.deepEqual(h.S.cart, [{ id: 7, qty: 1 }], 'the fresh scan resolves cleanly, not 694 concatenated onto the code');
+});
+
+test('a refused scan lands in the session refusal list for after-the-fact review', () => {
+  const h = harness({ tab: 'pos' });
+  const name = h.field('pos-customer-name', 'Ali');
+  // Unknown code: refused and recorded, cart untouched.
+  h.scan('999999', name);
+  h.drainTimers();
+  assert.equal(h.S.cart.length, 0, 'the unknown code must not reach the cart');
+  const writes = h.calls.filter(([k]) => k === 'pos_refused_scans');
+  assert.equal(writes.length, 1, 'exactly one refusal write');
+  const list = JSON.parse(writes[0][1]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].code, '999999');
+  assert.equal(list[0].reason, 'pos.refuse_unknown');
+  assert.ok(list[0].at, 'the refusal carries a timestamp');
+
+  // Out-of-stock part: refused and recorded as well.
+  const h2 = harness({ tab: 'pos', item: { ...SCANNED, stock_quantity: 0 } });
+  h2.scan('6941234567890', h2.field('pos-customer-name'));
+  h2.drainTimers();
+  const writes2 = h2.calls.filter(([k]) => k === 'pos_refused_scans');
+  assert.equal(writes2.length, 1);
+  assert.equal(JSON.parse(writes2[0][1])[0].reason, 'pos.refuse_out');
 });
