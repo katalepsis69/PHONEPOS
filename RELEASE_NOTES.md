@@ -105,6 +105,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-v2.8.zip` below.
-  2. Extract the folder to your computer (e.g. `C:\TechPartsPOS`).
-  3. Double-click `TechPartsPOS.exe` to start.
+  1. Download `TechPartsPOS-Setup-2.8.exe` below.
+  2. Run the installer to set up TechParts POS as a protected background service.
+  3. Launch TechParts POS from the Start Menu or Desktop shortcut.

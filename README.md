@@ -5,6 +5,7 @@ A commercial-grade Point of Sale and inventory management workstation built for 
 ## Features
 
 - **0 Runtime Dependencies:** Runs natively on Windows as a standalone single executable (`TechPartsPOS.exe`).
+- **Protected Windows Background Service:** Runs reliably in the background under `NT AUTHORITY\SYSTEM` with automatic startup and recovery.
 - **Dual-Tier Pricing:** Instant toggle between Walk-in Retail and Technician/Wholesale pricing.
 - **Parts & Repair Labor Checkout:** Unified cart supporting physical phone parts and repair labor service charges.
 - **Customer Credit & "Utang" Ledger:** Complete customer credit management with FIFO partial and full settlement tracking.
@@ -18,6 +19,25 @@ A commercial-grade Point of Sale and inventory management workstation built for 
 
 Download the latest pre-built Windows release from the [Releases](https://github.com/katalepsis69/PHONEPOS/releases) page.
 
-1. Download `TechPartsPOS-v2.8.zip` (or `TechPartsPOS.exe`).
-2. Extract the folder anywhere on your Windows PC.
-3. Run `TechPartsPOS.exe` to launch the POS workstation (automatically opens your default browser to `http://localhost:3000`).
+1. Download `TechPartsPOS-Setup-2.8.exe`.
+2. Run the installer (Administrator permissions required). TechParts POS installs to `C:\Program Files\TechPartsPOS` and automatically registers and starts `TechPartsPOS-Server` as a protected Windows background service.
+3. Open the desktop shortcut or Start Menu entry to launch the POS workstation interface (automatically connects to the local service and opens your browser).
+
+## Shop PC Security Setup (Owner Admin + Cashier Standard Account)
+
+For maximum store security and tamper prevention on counter computers:
+
+1. **Windows Accounts:**
+   - **Store Owner (Administrator):** Keep one Windows Administrator account for shop management, system updates, and installer runs. Protect this account with a strong password.
+   - **Counter Staff (Standard User):** Create a standard, non-administrator Windows account for cashiers and counter staff.
+2. **Locked Database Protection:**
+   - The installer stores the live shop database in `C:\ProgramData\TechPartsPOS\data\shop.db` and configures strict NTFS permissions giving Full Control exclusively to `NT AUTHORITY\SYSTEM`.
+   - Cashiers logging in with a standard Windows account cannot view, copy, modify, or delete `shop.db` in File Explorer or PowerShell, preventing tampering or unauthorized data extraction.
+3. **Receipt & Label Printers (`SYSTEM` Background Service):**
+   - The `TechPartsPOS-Server` background service runs as `SYSTEM`, ensuring all counter printing (USB, Bluetooth, and Wi-Fi thermal receipt printers via Windows Spooler) continues seamlessly regardless of which Windows user signs in.
+4. **Manager PIN Recovery ("Forgot PIN?"):**
+   - During initial setup, the store owner creates a Manager PIN and an optional offline Recovery Password.
+   - If a Manager PIN is forgotten or locked out after 5 consecutive incorrect attempts, click **Forgot PIN?** on the PIN entry dialog and enter the recovery password to immediately reset the Manager PIN without requiring database access or server restarts.
+5. **USB Flash Drive Backups ("Download copy"):**
+   - In addition to automated hourly snapshots stored securely on disk, shop owners can plug in any USB flash drive or external drive and navigate to **Settings > Data**.
+   - Click **Download copy** next to any backup in the list to export an instant, verified database copy directly to your USB drive for offsite disaster recovery.

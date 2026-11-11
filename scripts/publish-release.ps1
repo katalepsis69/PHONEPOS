@@ -290,7 +290,8 @@ Zero Internet required with automated local database backups.
 ---
 
 ### How to Update
-1. Open Settings > Data and click Check for updates, or download TechPartsPOS-$tagStr.zip.
+- If you already have TechParts POS: open Settings > Data and click Check for updates.
+- If this is a fresh installation: download TechPartsPOS-Setup-$tagStr.exe below and run the installer.
 "@
 }
 
@@ -427,12 +428,11 @@ if ($DryRun) {
         [System.IO.File]::WriteAllText($lockPath, $lockTxt)
     }
 
-    # The README names the downloadable zip, and a hand-maintained name rots on the
-    # next release. Same treatment as the .iss: rewrite it here.
+    # The README names the downloadable installer: rewrite it here.
     $readmePath = Join-Path $rootDir "README.md"
     if (Test-Path $readmePath) {
         $readmeTxt = Get-Content $readmePath -Raw
-        $readmeTxt = [regex]::Replace($readmeTxt, 'TechPartsPOS-v[0-9][0-9.]*\.zip', "TechPartsPOS-$tag.zip")
+        $readmeTxt = [regex]::Replace($readmeTxt, 'TechPartsPOS-Setup-[0-9][0-9.]*\.exe', "TechPartsPOS-Setup-$cleanVer.exe")
         [System.IO.File]::WriteAllText($readmePath, $readmeTxt)
     }
 }
@@ -457,33 +457,37 @@ if (-not (Test-Path $exePath)) {
 $exeSize = (Get-Item $exePath).Length
 Write-Host "Executable built: $exePath ($exeSize bytes)" -ForegroundColor Green
 
+# Build Windows installer with Inno Setup
+$installerScript = Join-Path $rootDir "scripts\build-installer.js"
+if (-not (Test-Path $installerScript)) {
+    Write-Error "build-installer.js was not found at $installerScript"
+}
+Write-Host "Building Windows installer for version $cleanVer..." -ForegroundColor Yellow
+& node $installerScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "build-installer.js failed. Release aborted."
+}
+
+$installerPath = Join-Path $rootDir "dist\installer\TechPartsPOS-Setup-$cleanVer.exe"
+if (-not (Test-Path $installerPath)) {
+    Write-Error "Installer executable not found at $installerPath"
+}
+$installerSize = (Get-Item $installerPath).Length
+Write-Host "Installer built: $installerPath ($installerSize bytes)" -ForegroundColor Green
+
 if ($DryRun) {
     Write-Host ""
-    Write-Host "[DRY RUN] Tests, build, and verify all succeeded. Nothing was committed, tagged, pushed, or published." -ForegroundColor Green
-    Write-Host "[DRY RUN] A real run would release as $tag. Run: publish-release.bat" -ForegroundColor Cyan
+    Write-Host "[DRY RUN] Tests, build, installer, and verify all succeeded. Nothing was committed, tagged, pushed, or published." -ForegroundColor Green
+    Write-Host "[DRY RUN] A real run would release as $tag with installer TechPartsPOS-Setup-$cleanVer.exe. Run: publish-release.bat" -ForegroundColor Cyan
     exit 0
 }
 
-# 4. Package standalone zip for fresh users
-Write-Host "[2/4] Packaging release zip..." -ForegroundColor Yellow
+# 4. Prepare release checksums
+Write-Host "[2/4] Preparing checksum assets..." -ForegroundColor Yellow
 $publishDir = Join-Path $rootDir "publish"
 if (-not (Test-Path $publishDir)) {
     New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 }
-
-$zipPath = Join-Path $publishDir "TechPartsPOS-$tag.zip"
-if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-
-$tempPackageDir = Join-Path $env:TEMP "TechPartsPOS_pack_$tag"
-if (Test-Path $tempPackageDir) { Remove-Item $tempPackageDir -Recurse -Force }
-New-Item -ItemType Directory -Path $tempPackageDir | Out-Null
-
-Copy-Item $exePath -Destination $tempPackageDir
-Copy-Item (Join-Path $rootDir "README.md") -Destination $tempPackageDir
-
-Compress-Archive -Path "$tempPackageDir\*" -DestinationPath $zipPath -Force
-Remove-Item $tempPackageDir -Recurse -Force
-Write-Host "Release zip created: $zipPath" -ForegroundColor Green
 
 # 4b. Publish the executable checksum that the in-app updater verifies before it
 # installs anything. src/updater.js looks for it in the same release as
@@ -614,8 +618,8 @@ function Upload-ReleaseAsset([object]$rel, [string]$filePath, [string]$contentTy
 # Upload raw exe (for in-app 1-click updater)
 $exeUpload = Upload-ReleaseAsset $releaseObj $exePath "application/octet-stream"
 
-# Upload zip (for fresh downloads)
-$zipUpload = Upload-ReleaseAsset $releaseObj $zipPath "application/zip"
+# Upload installer (for fresh installations)
+$installerUpload = Upload-ReleaseAsset $releaseObj $installerPath "application/octet-stream"
 
 # Upload the exe checksum (the updater refuses any download it cannot verify)
 $shaUpload = Upload-ReleaseAsset $releaseObj $exeShaPath "text/plain"
@@ -631,6 +635,6 @@ Write-Host "=========================================" -ForegroundColor Green
 Write-Host " Release $tag is live on GitHub!        " -ForegroundColor Green
 Write-Host "=========================================" -ForegroundColor Green
 Write-Host "Release Page: $($releaseObj.html_url)"
+Write-Host "Installer:    $($installerUpload.browser_download_url)"
 Write-Host "Executable:   $($exeUpload.browser_download_url)"
-Write-Host "Zip Archive:  $($zipUpload.browser_download_url)"
 Write-Host ""

@@ -308,6 +308,7 @@ function generateReleaseHighlights({ version, prevTag, customNote } = {}) {
 
 function buildReleaseNotesMarkdown(versionTag, highlights) {
   const tag = versionTag.startsWith('v') ? versionTag : `v${versionTag}`;
+  const cleanVer = tag.replace(/^v/, '');
   const bulletLines = highlights.map(b => `- ${b}`).join('\n');
 
   return `# What is New in TechParts POS (${tag})
@@ -415,9 +416,9 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download \`TechPartsPOS-${tag}.zip\` below.
-  2. Extract the folder to your computer (e.g. \`C:\\TechPartsPOS\`).
-  3. Double-click \`TechPartsPOS.exe\` to start.
+  1. Download \`TechPartsPOS-Setup-${cleanVer}.exe\` below.
+  2. Run the installer to install TechParts POS as a protected background service.
+  3. Launch TechParts POS from the Start Menu or Desktop shortcut.
 `;
 }
 

@@ -280,3 +280,44 @@ Without the acknowledgement, report requests answer 403 and say why. Three ways 
 3. **Plain LAN.** `HOST=0.0.0.0` plus `POS_LAN_REPORT_ACK=1` on a network you control. This is plaintext on the LAN and the report token is a bearer credential, so only do it where every device on the network is yours.
 
 Report logins carry their own attempt counter and a 15-minute lockout window, separate from the counter PIN gate: five guesses from a phone cannot freeze the register.
+
+---
+
+## 6. Windows Installer & SYSTEM Service Deployment
+
+TechParts POS is distributed for production shop deployment via an Inno Setup 7 compiled installer (`TechPartsPOS-Setup-<version>.exe`).
+
+### 6.1 Installer Architecture & Target Locking
+- **Locked Installation Path:** The installer specifies `DisableDirPage=yes` and installs strictly to `C:\Program Files\TechPartsPOS`. This ensures the application binary always runs from a protected system location where standard Windows accounts lack write permissions.
+- **Data Directory Segregation:** Live database, backups, update payloads, and runtime discovery files reside in `C:\ProgramData\TechPartsPOS`. The uninstaller removes only application program files from `C:\Program Files\TechPartsPOS`, leaving `C:\ProgramData\TechPartsPOS` completely untouched.
+
+### 6.2 Database Lockdown & Access Control (ACLs)
+During installation, the installer executes `icacls` and `attrib` to isolate the data directory:
+1. `C:\ProgramData\TechPartsPOS` is configured with `/inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F"`, granting Full Control exclusively to `NT AUTHORITY\SYSTEM` (`S-1-5-18`). Standard users and administrators in standard Explorer sessions receive Access Denied.
+2. `C:\ProgramData\TechPartsPOS\runtime` is granted read-only access to standard users via `/grant "*S-1-5-32-545:(OI)(CI)R"` so the desktop launcher can read `runtime\server.json` to discover the active loopback port.
+3. The directory is flagged hidden and system via `attrib +h +s` as an extra layer of visual shielding.
+
+### 6.3 Background Service Task (`TechPartsPOS-Server`)
+The server runs unattended as a native Windows scheduled task:
+- **Principal:** Runs under `NT AUTHORITY\SYSTEM` (`S-1-5-18`) with `HighestAvailable` run level.
+- **Triggers:** Registered with both `<BootTrigger>` (starts immediately at system boot before user login) and all-users `<LogonTrigger>` (ensures the service is active after Windows Fast Startup or user switching).
+- **Resilience:** Configured with `<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>` (no automatic kill timeout), battery disallowance disabled, `<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>`, and `<RestartOnFailure>` set to interval `PT1M` with a count of 999 retries.
+- **Execution Command:** Launches `C:\Program Files\TechPartsPOS\TechPartsPOS.exe --service`.
+
+### 6.4 Shop PC Security Setup: Owner Admin + Cashier Standard Account
+To ensure counter security in multi-staff retail environments:
+1. **Windows Accounts:**
+   - Configure the PC with one **Administrator** account (held by the store owner).
+   - Create a **Standard User** Windows account for cashiers and technicians.
+2. **Tamper Resistance:**
+   - Standard user cashiers cannot read, edit, copy, or delete `C:\ProgramData\TechPartsPOS\data\shop.db`.
+   - Cashiers launch the workstation from the desktop shortcut, which executes `TechPartsPOS.exe` in lightweight launcher mode. The launcher reads the active port from `runtime\server.json`, verifies the health of `http://127.0.0.1:<port>/api/license/status`, and launches Microsoft Edge in kiosk mode using the cashier's private `%LOCALAPPDATA%\TechPartsPOS\browser-profile`.
+3. **Receipt Printing Compatibility:**
+   - Because `TechPartsPOS-Server` runs under `NT AUTHORITY\SYSTEM`, ESC/POS raw print jobs submitted to `winspool.drv` operate smoothly across all installed printer queues (USB, Bluetooth, and Wi-Fi thermal receipt printers) without depending on an interactive desktop user session.
+4. **Manager PIN & Offline Recovery ("Forgot PIN?"):**
+   - Routine counter actions (sales, inventory lookups, repairs) require no PIN. Manager elevation (discounts, day close, settings, voids) requires the Manager PIN.
+   - If the Manager PIN is forgotten or locked out (after 5 failed attempts with a 15-minute cooldown), the store owner clicks **Forgot PIN?** on the PIN modal and submits their offline recovery password to immediately reset the PIN.
+5. **USB Flash Drive Disaster Recovery ("Download copy"):**
+   - While hourly snapshots are stored automatically in `C:\ProgramData\TechPartsPOS\backups\`, shop owners can plug a USB flash drive into the register, open **Settings > Data**, and click **Download copy** next to any backup file.
+   - The verified database snapshot downloads immediately through the browser to the chosen USB folder, providing a complete offsite disaster recovery backup with zero command-line interaction.
+

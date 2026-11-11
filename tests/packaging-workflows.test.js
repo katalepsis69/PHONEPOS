@@ -235,3 +235,46 @@ test('publish-release.ps1 parses --version and --changelog flags without positio
 
   assert.match(src, /if \(-not \[string\]::IsNullOrWhiteSpace\(\$Version\)\)/, 'publish-release.ps1 must apply non-empty -Version overrides');
 });
+
+test('Inno Setup installer script configures SYSTEM service, ACLs, and preserves data', () => {
+  const issPath = path.join(ROOT_DIR, 'installer', 'TechPartsPOS.iss');
+  assert.ok(fs.existsSync(issPath), 'installer/TechPartsPOS.iss must exist');
+  const iss = fs.readFileSync(issPath, 'utf8');
+
+  assert.match(iss, /DisableDirPage\s*=\s*yes/i, 'installer must lock installation directory via DisableDirPage=yes');
+  assert.match(iss, /\*S-1-5-18:\(OI\)\(CI\)F/, 'installer must lock ProgramData to SYSTEM via S-1-5-18:(OI)(CI)F');
+  assert.match(iss, /\*S-1-5-32-545:\(OI\)\(CI\)R/, 'installer must grant standard users read access to runtime via S-1-5-32-545:(OI)(CI)R');
+  assert.match(iss, /<BootTrigger>/, 'service task XML must include BootTrigger');
+  assert.match(iss, /<LogonTrigger>/, 'service task XML must include LogonTrigger');
+  assert.match(iss, /PT0S/, 'service task XML must set ExecutionTimeLimit to PT0S');
+  assert.match(iss, /IgnoreNew/, 'service task XML must set MultipleInstancesPolicy to IgnoreNew');
+  assert.match(iss, /TechPartsPOS-Server/, 'scheduled task name must be TechPartsPOS-Server');
+  assert.match(iss, /PrepareToInstall/, 'installer must implement PrepareToInstall to stop service');
+  assert.match(iss, /InitializeUninstall/, 'installer must implement InitializeUninstall to stop service');
+
+  const uninstallDeleteSection = iss.split(/\[UninstallDelete\]/i)[1]?.split(/\[/)[0] || '';
+  assert.doesNotMatch(uninstallDeleteSection, /\{commonappdata\}\\TechPartsPOS|ProgramData\\TechPartsPOS/i, 'UninstallDelete must never delete ProgramData/TechPartsPOS');
+});
+
+test('build-installer.js checks Inno Setup 7 locations and reads package.json version', () => {
+  const scriptPath = path.join(ROOT_DIR, 'scripts', 'build-installer.js');
+  assert.ok(fs.existsSync(scriptPath), 'scripts/build-installer.js must exist');
+  const content = fs.readFileSync(scriptPath, 'utf8');
+
+  assert.match(content, /Inno Setup 7.*ISCC\.exe/, 'build-installer.js must check Inno Setup 7');
+  assert.match(content, /LOCALAPPDATA.*Programs.*Inno Setup 7/i, 'build-installer.js must check Inno Setup 7 in LOCALAPPDATA');
+  assert.match(content, /Program Files.*Inno Setup 7/i, 'build-installer.js must check Inno Setup 7 in Program Files');
+  assert.match(content, /package\.json/, 'build-installer.js must read version from package.json');
+});
+
+test('publish-release.ps1 builds and uploads Setup installer without zip packaging', () => {
+  const ps1Path = path.join(ROOT_DIR, 'scripts', 'publish-release.ps1');
+  const ps1 = fs.readFileSync(ps1Path, 'utf8');
+
+  assert.match(ps1, /TechPartsPOS-Setup-/, 'publish-release.ps1 must build and upload Setup installer');
+  assert.doesNotMatch(ps1, /Compress-Archive/, 'publish-release.ps1 must not create zip archives');
+  assert.doesNotMatch(ps1, /application\/zip/, 'publish-release.ps1 must not upload zip archives');
+  assert.doesNotMatch(ps1, /TechPartsPOS-\$tag\.zip/, 'publish-release.ps1 must not reference zip releases');
+  assert.doesNotMatch(ps1, /—/, 'publish-release.ps1 must contain zero em dashes');
+});
+
