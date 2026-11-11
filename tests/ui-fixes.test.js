@@ -5,7 +5,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..');
-const source = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
+const source = file => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r\n/g, '\n');
 const pos = source('public/js/views/pos.js');
 const main = source('public/js/main.js');
 const ui = source('public/js/ui.js');
