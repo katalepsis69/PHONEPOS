@@ -136,6 +136,12 @@ function applyCloudCommands(db, commands) {
           actor: { type: 'manager', id: null, name: 'Cloud Manager' },
         }, { op_id: opId });
         ackedIds.push(cmd.id);
+      } else {
+        // A kind this workstation does not know is version skew, not a
+        // transient fault: ack it so the cloud stops serving it on every
+        // drain, and log the skew where an operator can see it.
+        ackedIds.push(cmd.id);
+        syncLog(`[sync] cloud command #${cmd.id} has unsupported kind "${cmd.kind}", acked`);
       }
     } catch (err) {
       const msg = String((err && err.message) || err || '');

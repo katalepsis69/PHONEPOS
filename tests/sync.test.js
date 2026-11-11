@@ -479,3 +479,34 @@ test('a deterministically refused cloud command acks, logs and self-corrects the
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('an unknown command kind acks and logs instead of sitting pending forever', async () => {
+  const { db, dir } = tmpDb();
+  const bodies = [];
+  const server = require('node:http').createServer((req, res) => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      bodies.push(JSON.parse(body));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, ok_ids: [], commands: [
+        { id: 31, kind: 'future_thing', payload: { any: true } },
+      ] }));
+    });
+  });
+  const logs = [];
+  setSyncLogSink(msg => logs.push(msg));
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(`http://127.0.0.1:${server.address().port}`);
+    await drainOutbox(db);
+    const acked = (bodies.find(b => Array.isArray(b.ack_command_ids)) || {}).ack_command_ids || [];
+    assert.ok(acked.includes(31), 'version-skew command acked on the first drain');
+    assert.ok(logs.some(m => m.includes('#31') && m.includes('future_thing') && m.includes('unsupported kind')), 'the skew is logged: ' + JSON.stringify(logs));
+  } finally {
+    setSyncLogSink(null);
+    server.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

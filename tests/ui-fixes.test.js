@@ -1840,3 +1840,7 @@ test('refused scans are captured, capped and reviewable from the POS toolbar', (
   assert.match(main, /'open-scan-refusals': \(\) => openScanRefusals\(\)/);
   assert.match(main, /'clear-scan-refusals': \(\) => clearRefusedScans\(\)/);
 });
+
+test('the sales-history Wholesale tag marks both wholesale tiers', () => {
+  assert.match(backoffice, /s\.customer_type === 'technician' \|\| s\.customer_type === 'wholesale'/, 'the tag must key on both tier values');
+});

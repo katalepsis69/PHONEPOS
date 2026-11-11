@@ -987,7 +987,7 @@ export function renderSalesHistory(sales) {
         <td class="font-mono">${formatDateTime(s.created_at)}</td>
         <td>
           <button type="button" class="linkish font-bold" data-action="open-customer" data-customer="${escHtml(s.customer_name)}" title="Open customer panel">${escHtml(s.customer_name)}</button>
-          ${s.customer_type === 'technician' ? '<span class="tag tag--info text-xs ml-1.5 font-semibold" title="Wholesale order">Wholesale</span>' : ''}
+          ${(s.customer_type === 'technician' || s.customer_type === 'wholesale') ? '<span class="tag tag--info text-xs ml-1.5 font-semibold" title="Wholesale order">Wholesale</span>' : ''}
         </td>
         <td>
           ${methodTag}
