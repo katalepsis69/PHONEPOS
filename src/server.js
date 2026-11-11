@@ -48,7 +48,8 @@ const { getLicenseStatus, activateLicense } = require('./license');
 const {
   verifyManagerPin, updateManagerPin, isDefaultPin, getReportToken, verifyReportToken,
   verifySessionToken, issueSessionToken, issueElevationToken, verifyElevationToken,
-  createStaff, listActiveStaff, deactivateStaff, resetStaffPin, verifyStaffPin
+  createStaff, listActiveStaff, deactivateStaff, resetStaffPin, verifyStaffPin,
+  hasRecoveryPassword, setRecoveryPassword, recoverManagerPin
 } = require('./auth');
 const { audit, listAuditLog, verifyChain, txn } = require('./audit');
 const { openShift, closeShift, listShifts, getShiftBreakdown } = require('./shifts');
@@ -277,7 +278,11 @@ function stripInventoryCosts(items, session, elevated) {
 const RUNTIME_DB_PATH = process.env.POS_DB_PATH || DEFAULT_DB_PATH;
 const RUNTIME_BACKUP_DIR = process.env.POS_BACKUP_DIR || path.join(getBaseDir(), 'backups');
 
-function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR } = {}) {
+function createServer(opts = {}) {
+  const options = typeof opts === 'string' ? { dbPath: opts } : (opts || {});
+  const dbPath = options.dbPath || RUNTIME_DB_PATH;
+  const backupDir = options.backupDir || RUNTIME_BACKUP_DIR;
+  const isServiceMode = Boolean(options.serviceMode ?? (process.argv.includes('--service') || process.env.POS_TEST_SERVICE_MODE === '1' || process.env.POS_SERVICE_MODE === '1'));
   // let, not const: /api/backup/restore swaps the handle after loading a
   // backup file; every handler reads this binding at request time.
   let db = initDb(dbPath);
@@ -449,6 +454,8 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
         // with everything else (each still authenticates internally).
         const licenseExempt = pathname === '/api/auth/login' ||
                          pathname === '/api/auth/change-pin' ||
+                         pathname === '/api/auth/recovery-status' ||
+                         pathname === '/api/auth/recover-pin' ||
                          pathname === '/api/license/status' ||
                          pathname === '/api/license/activate' ||
                          pathname === '/api/system/shutdown' ||
@@ -829,7 +836,7 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           // VPS address: infrastructure detail staff sessions don't need.
           if (session?.type === 'staff') { delete s.sync_url; delete s.sync_shop_id; }
           const hasSyncToken = Boolean(db.prepare("SELECT value FROM shop_settings WHERE key = 'sync_token'").get()?.value);
-          return sendJson(res, 200, { ...s, sync_token_configured: hasSyncToken, pin_change_required: isDefaultPin(db) });
+          return sendJson(res, 200, { ...s, sync_token_configured: hasSyncToken, pin_change_required: isDefaultPin(db), recovery_password_configured: hasRecoveryPassword(db) });
         }
 
         if (pathname === '/api/settings' && method === 'POST') {
@@ -926,7 +933,7 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           });
           if (body && (body.sync_url !== undefined || body.sync_token !== undefined)) kickSync();
           const hasSyncToken = Boolean(db.prepare("SELECT value FROM shop_settings WHERE key = 'sync_token'").get()?.value);
-          return sendJson(res, 200, { ...(dnsWarning ? { warning: dnsWarning } : {}), ...getShopSettings(db), sync_token_configured: hasSyncToken, pin_change_required: isDefaultPin(db) });
+          return sendJson(res, 200, { ...(dnsWarning ? { warning: dnsWarning } : {}), ...getShopSettings(db), sync_token_configured: hasSyncToken, pin_change_required: isDefaultPin(db), recovery_password_configured: hasRecoveryPassword(db) });
         }
 
         // PAPER PREVIEW (Settings): the exact lines renderSaleSlip lays out for
@@ -1289,14 +1296,7 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           if (!elevated) return elevationDenied();
           if (isDefaultPin(db)) return factoryPinDenied();
           const body = await parseBody(req);
-          const name = String(body?.file || '');
-          // Basename of an existing backup file only: no paths, no traversal.
-          if (!/^(shop-|shop_backup_).*\.db$/.test(name) || path.basename(name) !== name) {
-            throw new Error('Pick a backup from the list');
-          }
-          const source = path.join(backupDir, name);
-          if (!fs.existsSync(source)) throw new Error('Backup file no longer exists');
-          if (!verifyBackupFile(source)) throw new Error('That backup file failed its integrity check and cannot be restored');
+          const { name, source } = resolveVerifiedBackup(backupDir, body?.file);
 
           const preRestore = createDbBackup(db, dbPath, backupDir,
             `shop_backup_pre-restore_${new Date().toISOString().replace(/[:.]/g, '-')}.db`);
@@ -1322,6 +1322,57 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           db = initDb(dbPath);
           audit(db, session, true, 'system', 'restore', { file: name, pre_restore_backup: path.basename(preRestore) });
           return sendJson(res, 200, { success: true, restored_from: name, pre_restore_backup: path.basename(preRestore) });
+        }
+
+        // BACKUP DOWNLOAD (USB copy)
+        if (pathname === '/api/backup/download' && method === 'GET') {
+          if (!elevated) return elevationDenied();
+          if (isDefaultPin(db)) return factoryPinDenied();
+          const fileParam = url.searchParams.get('file');
+          let name;
+          let source;
+          if (fileParam) {
+            const resolved = resolveVerifiedBackup(backupDir, fileParam);
+            name = resolved.name;
+            source = resolved.source;
+          } else {
+            let newest = null;
+            try {
+              const files = fs.readdirSync(backupDir)
+                .filter(f => /^(shop-|shop_backup_).*\.db$/.test(f) && path.basename(f) === f)
+                .map(f => {
+                  const p = path.join(backupDir, f);
+                  try {
+                    return { name: f, path: p, mtimeMs: fs.statSync(p).mtimeMs };
+                  } catch (_) { return null; }
+                })
+                .filter(Boolean)
+                .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+              for (const candidate of files) {
+                if (verifyBackupFile(candidate.path)) {
+                  newest = candidate;
+                  break;
+                }
+              }
+            } catch (_) {}
+            if (!newest) {
+              return sendJson(res, 404, { error: 'No backups found' });
+            }
+            name = newest.name;
+            source = newest.path;
+          }
+
+          const bytes = fs.readFileSync(source);
+          audit(db, session, true, 'system', 'backup_download', { file: name });
+          res.writeHead(200, {
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="${name}"`,
+            'Content-Length': bytes.length,
+            'Cache-Control': 'no-store'
+          });
+          res.end(bytes);
+          return;
         }
 
         // CSV EXPORTS (accounting / tax hand-off)
@@ -1377,7 +1428,7 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
         if (pathname === '/api/license/status' && method === 'GET') {
           // version rides along for the feedback report; the value is public
           // in every release note anyway.
-          return sendJson(res, 200, { ...getLicenseStatus(db), version: CURRENT_VERSION });
+          return sendJson(res, 200, { ...getLicenseStatus(db), version: CURRENT_VERSION, service_mode: isServiceMode });
         }
 
         if (pathname === '/api/license/activate' && method === 'POST') {
@@ -1529,6 +1580,49 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           return sendJson(res, 200, { ...result, ...fresh, elevationToken: elev.token, expiresAt: elev.expiresAt });
         }
 
+        if (pathname === '/api/auth/recovery-status' && method === 'GET') {
+          return sendJson(res, 200, { configured: hasRecoveryPassword(db) });
+        }
+
+        if (pathname === '/api/auth/recovery-password' && method === 'POST') {
+          if (session?.type === 'staff' || !elevated) return elevationDenied();
+          if (isDefaultPin(db)) return factoryPinDenied();
+          const body = await parseBody(req);
+          if (!body || typeof body.recovery_password !== 'string') {
+            return sendJson(res, 400, { error: 'Request body must be JSON with a string "recovery_password"' });
+          }
+          txn(db, () => {
+            setRecoveryPassword(db, body.recovery_password);
+            audit(db, session || { type: 'manager', id: null, name: 'Manager' }, true, 'security', 'set_recovery_password', {});
+          });
+          return sendJson(res, 200, { success: true, recovery_password_configured: true });
+        }
+
+        if (pathname === '/api/auth/recover-pin' && method === 'POST') {
+          const body = await parseBody(req);
+          if (!body || typeof body.recovery_password !== 'string' || typeof body.new_pin !== 'string') {
+            return sendJson(res, 400, { error: 'Request body must be JSON with string "recovery_password" and "new_pin"' });
+          }
+          const actor = { type: 'manager', id: null, name: 'Manager' };
+          let ok;
+          try {
+            ok = recoverManagerPin(db, body.recovery_password, body.new_pin);
+          } catch (err) {
+            if (err.statusCode === 429) {
+              try { audit(db, actor, false, 'security', 'pin_recover_failed', { note: err.message }); } catch (_) {}
+            }
+            throw err;
+          }
+          if (!ok) {
+            audit(db, actor, false, 'security', 'pin_recover_failed', { note: 'incorrect recovery password' });
+            return sendJson(res, 403, { error: 'Incorrect recovery password.' });
+          }
+          const token = issueSessionToken(db, actor);
+          const { token: elevationToken, expiresAt } = issueElevationToken(db);
+          audit(db, actor, true, 'security', 'pin_recovered', {});
+          return sendJson(res, 200, { success: true, token, actor, elevationToken, expiresAt });
+        }
+
         // RESET DEMO DATA
         if (pathname === '/api/settings/reset-demo' && method === 'POST') {
           if (!elevated) return elevationDenied();
@@ -1545,6 +1639,9 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
         }
 
         if (pathname === '/api/system/shutdown' && method === 'POST') {
+          if (isServiceMode) {
+            return sendJson(res, 400, { error: 'Background server stays active in installed mode. Close the POS window instead.' });
+          }
           if (!elevated) return elevationDenied();
           if (isDefaultPin(db)) return factoryPinDenied();
           audit(db, session, true, 'system', 'shutdown', {});
@@ -1703,6 +1800,27 @@ function verifyBackupFile(filePath) {
   } finally {
     try { if (vdb) vdb.close(); } catch (_) {}
   }
+}
+
+function resolveVerifiedBackup(backupDir, rawFile) {
+  const name = String(rawFile || '');
+  if (!/^(shop-|shop_backup_).*\.db$/.test(name) || path.basename(name) !== name) {
+    const err = new Error('Pick a backup from the list');
+    err.statusCode = 400;
+    throw err;
+  }
+  const source = path.join(backupDir, name);
+  if (!fs.existsSync(source)) {
+    const err = new Error('Backup file no longer exists');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!verifyBackupFile(source)) {
+    const err = new Error('That backup file failed its integrity check and cannot be restored');
+    err.statusCode = 400;
+    throw err;
+  }
+  return { name, source };
 }
 
 function createDbBackup(db, dbPath, backupDir = RUNTIME_BACKUP_DIR, fileName) {

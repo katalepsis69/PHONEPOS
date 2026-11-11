@@ -131,3 +131,178 @@ serverTest('Un-elevated first-time setup: change factory PIN and set settings wi
   // Since PIN is no longer default and no elevation provided, it is denied
   assert.strictEqual(failedRes.status, 403);
 });
+
+serverTest('Manager Recovery Password: status, setup, settings reflection, recovery, and expired trial immunity', async (baseUrl, db, auth) => {
+  // 1. Unconfigured GET /api/auth/recovery-status -> { configured: false }
+  const statusRes = await fetch(`${baseUrl}/api/auth/recovery-status`);
+  assert.strictEqual(statusRes.status, 200);
+  const statusData = await statusRes.json();
+  assert.strictEqual(statusData.configured, false);
+
+  // 2. Change PIN from 1234 to 8888 so factory PIN gate is cleared
+  const pinRes = await fetch(`${baseUrl}/api/auth/change-pin`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old_pin: '1234', new_pin: '8888' })
+  });
+  assert.strictEqual(pinRes.status, 200);
+  const pinData = await pinRes.json();
+  const managerAuth = {
+    'Authorization': `Bearer ${pinData.token}`,
+    'X-Elevation': pinData.elevationToken
+  };
+
+  // 3. Staff session rejected (403) on POST /api/auth/recovery-password
+  const staffRes = await fetch(`${baseUrl}/api/auth/staff`, {
+    method: 'POST',
+    headers: { ...managerAuth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Cashier Alice', pin: '5555' })
+  });
+  assert.strictEqual(staffRes.status, 201);
+  const staffUser = await staffRes.json();
+
+  const staffLoginRes = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ staffId: staffUser.id, pin: '5555' })
+  });
+  assert.strictEqual(staffLoginRes.status, 200);
+  const staffLoginData = await staffLoginRes.json();
+  const staffAuth = { 'Authorization': `Bearer ${staffLoginData.token}` };
+
+  const staffRecRes = await fetch(`${baseUrl}/api/auth/recovery-password`, {
+    method: 'POST',
+    headers: { ...staffAuth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recovery_password: 'secretRecovery123' })
+  });
+  assert.strictEqual(staffRecRes.status, 403);
+
+  // 4. Manager POST /api/auth/recovery-password -> 200
+  const recRes = await fetch(`${baseUrl}/api/auth/recovery-password`, {
+    method: 'POST',
+    headers: { ...managerAuth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recovery_password: 'secretRecovery123' })
+  });
+  assert.strictEqual(recRes.status, 200);
+  const recData = await recRes.json();
+  assert.strictEqual(recData.success, true);
+  assert.strictEqual(recData.recovery_password_configured, true);
+
+  // Verify recovery-status returns configured: true
+  const statusRes2 = await fetch(`${baseUrl}/api/auth/recovery-status`);
+  assert.strictEqual(statusRes2.status, 200);
+  assert.strictEqual((await statusRes2.json()).configured, true);
+
+  // 5. GET /api/settings returns recovery_password_configured: true without hash fields
+  const settingsRes = await fetch(`${baseUrl}/api/settings`, { headers: { ...managerAuth } });
+  assert.strictEqual(settingsRes.status, 200);
+  const settingsData = await settingsRes.json();
+  assert.strictEqual(settingsData.recovery_password_configured, true);
+  assert.strictEqual(settingsData.recovery_password_hash, undefined);
+  assert.strictEqual(settingsData.recovery_failed_attempts, undefined);
+  assert.strictEqual(settingsData.recovery_lockout_until, undefined);
+
+  // 6. POST /api/auth/recover-pin wrong password -> 403
+  const badRecoverRes = await fetch(`${baseUrl}/api/auth/recover-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recovery_password: 'wrongpassword', new_pin: '9999' })
+  });
+  assert.strictEqual(badRecoverRes.status, 403);
+
+  // 7. Valid recovery password -> 200 returning token + elevationToken
+  const recoverRes = await fetch(`${baseUrl}/api/auth/recover-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recovery_password: 'secretRecovery123', new_pin: '9999' })
+  });
+  assert.strictEqual(recoverRes.status, 200);
+  const recoverData = await recoverRes.json();
+  assert.strictEqual(recoverData.success, true);
+  assert.ok(recoverData.token);
+  assert.ok(recoverData.elevationToken);
+  assert.strictEqual(recoverData.actor.type, 'manager');
+
+  // Verify newly issued elevation token can access elevated endpoints
+  const checkElevatedRes = await fetch(`${baseUrl}/api/backup/list`, {
+    headers: {
+      'Authorization': `Bearer ${recoverData.token}`,
+      'X-Elevation': recoverData.elevationToken
+    }
+  });
+  assert.strictEqual(checkElevatedRes.status, 200);
+
+  // 8. Expired trial immunity: corrupt trial_seal so trial is expired/required
+  db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('trial_seal', 'corrupt-seal-tamper')").run();
+  // Normal endpoint is now blocked with 402
+  const blockedRes = await fetch(`${baseUrl}/api/inventory`, {
+    headers: { 'Authorization': `Bearer ${recoverData.token}` }
+  });
+  assert.strictEqual(blockedRes.status, 402);
+
+  // recovery-status is licenseExempt (200, not 402)
+  const exemptStatusRes = await fetch(`${baseUrl}/api/auth/recovery-status`);
+  assert.strictEqual(exemptStatusRes.status, 200);
+
+  // recover-pin is licenseExempt (200, not 402)
+  const exemptRecoverRes = await fetch(`${baseUrl}/api/auth/recover-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recovery_password: 'secretRecovery123', new_pin: '7777' })
+  });
+  assert.strictEqual(exemptRecoverRes.status, 200);
+});
+
+serverTest('GET /api/license/status includes service_mode and POST /api/system/shutdown handles service mode', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
+  const licRes = await fetch(`${baseUrl}/api/license/status`);
+  assert.strictEqual(licRes.status, 200);
+  const licData = await licRes.json();
+  assert.strictEqual(typeof licData.service_mode, 'boolean');
+  assert.strictEqual(licData.service_mode, false);
+
+  // In normal mode, shutdown succeeds
+  const normalShutdown = await fetch(`${baseUrl}/api/system/shutdown`, {
+    method: 'POST',
+    headers: { ...auth }
+  });
+  assert.strictEqual(normalShutdown.status, 200);
+});
+
+test('service mode via POS_TEST_SERVICE_MODE env: status returns service_mode: true and shutdown returns 400', async () => {
+  process.env.POS_TEST_SERVICE_MODE = '1';
+  let server, db;
+  try {
+    const { createServer } = require('../src/server');
+    const res = createServer({ dbPath: ':memory:' });
+    server = res.server;
+    db = res.db;
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const licRes = await fetch(`${baseUrl}/api/license/status`);
+    assert.strictEqual(licRes.status, 200);
+    const licData = await licRes.json();
+    assert.strictEqual(licData.service_mode, true);
+
+    const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: '1234' })
+    });
+    const loginData = await loginRes.json();
+
+    const shutRes = await fetch(`${baseUrl}/api/system/shutdown`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${loginData.token}` }
+    });
+    assert.strictEqual(shutRes.status, 400);
+    const shutData = await shutRes.json();
+    assert.match(shutData.error, /Background server stays active in installed mode/i);
+  } finally {
+    delete process.env.POS_TEST_SERVICE_MODE;
+    if (server) await new Promise(resolve => server.close(resolve));
+    try { db?.close(); } catch (_) {}
+  }
+});

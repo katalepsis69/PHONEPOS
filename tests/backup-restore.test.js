@@ -135,3 +135,85 @@ dbTest('custom range spans the picked start and end dates', (db) => {
     /start date/
   );
 });
+
+serverTest('GET /api/backup/download guards, traversal rejection, integrity check, and file downloads', async (baseUrl, db, auth) => {
+  // 1. Rejects unauthenticated (401)
+  const unauthRes = await fetch(`${baseUrl}/api/backup/download`);
+  assert.equal(unauthRes.status, 401);
+
+  // 2. Factory PIN session rejects download (403)
+  const factoryRes = await fetch(`${baseUrl}/api/backup/download`, { headers: { ...auth } });
+  assert.equal(factoryRes.status, 403);
+
+  // Change PIN to 8888
+  const pinRes = await fetch(`${baseUrl}/api/auth/change-pin`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old_pin: '1234', new_pin: '8888' })
+  });
+  assert.equal(pinRes.status, 200);
+  const pinData = await pinRes.json();
+  const managerAuth = {
+    'Authorization': `Bearer ${pinData.token}`,
+    'X-Elevation': pinData.elevationToken
+  };
+
+  // 3. Non-elevated staff rejects download (403)
+  const staffCreate = await fetch(`${baseUrl}/api/auth/staff`, {
+    method: 'POST',
+    headers: { ...managerAuth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Cashier Dan', pin: '7777' })
+  });
+  const staffUser = await staffCreate.json();
+
+  const staffLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ staffId: staffUser.id, pin: '7777' })
+  });
+  const staffData = await staffLogin.json();
+  const staffAuth = { 'Authorization': `Bearer ${staffData.token}` };
+
+  const staffDownRes = await fetch(`${baseUrl}/api/backup/download`, { headers: { ...staffAuth } });
+  assert.equal(staffDownRes.status, 403);
+
+  // 4. Traversal filename ../data/shop.db rejected (400)
+  const traversalRes = await fetch(`${baseUrl}/api/backup/download?file=../data/shop.db`, { headers: { ...managerAuth } });
+  assert.equal(traversalRes.status, 400);
+
+  // 5. Corrupt file rejected (400)
+  const dir = process.env.POS_BACKUP_DIR;
+  fs.writeFileSync(path.join(dir, 'shop_backup_corrupt.db'), 'definitely not a valid sqlite database');
+  const corruptRes = await fetch(`${baseUrl}/api/backup/download?file=shop_backup_corrupt.db`, { headers: { ...managerAuth } });
+  assert.equal(corruptRes.status, 400);
+  assert.match((await corruptRes.json()).error, /integrity/i);
+
+  // 6. Create valid backup, then download with ?file=
+  const bRes = await fetch(`${baseUrl}/api/backup`, { method: 'POST', headers: { ...managerAuth } });
+  assert.equal(bRes.status, 200);
+  const { backup_file: backupFile } = await bRes.json();
+
+  const downRes = await fetch(`${baseUrl}/api/backup/download?file=${backupFile}`, { headers: { ...managerAuth } });
+  assert.equal(downRes.status, 200);
+  assert.equal(downRes.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(downRes.headers.get('content-disposition'), `attachment; filename="${backupFile}"`);
+  assert.equal(downRes.headers.get('cache-control'), 'no-store');
+  const buffer = Buffer.from(await downRes.arrayBuffer());
+  assert.equal(buffer.subarray(0, 15).toString(), 'SQLite format 3');
+
+  // Verify backup_download audit entry
+  const auditRes = await fetch(`${baseUrl}/api/audit?category=system`, { headers: { ...managerAuth } });
+  const auditData = await auditRes.json();
+  const dlAudit = auditData.rows.find(a => a.action === 'backup_download');
+  assert.ok(dlAudit, 'backup_download audit row is recorded');
+  const details = JSON.parse(dlAudit.detail);
+  assert.equal(details.file, backupFile);
+
+  // 7. Omit ?file= downloads the newest verified snapshot
+  const latestRes = await fetch(`${baseUrl}/api/backup/download`, { headers: { ...managerAuth } });
+  assert.equal(latestRes.status, 200);
+  assert.equal(latestRes.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(latestRes.headers.get('content-disposition'), `attachment; filename="${backupFile}"`);
+  const latestBuffer = Buffer.from(await latestRes.arrayBuffer());
+  assert.equal(latestBuffer.subarray(0, 15).toString(), 'SQLite format 3');
+});
