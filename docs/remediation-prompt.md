@@ -15,8 +15,8 @@ BASELINE RITUAL (first, no exceptions)
    differ from observed), refresh the block to today's observed state and say so in
    one line. Re-measure, do not copy a number you did not see.
 2. Run the gates and record exact results BEFORE the first change:
-   - npm test (node --test tests/*.test.js): all pass, exit 0 (568/568 on 2026-11-11,
-     about 25 s; today's count becomes the run baseline).
+   - npm test (node --test tests/*.test.js): all pass, exit 0 (610/610 on 2026-11-12,
+     about 24 s; today's count becomes the run baseline).
    - npm run build:css: exit 0.
    A hung run is a rerun, not a regression; rerun once before concluding anything.
 3. git status is the interference detector: files edited mid-session have been found
@@ -49,9 +49,15 @@ NON-NEGOTIABLES WHILE FIXING (AGENTS.md, restated as fix constraints)
   test (the default dbPath resolves to the real data/shop.db).
 - escHtml on every interpolation in public/; 44px touch targets; npm run build:css
   after any utility class change.
-- isReleaseShaped(): never write into release/ or publish/.
-- The updater version line stays exactly `const CURRENT_VERSION = 'x.y';` on one line
-  (scripts/publish-release.ps1 rewrites it by regex).
+- isReleaseShaped(): never write into release/ or publish/. On Program Files installs,
+  getBaseDir() routes runtime data and backups into C:\ProgramData\TechPartsPOS; --service
+  binds 127.0.0.1 only and returns 400 on POST /api/system/shutdown.
+- PRIVATE_SETTINGS keys (sync_token, recovery_password_hash, recovery_locked_until,
+  recovery_failed_attempts) must never leave via /api/settings, and POST /api/auth/recovery-password
+  keeps its elevated non-default-PIN guard.
+- Releases ship Inno Setup 7 TechPartsPOS-Setup-<ver>.exe plus TechPartsPOS.exe and
+  TechPartsPOS.exe.sha256 (no portable .zip). The updater version line stays exactly
+  `const CURRENT_VERSION = 'x.y';` on one line (scripts/publish-release.ps1 rewrites it by regex).
 - vm-slice tests (frontend-regressions, barcode-scan, ui-fixes, cart-recovery,
   audit-regressions, reports-behavior, template-chooser) extract source regions by
   banner comment; if a fix moves or renames such a region, update the extractor in
@@ -70,12 +76,11 @@ A gate goes red and stays red on rerun; a fix would change behavior the finding 
 not cover; the approved list is exhausted; or the tree shows signs of concurrent
 interference (see baseline step 3). Report and stop.
 
-TREE STATE (measured 2026-11-11; refresh to observed state on every run)
-- HEAD: 94d1206 (v2.8 release). Full source is tracked in git (since 2026-11-07); the release
+TREE STATE (measured 2026-11-12; refresh to observed state on every run)
+- HEAD: 533f07a (on main, 10 commits ahead of origin/main 94d1206; includes Universal POS,
+  Inno Setup 7 installer/SYSTEM service, Manager PIN Recovery, USB backup download, and
+  tests CRLF normalization). Full source is tracked in git (since 2026-11-07); the release
   pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 571/571 pass, 0 fail, exit 0 (49 test files:
-  48 tracked plus untracked tests/universal-pos.test.js).
-- Dirty at measurement (in-flight operator work; leave as-is, not findings):
-  .agents/skills/techparts-pass/, CHANGELOG.md, RELEASE_NOTES.md, cloud-deploy/, cloud/,
-  docs/, public/, publish.bat, publish-release.bat, scripts/publish-release.ps1, src/,
-  tests/ (including untracked tests/universal-pos.test.js).
+- Gates: npm run build:css exit 0; npm test 610/610 pass, 0 fail, exit 0 across 49 test
+  files (all tracked).
+- Working tree: clean at measurement (`git status --short` empty).

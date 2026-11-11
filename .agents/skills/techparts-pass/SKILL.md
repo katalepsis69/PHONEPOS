@@ -50,8 +50,8 @@ when the user supplies items to build. Hard boundaries between passes:
 - Gates before any change: `npm run build:css` exits 0 (regenerates
   public/tailwind.build.css after any Tailwind class change), and `npm test`
   (node --test tests/*.test.js) passes at the recorded baseline with exit 0
-  (568/568 measured 2026-11-11 across 49 test files, about 25 s; a hang is a rerun, not a
-  regression). Each pass's baseline ritual re-measures and records the count.
+  (a hang is a rerun, not a regression). Each pass's baseline ritual re-measures
+  and records the count; the measured numbers live in each prompt's gate section.
 - Never commit unless the user asks.
 - Zero em dashes in any report.
 - If a prompt's tree-state block is stale (HEAD, counts, dirty files), update

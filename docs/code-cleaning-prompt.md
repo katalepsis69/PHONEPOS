@@ -15,8 +15,8 @@ BASELINE RITUAL (first, no exceptions)
    differ from observed), refresh the block to today's observed state and say so in
    one line. Re-measure, do not copy a number you did not see.
 2. Run the gates and record exact results BEFORE the first change:
-   - npm test (node --test tests/*.test.js): all pass, exit 0 (568/568 on 2026-11-11,
-     about 25 s; today's count becomes the run baseline).
+   - npm test (node --test tests/*.test.js): all pass, exit 0 (610/610 on 2026-11-12,
+     about 24 s; today's count becomes the run baseline).
    - npm run build:css: exit 0.
    A hung run is a rerun, not a regression; rerun once before concluding anything.
 3. git status is the interference detector: files edited mid-session have been found
@@ -56,12 +56,18 @@ TRAPS (look dead, are deliberately kept; ask before touching ANY of these)
   retry: lifecycle, not dead code.
 - The updater's session/license route exemptions and the dual cloud analytics
   implementations: documented surfaces under active audit, not debris.
+- The SYSTEM service and PIN recovery wiring: TechPartsPOS-Server task setup in
+  installer/TechPartsPOS.iss, --service loopback mode and runInstalledLauncher in
+  src/server.js, isProgramFilesPath in src/db.js, schtasks restart in src/updater.js,
+  PIN_NAMESPACES.recovery in src/auth.js, PRIVATE_SETTINGS recovery keys in
+  src/settings.js, and GET /api/backup/download.
 
 STRAY FILES (report, ask before deleting)
-pos-server.log at the repo root, cloud-deploy.zip, publish/ contents, live
+pos-server.log at the repo root, publish/ contents, dist/installer/ build artifacts, live
 runtime state inside dist/ (data/, backups/, browser-profile/, pos-server.log),
 tests/ t_*.db litter (must be zero; verify). Note: publish.bat and
-publish-release.bat are active, tested release entry points; do not delete.
+publish-release.bat are active, tested release entry points; do not delete. (cloud-deploy.zip
+no longer exists at the root; report only if re-introduced.)
 NEVER delete: data/ (the shop database), backups/ (shop snapshots), the
 backups/code-pre-* trees (the diff history), dist/vendor-private-key.pem (vendor
 signing key; loss is unrecoverable and it must never ship either).
@@ -81,12 +87,9 @@ STOP CONDITIONS
 A gate goes red after a deletion and stays red on rerun (restore the item, report);
 the user declines an item; the tree shows concurrent interference. Report and stop.
 
-TREE STATE (measured 2026-11-11; refresh to observed state on every run)
-- HEAD: 94d1206 (v2.8 release). Full source is tracked in git (since 2026-11-07); the release
-  pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 568/568 pass, 0 fail, exit 0 (49 test files:
-  48 tracked plus untracked tests/universal-pos.test.js).
-- Dirty at measurement (in-flight operator work; leave as-is, not findings):
-  .agents/skills/techparts-pass/, CHANGELOG.md, RELEASE_NOTES.md, cloud-deploy/, cloud/,
-  docs/, public/, publish.bat, publish-release.bat, scripts/publish-release.ps1, src/,
-  tests/ (including untracked tests/universal-pos.test.js).
+TREE STATE (measured 2026-11-12; refresh to observed state on every run)
+- HEAD: 533f07a (on main, 10 commits ahead of origin/main 94d1206). Full source is tracked
+  in git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
+- Gates: npm run build:css exit 0; npm test 610/610 pass, 0 fail, exit 0 across 49 test
+  files (all tracked).
+- Working tree: clean at measurement (`git status --short` empty).

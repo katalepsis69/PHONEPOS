@@ -16,8 +16,8 @@ BASELINE RITUAL (first, no exceptions)
    differ from observed), refresh the block to today's observed state and say so in
    one line. Re-measure, do not copy a number you did not see.
 2. Run the gates and record exact results BEFORE the first change:
-   - npm test (node --test tests/*.test.js): all pass, exit 0 (568/568 on 2026-11-11,
-     about 25 s; today's count becomes the run baseline).
+   - npm test (node --test tests/*.test.js): all pass, exit 0 (610/610 on 2026-11-12,
+     about 24 s; today's count becomes the run baseline).
    - npm run build:css: exit 0.
    A hung run is a rerun, not a regression; rerun once before concluding anything.
 3. git status is the interference detector: files edited mid-session have been found
@@ -30,13 +30,20 @@ WHAT TO ADD (priority order)
 2. Data integrity: transactions around multi-statement writes, op_id idempotency on
    every POST, stock guards, FK/UNIQUE constraints rejecting bad rows.
 3. Auth: elevation tokens, the factory-PIN refusal on every manager path, lockout,
-   session expiry, sync_url validation.
+   session expiry, sync_url validation, Manager Recovery Password (PIN_NAMESPACES.recovery
+   15m lockout, /api/auth/recovery-password elevation+non-default gate, /api/auth/recover-pin),
+   and PRIVATE_SETTINGS exclusion.
 4. Sync: outbox enqueue/ack/backoff, backfillMirror windows, heartbeat, row caps.
 5. Printer: 58mm (32-col) and 80mm (48-col) wrap, drawer kick default, plain() ASCII
    dropping, layout versus encode split.
 6. RMA caps, license verification (machine id, trial seal, anti-rollback, key
-   fallback), the updater's pure parts (version compare, URL resolver, digest rule),
-   i18n en/tl key parity, analytics formulas shared with the cloud.
+   fallback), the updater's pure parts (version compare, URL resolver, digest rule,
+   serviceMode staging/schtasks handoff), i18n en/tl key parity, analytics formulas shared
+   with the cloud.
+7. Installed service & backup paths: Program Files to C:\ProgramData\TechPartsPOS routing,
+   --service loopback binding (127.0.0.1) and shutdown 400 refusal, runtime/server.json
+   launcher recovery, GET /api/backup/download integrity and traversal guards, and
+   installer/TechPartsPOS.iss task lifecycle assertions.
 
 HARD RULES
 - Tests live in tests/*.test.js using node:test and ES modules; no new frameworks, no
@@ -65,12 +72,9 @@ The baseline is red; a needed test cannot be written without a source change (wr
 the remediation finding and move on); the tree shows concurrent interference. Report
 and stop.
 
-TREE STATE (measured 2026-11-11; refresh to observed state on every run)
-- HEAD: 94d1206 (v2.8 release). Full source is tracked in git (since 2026-11-07); the release
-  pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 572/572 pass, 0 fail, exit 0 (49 test files:
-  48 tracked plus untracked tests/universal-pos.test.js).
-- Dirty at measurement (in-flight operator work; leave as-is, not findings):
-  .agents/skills/techparts-pass/, CHANGELOG.md, RELEASE_NOTES.md, cloud-deploy/, cloud/,
-  docs/, public/, publish.bat, publish-release.bat, scripts/publish-release.ps1, src/,
-  tests/ (including untracked tests/universal-pos.test.js).
+TREE STATE (measured 2026-11-12; refresh to observed state on every run)
+- HEAD: 533f07a (on main, 10 commits ahead of origin/main 94d1206). Full source is tracked
+  in git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
+- Gates: npm run build:css exit 0; npm test 610/610 pass, 0 fail, exit 0 across 49 test
+  files (all tracked).
+- Working tree: clean at measurement (`git status --short` empty).

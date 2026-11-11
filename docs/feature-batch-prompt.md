@@ -24,8 +24,8 @@ BASELINE RITUAL (first, no exceptions)
    differ from observed), refresh the block to today's observed state and say so in
    one line. Re-measure, do not copy a number you did not see.
 2. Run the gates and record exact results BEFORE the first change:
-   - npm test (node --test tests/*.test.js): all pass, exit 0 (568/568 on 2026-11-11,
-     about 25 s; today's count becomes the run baseline).
+   - npm test (node --test tests/*.test.js): all pass, exit 0 (610/610 on 2026-11-12,
+     about 24 s; today's count becomes the run baseline).
    - npm run build:css: exit 0.
    A hung run is a rerun, not a regression; rerun once before concluding anything.
 3. git status is the interference detector: files edited mid-session have been found
@@ -58,7 +58,9 @@ INVARIANTS HELD DURING WORK (AGENTS.md, restated as build rules)
   send a cut command.
 - New manager-facing routes: session plus elevation plus factory-PIN refusal where
   existing sensitive routes have it; an audit row for state-changing actions.
-- isReleaseShaped(): never write into release/ or publish/.
+- isReleaseShaped(): never write into release/ or publish/. Program Files installs route
+  runtime data to C:\ProgramData\TechPartsPOS; releases ship Inno Setup 7
+  TechPartsPOS-Setup-<ver>.exe plus TechPartsPOS.exe and .sha256 (never portable .zip).
 - vm-slice test regions (banner-comment extraction in tests/) stay intact, or their
   extractors are updated in the same step and the gate re-run.
 - Never git --amend (the release pipeline commits mid-session); never commit unless
@@ -76,12 +78,9 @@ A gate stays red on rerun; an item turns out to need a dependency or a framework
 (refuse: that violates the core invariants; propose the stdlib version); the tree
 shows concurrent interference. Report and stop.
 
-TREE STATE (measured 2026-11-11; refresh to observed state on every run)
-- HEAD: 94d1206 (v2.8 release). Full source is tracked in git (since 2026-11-07); the release
-  pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 568/568 pass, 0 fail, exit 0 (49 test files:
-  48 tracked plus untracked tests/universal-pos.test.js).
-- Dirty at measurement (in-flight operator work; leave as-is, not findings):
-  .agents/skills/techparts-pass/, CHANGELOG.md, RELEASE_NOTES.md, cloud-deploy/, cloud/,
-  docs/, public/, publish.bat, publish-release.bat, scripts/publish-release.ps1, src/,
-  tests/ (including untracked tests/universal-pos.test.js).
+TREE STATE (measured 2026-11-12; refresh to observed state on every run)
+- HEAD: 533f07a (on main, 10 commits ahead of origin/main 94d1206). Full source is tracked
+  in git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
+- Gates: npm run build:css exit 0; npm test 610/610 pass, 0 fail, exit 0 across 49 test
+  files (all tracked).
+- Working tree: clean at measurement (`git status --short` empty).

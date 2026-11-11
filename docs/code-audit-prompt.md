@@ -1,96 +1,55 @@
-# Code and System Audit Prompt (v8)
+# Code and System Audit Prompt (v9)
 
-[v8, 2026-11-09, supersedes v7 of 2026-11-05 (which superseded v6 of 2026-11-02, which
-superseded v5 of 2026-10-14 evening, which superseded v4 of that morning and v3 of
-2026-10-02; a byte-identical copy of v3 sits at
-backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). Those trees are frozen
-snapshots, this file is the live brief. v7 measured 505 tests in 44 files on 2026-11-05
-against version 2.4 (505/505 on a parallel and a sequential run that day; one earlier
-parallel run hung past ten minutes and was killed without output, and a hung run is a
-rerun, not a regression). THIS EDITION IS MEASURED ON 2026-11-11 against version 2.8
-(+ uncommitted working tree changes): npm test reports 568 tests in 49 files
-(48 tracked plus untracked tests/universal-pos.test.js), 568/568 green on a parallel
-run (about 25 s; the rerun rule in GATES stands). Version is 2.8 in all three places
-that matter: package.json:3, CURRENT_VERSION (src/updater.js:10) and MyAppVersion
-(installer/TechPartsPOS.iss:19). Tags on the remote run through v2.8, and v2.8 was
-fully published with every release asset live.
+[v9, 2026-11-12, supersedes v8 of 2026-11-09 (which superseded v7 of 2026-11-05, v6 of
+2026-11-02, v5 of 2026-10-14, v4 and v3 of 2026-10-02; a frozen v3 sits at
+backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). THIS EDITION IS MEASURED
+ON 2026-11-12 at HEAD 533f07a (branch main, 10 commits ahead of v2.8 tag 94d1206): npm test
+reports 610 tests across 49 tracked files (610/610 pass in about 24 s; the rerun rule in
+GATES stands), and npm run build:css exits 0. Version is 2.8 across package.json:3,
+CURRENT_VERSION (src/updater.js:11), and MyAppVersion (installer/TechPartsPOS.iss). Note:
+origin/main still sits at 94d1206 until pushed.]
+POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..533f07a, first-look audit targets):
+1) Universal POS & Cloud Hardening (113ebc2): store profiles (phone_repair / general_retail /
+   pc_components), fractional quantities, wholesale price tiers, cloud/workstation analytics
+   parity suite (tests/analytics-parity.test.js), EN/TL copy expansion (public/js/i18n.js),
+   updater UI dialog polish, and cloud CSV formula hardening.
+2) Protected Installer, SYSTEM Service, Manager PIN Recovery & USB Backup (783023a..533f07a):
+   - Manager Recovery Password & "Forgot PIN?" (src/auth.js, src/settings.js, src/server.js,
+     public/js/auth.js, public/js/views/backoffice.js, public/index.html): mandatory 8+ char
+     PBKDF2 recovery password (PIN_NAMESPACES.recovery, independent 15m lockout),
+     PRIVATE_SETTINGS redaction (recovery_password_hash, recovery_locked_until,
+     recovery_failed_attempts), GET /api/auth/recovery-status, POST /api/auth/recovery-password
+     (gated by elevated non-default PIN session), POST /api/auth/recover-pin, and inline
+     "Forgot PIN?" local reset flow.
+   - Program Files to ProgramData data routing & SYSTEM Background Service (src/db.js,
+     src/server.js, src/updater.js, installer/TechPartsPOS.iss, scripts/build-installer.js,
+     scripts/mirror-backups.js): isProgramFilesPath() routes Program Files installs to
+     C:\ProgramData\TechPartsPOS; Inno Setup 7 compiles dist\installer\TechPartsPOS-Setup-2.8.exe
+     creating scheduled task TechPartsPOS-Server running TechPartsPOS.exe --service as
+     NT AUTHORITY\SYSTEM with icacls ACLs protecting ProgramData while leaving runtime\ readable;
+     --service binds 127.0.0.1 only when HOST is unset, writes runtime/server.json and
+     runtime/server.lock, and returns 400 on POST /api/system/shutdown ("Close POS" closes
+     only the kiosk window); desktop shortcut invokes runInstalledLauncher() reading
+     runtime/server.json (recovering via schtasks /Run if stopped); auto-updater routes
+     service staging via defaultUpdateStagingDir(true) and relaunches TechPartsPOS-Server
+     via schtasks in both :startnew and :restore branches.
+   - USB Backup Download & Installer-Only Releases: GET /api/backup/download using shared
+     resolveVerifiedBackup(backupDir, rawFile, action) ("Download copy" button in Settings);
+     scripts/publish-release.ps1, scripts/generate-changelog.js, and RELEASE_NOTES.md
+     publish TechPartsPOS-Setup-<ver>.exe, TechPartsPOS.exe, and .sha256 with zero .zip
+     archives; tests/ui-fixes.test.js normalizes CRLF in source() for Windows Git checkouts.
 GIT IS THE HISTORY NOW: 6834474 (2026-11-07) brought the full source tree under version
-control, so the v7 claims that git ls-files held three paths and that src/, public/,
-tests/, scripts/, installer/, cloud/ and docs/ were untracked are OBSOLETE. git log, git
-diff and git blame are usable history; git status is the interference detector (hazard
-(f) below survives on that point); never git --amend because the release pipeline
-commits mid-session. backups/code-pre-* snapshots remain belt-and-braces, no longer the
-only undo path. Six batches landed after v6 was written:
-(a) the 2026-11-02 realtime alignment already covered by v6; (b) a small-monitor typography
-batch on 2026-11-03 (tests/small-monitor-counter-typography.test.js); (c) a PARALLEL WORKING
-SESSION active 2026-11-03 through 2026-11-05 whose landings the v6 brief never measured:
-src/updater.js, src/inventory.js, public/js/views/pos.js, views/inventory.js,
-views/backoffice.js (2075 to 2162 lines), public/js/report.js, importer.js, i18n.js,
-auth.js (1840 to 1930), theme.js (164 down to 129, a shrink), cloud-deploy/server.js (951
-to 1191 lines) and cloud-deploy/public/app.js (1084 lines), plus tests typography-presets,
-report, cloud-hardening, template-chooser (new), updater-ui, importer, inventory and
-changelog (new); (d) the 2026-11-05 cloud-sync fix batch by the audit session itself:
-src/sync.js (197 to 233 lines: backfillMirror on pair, empty-batch heartbeat, postBatch
-helper), src/server.js (1914 to 1975: pair route enqueues the backfill and audits
-backfill_rows), public/js/main.js (847 to 863: the chip shows "Cloud sync error" when the
-last push or heartbeat was refused), and tests sync/server/sync-hardening. (e) A FIELD
-INCIDENT closed by batch (d): a shop paired to the botkeep cloud showed an empty dashboard
-forever and a green "Cloud synced" chip even after unlinking on the cloud, because the
-outbox had never held a row and nothing verified the cloud still accepted the credential.
-(f) HAZARD, NOT A BATCH: that same week, files edited by one session were found reverted or
-truncated on disk while another session was live (src/sync.js restored wholesale with a
-backdated mtime, a function cut to half its body, two test files rolled back). Any audit
-run in this tree must re-verify the on-disk state of every file it cites in the same
-command that tests it, and treat a stale mismatch as interference first, a code defect
-second. [2026-11-09: the ".git STILL IS NOT THE HISTORY" paragraph that followed here is
-OBSOLETE; the full tree is tracked since 6834474, git log and git diff are the primary
-change-evidence tools, and the code-pre-* snapshots are secondary.]
-CLOUD TREE DUALITY: cloud/ and cloud-deploy/ both exist; as of 2026-11-11
-their server.js (1887 lines), public/app.js (1931 lines) and public/index.html files are
-byte-identical and cloud/ additionally holds data/
-(runtime state); re-verify at audit time. DEPLOY DIRECTION, measured 2026-11-05 and contradicting the folder names:
+control. git log, git diff, and git blame are primary history; git status is the
+interference detector (hazard (f) below survives on that point); never git --amend because
+the release pipeline commits mid-session.
+CLOUD TREE DUALITY: cloud/ and cloud-deploy/ both exist; as of 2026-11-12
+their server.js (1903 lines), public/app.js (1932 lines) and public/index.html (1524 lines)
+files are byte-identical and cloud/ additionally holds data/ (runtime state); re-verify at
+audit time. DEPLOY DIRECTION, measured 2026-11-05 and contradicting the folder names:
 scripts/deploy-cloud.js copies cloud/ INTO cloud-deploy/ and uploads the cloud/ copies to
 POST /api/deploy, so cloud/ is the script's source of truth and cloud-deploy/ the mirror;
-deploy-cloud.bat's own prompt says the reverse. This direction conflict is itself a
-finding (the audit confirmed it); until it is fixed, treat EITHER tree's server.js as
-the same code only because they were byte-identical at measurement time. Every citation
-below written as
-cloud/server.js means cloud-deploy/server.js today; re-resolve the symbol against
-cloud-deploy/ rather than trusting a coordinate.
-CHANGES SINCE v7 (2026-11-07 through 2026-11-08, all unaudited by v7, first-look here):
-(a) 6834474 brought the tree under git and was the v7 fix batch itself; (b) the manager
-elevation token now lives in sessionStorage so elevation survives F5 (15-minute TTL and
-server verification kept; public/js/auth.js:7-34, key pos_elevation); (c) port drift
-widened: the server retries on EACCES as well as EADDRINUSE (src/server.js:1951-1964)
-after a stale bun.exe held port 3000 and Windows reported it as EACCES; (d) scripts/publish-release.ps1 was rewritten to 575 lines on 2026-11-08 (637 lines now:
-idempotent version derivation, whole-tree release commit, zero-mutation DryRun mode,
-PositionalBinding = $false CLI parsing; GitHub /releases must be read through
-Get-GithubReleases because PowerShell 5.1 transposes that listing on this box);
-(e) the reorder list: an auto supplier reorder sheet with editable quantities and live
-re-price, 44px quantity inputs anchored to unit cost through a shared estCellHtml helper
-(public/js/views/inventory.js, tests/reorder.test.js); (f) receipt templates: five
-layouts (standard default, compact, boxed, airy, grid) plus an item-rows dropdown, sales
-only, validated into the settings whitelist (src/server.js:852-855), with a NEW POST
-/api/receipt/preview route (src/server.js:930) rendering a fixed sample sale (:65-68)
-through the same printer.js line layer the queue builder uses, so preview and paper
-cannot drift by construction - verify that claim, check the route's session and license
-posture, and note the printer tests pin two_line explicitly because Auto is the default;
-(g) the audit-log redesign: sentence-first feed, actor column, category dots, ELEVATED
-badge, day headers; auditSentence (public/js/auth.js:1657) emits html through ref()/txt()
-escaping - verify every interpolation inside those helpers, and note the v7 citations to
-public/js/auth.js (the v7 path public/js/views/auth.js no longer exists) are stale paths, that file no longer exists; (h) the feedback
-button: a rail dialog offering mailto, Gmail, Yahoo and copy-to-clipboard to the vendor
-address, auto-attaching version, machine id and license state fetched from
-/api/license/status; no backend, no provider.
-Read AGENTS.md / GEMINI.md / SKILL.md for
-tone, not as a spec of what the code does. LINE-NUMBER HONESTY: numbers below were
-measured against 2.4 on 2026-11-05 unless marked otherwise; the 2026-11-09 additions to
-this brief were measured against 2.6, the 2026-11-11 refresh updates file sizes, cloud
-duality and suite counts against 2.8 (+ the uncommitted universal-POS, fractional-qty,
-cloud CSV, mobile touch, and publish-release.ps1 hardening batch), and any coordinate that
-predates the 2026-11-07/08 batches or those 2026-11-11 src/public/cloud/scripts edits may have moved. Where the brief names a symbol
-and no number, that number was NOT re-measured, so resolve the symbol instead of trusting a
-coordinate. Spot-check the block matches, then move on; do not re-litigate it as findings.
+deploy-cloud.bat's own prompt says the reverse. Treat EITHER tree's server.js as the same
+code only while byte-identical; verify hash parity first.
 Companion: docs/refactoring-prompt.md (now v3) governs zero-behavior-change refactoring
 passes; docs/remediation-prompt.md, docs/code-cleaning-prompt.md,
 docs/test-hardening-prompt.md and docs/feature-batch-prompt.md complete the six-pass
@@ -110,11 +69,14 @@ finding; the report is never retro-fitted to the fixes.
 
 OPERATING SCALE (judge every finding against THIS)
 - One shop, one Windows PC, 1 to 3 cashier/manager seats. The UI is the vanilla
-  ES-module SPA in public/, served by the same process and launched by the server as
-  an Edge/Chrome app window with --kiosk-printing. The flag no longer makes printing
-  silent (ESC/POS slips go through the queue with no dialog); it keeps the browser
-  fallback silent. The window keeps its title bar; closing it ends the session and the
-  server exits through its heartbeat watchdog. Traffic is localhost or the shop LAN.
+  ES-module SPA in public/, served locally by the Node process. In dev/direct runs, the
+  process launches an Edge/Chrome window with --kiosk-printing and exits via its
+  heartbeat watchdog when closed. In installed Program Files setups (--service mode via
+  scheduled task TechPartsPOS-Server under NT AUTHORITY\SYSTEM), the server binds 127.0.0.1
+  and persists shop data in C:\ProgramData\TechPartsPOS; the desktop shortcut launches an
+  installed browser client reading runtime/server.json, and "Close POS" closes only the
+  window (POST /api/system/shutdown returns 400). Look for loopback-only exposure unless
+  configured explicitly in dev/LAN mode (docs/OPERATIONS_AND_DEPLOYMENT.md).
 - Interface language and typography are machine-local browser state (the localStorage
   keys pos_lang and techparts_appearance), deliberately not server settings and
   deliberately not synced. Two seats showing a different language or a different font
@@ -141,32 +103,32 @@ OPERATING SCALE (judge every finding against THIS)
   pushes row snapshots out; the manager phone app logs in over the internet and watches
   Server-Sent Events for live updates. Treat every cloud route as internet-facing and
   every cloud finding as higher severity than its LAN equivalent.
-- Distribution is a Node SEA single executable: release/customer/ carries ONLY
-  TechPartsPOS.exe (verified on disk 2026-11-02, one file). dist/ is the vendor workspace
-  and never ships. NOTE FOR CATEGORY 3 AND 7: dist/ today also holds backups/,
-  browser-profile/, data/ and a pos-server.log dated 2026-11-02, which means somebody ran
-  the built exe from inside the vendor workspace and wrote live state there.
+- Distribution is an Inno Setup 7 installer (dist/installer/TechPartsPOS-Setup-2.8.exe)
+  wrapping the Node SEA executable (release/customer/TechPartsPOS.exe; verified on disk
+  2026-11-12, no portable .zip archive). GitHub Releases carry TechPartsPOS-Setup-<ver>.exe
+  plus TechPartsPOS.exe and TechPartsPOS.exe.sha256 for in-app auto-updates. dist/ is the
+  vendor workspace and never ships. NOTE FOR CATEGORY 3 AND 7: dist/ holds backups/,
+  browser-profile/, data/, and pos-server.log from vendor workspace runs.
 If a problem cannot manifest at this scale, it belongs in "Future Scale Notes", not
 in the findings. Do not manufacture performance problems where they cannot occur.
 
 WHAT TO AUDIT (and what to skip)
-Audit: src/ (server.js 2113, printer.js 970, updater.js 719, analytics.js 593,
-inventory.js 603, license.js 463, db.js 451, auth.js 326, sync.js 326, credits.js 303,
-sales.js 292, returns.js 237, settings.js 144, seed.js 133, reconcile.js 123,
-audit.js 112, shifts.js 86, names.js 43, money.js 35; 8072 lines total), public/ sources
-(js/ including views/ (backoffice.js 2168, inventory.js 1700, pos.js 1616), auth.js 2349,
-receipts.js 1029, main.js 995, i18n.js 947, ui.js 543, report.js 395, importer.js 154,
-theme.js 129, search.js 116, chart.js 84, state.js 75, api.js 58, cart-recovery.js 12,
-index.html 2614, report.html 483, styles.css as the hand-written source, report-sw.js, the manifests; skip
-fonts/ and the generated tailwind.build.css), cloud-deploy/ (server.js 1887 and
-public/app.js 1931, byte-identical to cloud/ at measurement time; the manager
-app), scripts/ (generate-license.js, set-pin.js, mirror-backups.js, build-artifacts.js,
-build-exe.js, build-common.js, build-license-exe.js, build-installer.js, verify-exe.js,
-release-customer.js, check-repair-ui.js, deploy-cloud.js, publish-release.ps1 at 637
-lines, rewritten 2026-11-08 and updated 2026-11-11), installer/TechPartsPOS.iss, tests/ (49 *.test.js files plus
-helper.js and cloud-hardening-harness.js: 48 tracked including receipt-choices.test.js
-added for v2.8, plus untracked universal-pos.test.js; reorder, port-drift and
-packaging-workflows joined since v7), and the docs:
+Audit: src/ (server.js 2401, printer.js 970, updater.js 728, analytics.js 593,
+inventory.js 604, license.js 483, db.js 474, auth.js 398, sync.js 329, credits.js 310,
+sales.js 295, returns.js 235, settings.js 149, seed.js 133, reconcile.js 123,
+audit.js 112, shifts.js 86, names.js 43, money.js 35; 8501 lines total across 19 files),
+public/ sources (js/ including views/ (backoffice.js 2213, inventory.js 1700, pos.js 1630),
+auth.js 2589, receipts.js 1031, main.js 1034, i18n.js 1001, ui.js 543, report.js 395,
+importer.js 154, theme.js 129, search.js 116, chart.js 84, state.js 77, api.js 58,
+cart-recovery.js 12, index.html 2688, report.html 483, styles.css 5750, report-sw.js,
+the manifests; skip fonts/ and the generated tailwind.build.css), cloud-deploy/
+(server.js 1903, public/app.js 1932, public/index.html 1524, byte-identical to cloud/ at
+measurement time; the manager app), scripts/ (generate-license.js 421, set-pin.js 67,
+mirror-backups.js 70, build-artifacts.js 90, build-exe.js 118, build-common.js 112,
+build-license-exe.js 89, build-installer.js 60, verify-exe.js 275, release-customer.js 58,
+check-repair-ui.js 110, deploy-cloud.js 82, generate-changelog.js 563, publish-release.ps1
+640), installer/TechPartsPOS.iss (216 lines), tests/ (49 tracked *.test.js files plus
+helper.js and cloud-hardening-harness.js), and the docs:
 README.md, RELEASE_NOTES.md, ARCHITECTURE.md,
 DATABASE_SCHEMA.md, API_REFERENCE.md, BUSINESS_LOGIC_AND_WORKFLOWS.md,
 SECURITY_AND_LICENSING.md, OPERATIONS_AND_DEPLOYMENT.md, README-DEV.md. REMEDIATION_PLAN.md
@@ -177,13 +139,11 @@ Skip contents of: node_modules/, scratch/, dist/, release/, publish/, backups/,
 browser-profile/, gui-test-screenshots/, .superpowers/, .zcode/, .kilo/, .freebuff, cloud/
 (runtime mirror of cloud-deploy/, plus its data/; audit cloud-deploy/ instead). You may
 note on-disk artifacts that should not ship without auditing their contents:
-publish/ (3.1GB, grown from the 2.2GB v6 measured), pos-server.log at the root (576KB, no
-rotation), cloud-deploy.zip at the root, data/ and cloud/data/ contents, the live-runtime
-state inside dist/, and the two root .bat entry points (publish.bat from 2026-10-01 and
-publish-release.bat from 2026-11-02, which now coexist with deploy-cloud.bat from the
-2026-11-05 batch). CLOSED, do not re-report: the tests/ t_*.db litter (verify it is still
-zero, tests/ held no .db/.db-wal/.db-shm on 2026-11-02). smoke.db, scripts/probe2.db and
-pos-crash.log likewise stay gone.
+publish/ (~4.67 GB), pos-server.log at the root (~3.3 KB, unrotated), data/ and
+cloud/data/ contents, the live-runtime state inside dist/, and the root .bat entry points
+(publish.bat, publish-release.bat, deploy-cloud.bat). (cloud-deploy.zip is gone.)
+CLOSED, do not re-report: the tests/ t_*.db litter (verify still zero). smoke.db,
+scripts/probe2.db and pos-crash.log stay gone.
 Allowed: reading files, greps, read-only commands, npm test. Not allowed: editing or
 creating files, any write against the real data/ shop.db or the real cloud.db,
 starting long-running servers, and NEVER sending real shop data, sync tokens, manager
@@ -261,13 +221,16 @@ that the implementation still matches, then move on)
   writes: stock adjustments, CSV import rows and part creation. Since 2026-10-15 the
   bulk-edit route threads the client key through as well (src/server.js:526,
   { op_id: body?.op_id }).
-- Auth: manager PIN is PBKDF2 with 100,000 iterations and a per-hash salt; legacy
-  SHA-256 hashes upgrade on first use; verification is timing-safe; lockout counters
-  persist in the database. Manager actions need elevation tokens. While the factory
-  PIN 1234 is live, manager elevation is refused (shop settings, starter seeding, and
-  the day close stay unavailable). The phone report has its own attempt counter and a
-  longer lockout, surfaced as 429. sync_url and sync_shop_id are hidden from staff
-  sessions.
+- Auth: manager PIN and the 8+ char Manager Recovery Password (PIN_NAMESPACES.recovery,
+  src/auth.js:88+) use PBKDF2 with 100,000 iterations and per-hash salt; legacy SHA-256
+  PIN hashes upgrade on first use; verification is timing-safe; lockout counters persist in
+  the database with independent 15m recovery lockout. Manager actions need elevation tokens.
+  While factory PIN 1234 is live, manager elevation and POST /api/auth/recovery-password
+  are refused (installed setups require setting the recovery password alongside replacing
+  1234 and disable "Skip" in the UI). The phone report has its own attempt counter and
+  429 lockout. PRIVATE_SETTINGS (src/settings.js:5) keeps sync_token,
+  recovery_password_hash, recovery_locked_until, and recovery_failed_attempts out of
+  /api/settings.
 - Audit trail: append-only with a hash chain; ACTION_LABELS is re-keyed to the real
   action set. src/audit.js itself is unchanged since before v5 (hashRow, one INSERT
   carrying the predicted id and the previous hash, paged verifyChain, the row_hash
@@ -322,15 +285,16 @@ that the implementation still matches, then move on)
   calendar day), each verified with PRAGMA integrity_check before it may replace the
   previous good copy; retention prunes automatic and manual snapshots older than 14
   days; scripts/mirror-backups.js copies snapshots to a second disk or share and prefers
-  the exe home when its shop.db exists; the Reports tab warns when the newest snapshot
-  goes stale; restore is in-process, rebinds the db handle, and takes a pre-restore
-  safety snapshot.
-- Lifecycle: a machine-wide instance lock lives at
-  %LOCALAPPDATA%\TechPartsPOS\server.lock (dev and start.bat runs use the project
-  directory; tests never touch the machine lock); the port retry is bounded (+20); the
-  auto-exit watchdog is armed by the browser heartbeat and is silence-driven (the kiosk
-  dropped the ?closing=1 beacons, public/js/main.js:124-132); SIGINT, SIGBREAK and SIGTERM
-  are handled; crash handlers write pos-crash.log.
+  the resolved data dir (C:\ProgramData\TechPartsPOS for Program Files installs); the
+  Reports tab warns when the newest snapshot goes stale; restore is in-process, rebinds
+  the db handle, and takes a pre-restore safety snapshot; GET /api/backup/download ("Download
+  copy" in Settings) shares resolveVerifiedBackup() for safe USB export.
+- Lifecycle: direct/dev runs keep %LOCALAPPDATA%\TechPartsPOS\server.lock with the
+  silence-driven watchdog; Program Files installs run TechPartsPOS-Server (--service,
+  127.0.0.1 loopback bind, C:\ProgramData\TechPartsPOS\runtime\server.lock and server.json,
+  POST /api/system/shutdown returns 400); desktop shortcut calls runInstalledLauncher() to
+  open or restart the background service; SIGINT, SIGBREAK, and SIGTERM are handled; crash
+  handlers write pos-crash.log.
 - Payments: GCash and transfer sales require a payment_reference; collections above a
   shop-set amount need manager authorization; the day close reconciles the drawer per
   payment method; shift_variance_threshold is now a real Settings field with a reader
@@ -348,17 +312,15 @@ that the implementation still matches, then move on)
   top-right; the dashboard supports a custom range (period=custom&from). showToast
   escapes (public/js/ui.js:7-9, interpolation at :72, both intact), so a toast that
   echoes raw scanner text is not an injection vector.
-- Barcode scanning (public/js/views/pos.js, now 1516 lines; documented as live behavior
+- Barcode scanning (public/js/views/pos.js, 1630 lines; documented as live behavior
   in docs/OPERATIONS_AND_DEPLOYMENT.md section 2.5 item 4): a USB HID keyboard-wedge
   burst on the POS tab is read as a part code wherever the caret sits. The gates are
-  deliberate and must not be re-tuned as bugs: SCAN_BURST_MS 100 (pos.js:173),
-  SCAN_FIELD_MIN 6 (:177), POS tab only (:381), suppressed while a modal OR a gate is
-  open (:387, the selector was widened on 2026-10-15 to include .gate:not(.hidden) so the
-  login, license and PIN screens also hold it back), SCAN_TEXT_FIELDS (:182:
-  repair-device-input, repair-imei, repair-note, pos-tendered, pos-discount) because a
-  phone carton carries the device IMEI as a barcode and a money box never means a part
-  code. Characters hijacked from a field are put back to what the field held (:410,
-  burstStart declared :372). Lookup is strict exact match on sku_barcode,
+  deliberate and must not be re-tuned as bugs: SCAN_BURST_MS 100 (pos.js:178),
+  SCAN_FIELD_MIN 6, POS tab only, suppressed while a modal OR a gate is open
+  (.gate:not(.hidden)), SCAN_TEXT_FIELDS (:187: repair-device-input, repair-imei,
+  repair-note, pos-tendered, pos-discount) because a phone carton carries the device IMEI
+  as a barcode and a money box never means a part code. Characters hijacked from a field
+  are put back to what the field held. Lookup is strict exact match on sku_barcode,
   case-insensitive, against the catalog copy the tab already holds (:234-236); unknown,
   out-of-stock and over-quantity codes buzz and are refused, and the old "Enter adds the
   top match" fallback is gone for a detected burst by decision, not by accident. The
@@ -375,11 +337,9 @@ that the implementation still matches, then move on)
   answers 409 (isSkuDupError src/server.js:194, raised at :505 and :577); CSV import maps
   sku, barcode, upc, ean and similar aliases and refuses a scientific-notation-mangled
   code (public/js/importer.js, 154 lines).
-- Interface language: public/js/i18n.js (416 lines) holds an en and a tl table, getLang
-  :343, t(key, fallback) :347, applyLanguage(lang) :352 rewriting [data-i18n] textContent
-  and [data-i18n-ph] placeholders, toggleLanguage :412 wired at data-action toggle-lang
-  (main.js:275, applied at boot :451). The 2026-11-01 batch added 27 hint keys mirrored
-  into Tagalog; every call site still passes a literal key and a literal English
+- Interface language: public/js/i18n.js (1001 lines) holds an en and a tl table, getLang,
+  t(key, fallback), applyLanguage(lang) rewriting [data-i18n] textContent and
+  [data-i18n-ph] placeholders, and toggleLanguage wired at data-action toggle-lang. Every call site still passes a literal key and a literal English
   fallback, and there is no locale key in the server settings whitelist. A string that
   survives untranslated in tl mode is a finding; a language that differs per seat is not.
 - Workstation typography: four presets (workstation, humanist, grotesk, editorial)
@@ -403,9 +363,9 @@ that the implementation still matches, then move on)
   license surface (machine id, trial seal, anti-rollback) is NEW and unaudited, see below.
 
 GATES (recount and rerun at audit time; report the current numbers)
-- npm test (node --test tests/*.test.js). Measured 2026-11-11: 568 tests across 49 files
-  (48 tracked plus untracked tests/universal-pos.test.js); 568/568 on a parallel run,
-  about 25 s. The 11-05 history stands: one parallel run that
+- npm test (node --test tests/*.test.js). Measured 2026-11-12 at 533f07a: 610 tests across
+  49 tracked files; 610/610 on a parallel run, about 24 s (tests/ui-fixes.test.js
+  normalizes CRLF line endings inside source()). The 11-05 history stands: one parallel run that
   day produced no output for over ten minutes and was killed; the immediate rerun was
   green, so a HANG is also a rerun, not a regression. The v6
   reserve-then-release flake was moved to PORT: '0' in
@@ -446,19 +406,21 @@ STILL OPEN:
   cloud/server.js:108 (the token, `${label}: ${token}`), :124 (the per-shop sync token),
   and :165 (the --rotate-pin manager PIN). A systemd journal or a tmux pane on the VPS
   holds a credential.
-- Cloud analytics versus the workstation: the class of drift CHANGED and is still open.
+- Cloud analytics versus the workstation: the class of drift CHANGED.
   Through 2026-10-14 the cloud read json_extract over row_json blobs with fields the
   workstation no longer emitted. The 2026-11-02 alignment batch instead made the cloud
   compute the same numbers the workstation does: RMA replacement cost, proportional
   discount allocation, cash_adjustments, collected_total, generated_at
-  (cloud/server.js:643-800), plus a debtor_list on /api/summary (:579-619). So the risk is
-  no longer a missing key, it is two independent implementations of one profit formula
-  disagreeing. There is no test that compares the two outputs for one dataset. Name every
-  formula that now exists twice and say which side a new field lands on.
+  (cloud/server.js:643-800), plus a debtor_list on /api/summary (:579-619).
+  tests/analytics-parity.test.js now verifies top_products, standing, reorder/dead
+  stock, period analytics, and fractional quantities against one dataset; still check for
+  newly added fields (for example wholesale tiers or multi-industry items) drifting
+  between the two implementations.
 - The self-update path has still never been exercised for real, and the surface it must
-  cover grew from 269 to 642 lines with a resume, a sidecar, a rename-aside and a rollback
-  branch. tests/updater.test.js is now 21 tests (v5 counted 7) and uses a test-seam hook
-  (setUpdateTestHooks / updateFetch, src/updater.js:288-290), so more of the module runs
+  cover grew to 728 lines with a resume, a sidecar, a rename-aside, a rollback
+  branch, and the --service schtasks restart branch. tests/updater.test.js now includes
+  serviceMode handoff/staging tests using a test-seam hook
+  (setUpdateTestHooks / updateFetch, src/updater.js), so more of the module runs
   under test than v5 claimed; the real cmd.exe handoff is still unreachable. Nobody has
   run the replace-and-restart on a machine holding TechPartsPOS.exe with a sale in
   progress. Treat the whole apply path as unproven until it is.
@@ -479,7 +441,7 @@ STILL OPEN:
   timer, and no vm test can measure a real wedge's timing. Missing evidence is a handful
   of real scans at the counter; ask for them instead of treating the feature as verified.
   Same standing rule as the printed slip: browser evidence is self-consistency, not proof.
-- Release pipeline idempotency: REWRITTEN 2026-11-08 (637 lines now) with idempotent version
+- Release pipeline idempotency: REWRITTEN 2026-11-08 (640 lines now, installer-only) with idempotent version
   derivation, a whole-tree release commit and a zero-mutation DryRun mode, which answers
   the v7 hazard (reruns bumping the version into gitignored files, tag pushed before the
   assets upload). That is the rewrite's claim, not a verified fact: run the DryRun on a
@@ -520,10 +482,30 @@ CLEARED SINCE v5, VERIFY AND MOVE ON (each was a v5 open item; do not re-report 
   run from the repo root since 2026-10-14 20:51. The no-rotation finding stands; the size
   figure does not.
 
-BRAND NEW SURFACE, FIRST LOOK (landed 2026-10-15 through 2026-11-02, after v5; none of
-this is audited or verified, and only the items explicitly moved into the protected list
-above belong there)
-- Updater rewrite, 269 to 642 lines. The trust model: isTrustedReleaseUrl (:46-50) is
+BRAND NEW SURFACE, FIRST LOOK (including the 2026-11-11/12 Universal POS, Inno Setup 7
+SYSTEM service, PIN Recovery & USB backup merges, plus earlier unaudited post-v5 changes)
+- SYSTEM service, Program Files redirect, PIN Recovery & USB Backup Download (783023a..533f07a):
+  - installer/TechPartsPOS.iss & scripts/build-installer.js: Inno Setup 7 script creating
+    scheduled task TechPartsPOS-Server running TechPartsPOS.exe --service as NT AUTHORITY\SYSTEM,
+    setting icacls ACLs locking C:\ProgramData\TechPartsPOS (with runtime\ readable so the
+    Standard Cashier shortcut can read runtime/server.json), and deleting temporary XML only
+    in CurStep = ssDone after [Run]. Audit privilege separation, Windows Admin ownership
+    boundary (documented Non-Goal), upgrade/uninstall task cleanup, and service startup latency.
+  - src/db.js (isProgramFilesPath, resolveBaseDir) & src/server.js (resolveLaunchMode,
+    runInstalledLauncher): check runtime/server.json race/stale-port handling when launcher
+    re-triggers schtasks /Run, loopback 127.0.0.1 bind in --service mode, and POST
+    /api/system/shutdown returning 400 in service mode while UI shows "Close POS".
+  - src/auth.js (PIN_NAMESPACES.recovery, setRecoveryPassword, recoverManagerPin) &
+    src/settings.js (PRIVATE_SETTINGS): check /api/auth/recovery-status and /api/auth/recover-pin
+    on licenseExempt + sessionExempt lists (src/server.js:455-488), POST /api/auth/recovery-password
+    guard (session?.type !== 'staff' && elevated && !isDefaultPin), independent 15m lockout,
+    and setup order when replacing factory PIN 1234.
+  - GET /api/backup/download (resolveVerifiedBackup(backupDir, rawFile, 'downloaded')): check
+    elevation/session gates, traversal blocking, and integrity refusal messaging.
+  - Universal POS & Store Profiles (113ebc2): store_profile filtering, allow_fractional
+    quantities across sales/returns/adjustments/CSV/reorder/cloud, wholesale tier pricing,
+    and expanded EN/TL i18n keys.
+- Updater rewrite, 269 to 728 lines. The trust model: isTrustedReleaseUrl (:46-50) is
   still a string prefix test, and the real enforcement is RELEASE_ASSET_RE (:74-77) plus
   resolveTrustedReleaseUrl (:88-99), which collapses WHATWG dot segments and rejects
   percent-escapes, userinfo, port, search and hash - the docblock at :79-87 names the
@@ -575,7 +557,7 @@ above belong there)
   legs were dead code. Judge the seal and the rollback clock against a shop PC with a
   wrong or drifting system time, and against a user who edits the persisted machine id:
   the trial seal is app security, so a bypass is HIGH by this brief's own rubric.
-- Release pipeline rewritten to 628 lines (scripts/publish-release.ps1, root
+- Release pipeline rewritten to 640 lines (scripts/publish-release.ps1, installer-only, root
   publish-release.bat new on 2026-11-02 while the older publish.bat from 2026-10-01 is
   still on disk). Version base is max(tag, package.json) (:18-58) with Get-NextVersion
   (:59) and an interactive prompt (:93-96); version sites rewritten at :341-379; the
@@ -812,7 +794,8 @@ AUDIT CATEGORIES (cover all ten; report per category)
    exists but is empty or padded still parse, and does the digest fetch timeout fail
    closed (it must; "nothing was installed" is the only acceptable answer). Then the
    resume path, which is new and has no threat model: a .part file and its .part.json are
-   both on disk in %LOCALAPPDATA%, the offset comes from the sidecar and the resume
+   both on disk in the staging dir (C:\ProgramData\TechPartsPOS\updates in --service mode
+   or %LOCALAPPDATA% otherwise), the offset comes from the sidecar and the resume
    decision from a marker file, so say what an attacker with write access to that one
    directory gains, and whether the digest re-check at :541 covers every reuse branch.
    And the rollback branch (:410-416): a scripted process that renames and overwrites the
@@ -866,9 +849,12 @@ AUDIT CATEGORIES (cover all ten; report per category)
    the restarted exe being the old binary because the copy never landed; the new binary
    being corrupt. For each, state what the operator sees, whether any recovery path exists
    besides reinstalling, whether the staged files are retried or rot, and what happens to
-   data/shop.db across the swap. Note that the exe is no longer Unblock-File'd - the
-   Unblock step was dropped from buildApplyScript - so check whether Mark-of-the-Web now
-   blocks the restarted binary on a machine that downloaded the zip with a browser. Two
+   data/shop.db across the swap. On ProgramData (--service) installs, verify
+   defaultUpdateStagingDir(true) writes under C:\ProgramData\TechPartsPOS\updates and
+   buildApplyScript's schtasks /Run /TN "TechPartsPOS-Server" restarts in both :startnew
+   and :restore branches cleanly. Note also that Unblock-File was dropped from
+   buildApplyScript so Mark-of-the-Web behavior on browser-downloaded binaries (now that
+   Inno Setup installers replace portable .zip archives) warrants checking. Two
    windows v5 already named and both still real: the process exits about 300 ms after a
    success response (src/server.js:1380 area), so anything in flight is killed mid-write,
    and the kiosk lockdown still eats Ctrl+P (public/js/main.js:537-540, comment "POS uses
@@ -899,7 +885,7 @@ AUDIT CATEGORIES (cover all ten; report per category)
    between the client catalog match and the server route.
    New candidates from this edition: the same download-and-verify feed reachable through
    both checkForUpdates and applyUpdate when no downloadUrl is passed, unchanged from v5;
-   updater.js at 642 lines with two progress representations (the state object and the
+   updater.js at 728 lines with two progress representations (the state object and the
    polled route) and a buildApplyScript that is now a string template of a batch file;
    the profit and freshness formulas now existing three times (src/analytics.js,
    cloud/server.js:643-800, public/js/report.js and cloud/public/app.js), which is the
@@ -944,15 +930,17 @@ AUDIT CATEGORIES (cover all ten; report per category)
    gitignored files is visible anywhere but a git tag.
 
 8. TEST QUALITY
-   568 tests across 49 files (48 tracked plus untracked tests/universal-pos.test.js;
-   v8 counted 536 in 47, v7 counted 505 in 44), but many are static greps of source
-   text, which cannot fail on a real regression. Recount per file, keep the
+   610 tests across 49 tracked files (measured 2026-11-12 at 533f07a; v8 counted 568 across
+   49 files including untracked universal-pos, v7 counted 505 in 44), with mix of
+   behavioral, hybrid vm-slice, and static greps. Recount per file, keep the
    behavioral / hybrid / pure-static split as the useful axis, and name what each group can
-   actually detect. Newer files: tests/receipt-choices.test.js (v2.8) and untracked
-   tests/universal-pos.test.js; added since v7: tests/reorder.test.js,
-   tests/port-drift.test.js and tests/packaging-workflows.test.js (the last pins packaging
-   and release artifacts, including a zero-em-dash packaging rule; check what it actually
-   gates). Files added since v6: tests/template-chooser.test.js and
+   actually detect. Recent additions: tests/setup.test.js, tests/backup-restore.test.js,
+   tests/analytics-parity.test.js, tests/universal-pos.test.js, tests/receipt-choices.test.js,
+   tests/reorder.test.js, tests/port-drift.test.js, and tests/packaging-workflows.test.js
+   (covering installer/TechPartsPOS.iss task XML, ssDone cleanup, installer-only releases
+   without .zip, and publish-release.ps1 ordering). Also verify tests/ui-fixes.test.js CRLF
+   normalization in source() keeps the suite deterministic on Windows checkouts. Files added
+   since v6: tests/template-chooser.test.js and
    tests/changelog.test.js (both from the parallel 11-03/05 session; the latter is a new
    KIND of gate, verify what it actually asserts). Files materially changed by that
    session: typography-presets, report, cloud-hardening, updater-ui, importer, inventory.
@@ -1037,8 +1025,9 @@ AUDIT CATEGORIES (cover all ten; report per category)
       confirm shop.db survived the swap, time how long the counter is unusable, then do the
       destructive halves deliberately: kill the app mid-download and confirm the resume
       picks up correctly rather than installing a corrupt exe; confirm the rollback branch
-      actually restores the previous binary; confirm a download to a machine that has the
-      zip marked by the browser still launches without the Unblock step. Neither is testable
+      actually restores the previous binary; confirm the Inno Setup installer and any
+      browser-downloaded update binaries launch without Mark-of-the-Web blocking now that
+      portable .zip downloads are gone. Neither is testable
       here, so list both as numbered manual steps in the measurement list rather than
       reasoning them closed.
 
@@ -1059,14 +1048,12 @@ AUDIT CATEGORIES (cover all ten; report per category)
    b. The data-minimizing accident: shop_settings, staff and audit_log are whitelisted but
       have no enqueue call sites, so no secrets leave today. Flag any NEW call site that
       would push sync tokens, PIN hashes or owner PII to the VPS.
-   c. Schema and formula drift (STILL OPEN, and the shape changed): the 11-02 alignment
-      batch made the cloud compute the workstation's numbers instead of aggregating keys
-      the workstation happens to emit. Find the workstation row shapes the cloud queries
-      still do not expect, and - newly the larger risk - every place the two
-      implementations can disagree: the voided guard, per-shop grouping, proportional
-      discount allocation, RMA replacement cost, collected_total. tests/cloud-hardening
-      asserts the voided exclusion and per-shop inventory separation; nothing asserts that
-      the cloud's net profit equals the workstation's for the same dataset.
+   c. Schema and formula drift: the 11-02 alignment batch made the cloud compute the
+      workstation's numbers and tests/analytics-parity.test.js now pins parity across
+      top_products, standing, reorder/dead stock, period analytics, and fractional
+      quantities. Find any newer workstation row shapes (wholesale tiers, multi-industry
+      items) the cloud queries still do not expect or where the two implementations can
+      disagree.
    d. Exposure posture: /sync is authenticated, idempotent and budget-limited (verified).
       Assess whether the newer routes need the same budget (the pairing and setup routes
       now have one each; check what /events and the report route do), verify the legacy
