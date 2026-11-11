@@ -506,3 +506,18 @@ dbTest('POS search matches item_name/category and cart quantity helpers handle f
   assert.strictEqual(mockS.cart[0].qty, 0.75, 'fractional increment clamps at remaining stock 0.75 instead of overshooting');
   assert.strictEqual(mod.cartTotals().subtotal, 45);
 });
+
+dbTest('allow_fractional accepts the same truthy spellings the CSV import takes', (db) => {
+  // The CSV path (parseBoolFlag) takes 1/true/yes; the API path must not
+  // quietly disagree with "true" spelled out.
+  for (const [flag, expected] of [['true', 1], ['yes', 1], [true, 1], [1, 1], ['no', 0], [0, 0], [undefined, 0]]) {
+    const item = createInventoryItem(db, {
+      item_name: `Flag ${String(flag)} ${expected}`,
+      cost_price: 10,
+      price_retail: 15,
+      stock_quantity: 5,
+      allow_fractional: flag
+    });
+    assert.strictEqual(item.allow_fractional, expected, `flag ${JSON.stringify(flag)} should store ${expected}`);
+  }
+});

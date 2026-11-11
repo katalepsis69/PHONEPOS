@@ -69,6 +69,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Run]
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"""; Flags: runhidden waituntilterminated
+; The three data subdirs above are created by [Dirs] BEFORE this section runs,
+; and icacls without /T does not re-ACL existing children, so each one needs
+; its own SYSTEM-only grant or it keeps ProgramData's Users read inheritance.
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\data"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\backups"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\updates"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\runtime"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" /grant ""*S-1-5-32-545:(OI)(CI)R"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\attrib.exe"; Parameters: "+h +s ""{commonappdata}\TechPartsPOS"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""TechPartsPOS-Server"" /XML ""{tmp}\TechPartsPOS-Server.xml"" /F"; Flags: runhidden waituntilterminated
@@ -90,7 +96,7 @@ Root: HKLM; Subkey: "SOFTWARE\Policies\Microsoft\Edge"; ValueType: dword; ValueN
 Root: HKLM; Subkey: "SOFTWARE\Policies\Microsoft\Edge"; ValueType: dword; ValueName: "ShowRecommendationsEnabled"; ValueData: "0"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Policies\Microsoft\Edge"; ValueType: dword; ValueName: "PasswordManagerEnabled"; ValueData: "0"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Policies\Microsoft\Edge"; ValueType: dword; ValueName: "TranslateEnabled"; ValueData: "0"; Flags: uninsdeletevalue
-Root: HKLM; Subkey: "SOFTWARE\Policies\Microsoft\Edge"; ValueType: dword; ValueName: "DeveloperToolsAvailability"; ValueData: "2"; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "SOFTWARE\Policies\Microsoft\Edge"; ValueType: dword; ValueName: "DeveloperToolsAvailability"; ValueData: "0"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Policies\Microsoft\Edge"; ValueType: dword; ValueName: "QuickSearchShowMiniMenu"; ValueData: "0"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Policies\Microsoft\Edge"; ValueType: dword; ValueName: "WebWidgetAllowed"; ValueData: "0"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Policies\Microsoft\Edge"; ValueType: dword; ValueName: "HubsSidebarEnabled"; ValueData: "0"; Flags: uninsdeletevalue

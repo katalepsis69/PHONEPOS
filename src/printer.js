@@ -200,11 +200,15 @@ function itemRowMode(settings) {
   return ['auto', 'two_line', 'one_line'].includes(settings.receipt_item_rows) ? settings.receipt_item_rows : 'auto';
 }
 
+// "2x" reads as whole units; a fractional pickup (0.5 kg) reads as a bare
+// measure, not "half times", so it prints without the x.
+const qtyTag = q => (Number.isInteger(Number(q)) ? `${q}x` : String(q));
+
 // One line per item: "2x Tempered glass (Poco X6) ... P300.00". The name pays
 // for the width, cut with '...' so the money column stays exact-width.
 function saleItemOneLine(item, cols) {
   const right = money(item.total_price);
-  const text = `${item.quantity}x ${item.item_type === 'labor' ? '[LABOR] ' : ''}${plain(item.item_name)}`;
+  const text = `${qtyTag(item.quantity)} ${item.item_type === 'labor' ? '[LABOR] ' : ''}${plain(item.item_name)}`;
   const budget = cols - right.length - 1;
   const left = text.length > budget ? `${text.slice(0, Math.max(1, budget - 3))}...` : text;
   return row(left, right, cols);
@@ -221,7 +225,7 @@ function saleItemLines(item, cols, mode) {
     return [...name, { text: row(`  ${item.quantity} x ${money(item.unit_price)}`, money(item.total_price), cols) }];
   }
   const right = money(item.total_price);
-  const text = `${item.quantity}x ${item.item_type === 'labor' ? '[LABOR] ' : ''}${plain(item.item_name)}`;
+  const text = `${qtyTag(item.quantity)} ${item.item_type === 'labor' ? '[LABOR] ' : ''}${plain(item.item_name)}`;
   if (mode === 'one_line' || text.length + right.length + 1 <= cols) {
     return [{ text: saleItemOneLine(item, cols) }];
   }
@@ -281,7 +285,7 @@ function saleReturnsRows(sale, cols) {
   const out = [];
   for (const line of wrap(`RETURNS / REFUNDS (${saleReturns.length}):`, cols)) out.push({ text: line });
   for (const r of saleReturns) {
-    for (const name of wrap(`  ${plain(r.return_code)} ${r.quantity || 1}x ${plain(r.item_name)}`, cols)) out.push({ text: name });
+    for (const name of wrap(`  ${plain(r.return_code)} ${qtyTag(r.quantity || 1)} ${plain(r.item_name)}`, cols)) out.push({ text: name });
     // Never throws mid-layout: a row whose refund_amount is not a finite
     // number prints as a replacement rather than refusing the whole slip.
     const amt = Number(r.refund_amount);
@@ -644,7 +648,7 @@ function renderClaimStubSlip(job, settings) {
       const unit = Number(it.unit_price || 0);
       // Same expression as the browser stub: a garbage price stays NaN and
       // money() refuses the slip rather than printing P0.00.
-      push(row('  ' + qty + 'x P' + (Number.isFinite(unit) ? unit.toFixed(2) : String(it.unit_price)), money(qty * unit), cols));
+      push(row('  ' + qtyTag(qty) + ' P' + (Number.isFinite(unit) ? unit.toFixed(2) : String(it.unit_price)), money(qty * unit), cols));
     }
     if (Number(job.discount) > 0) push(row('Discount:', '-' + money(job.discount), cols));
     push(rule(cols));

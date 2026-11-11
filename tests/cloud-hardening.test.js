@@ -1078,11 +1078,27 @@ test('cloud csvCell escapes spreadsheet formulas, cloud/ matches cloud-deploy/, 
     assert.strictEqual(okRes.status, 200);
     const okData = await okRes.json();
     assert.strictEqual(okData.item.stock_quantity, 1.75);
+    const afterOk = await (await fetch(`${base}/api/overview`, { headers: { Cookie: cookie } })).json();
+    assert.strictEqual(afterOk.pending_commands, 1, 'the valid adjustment queued exactly one command');
 
     const badRes = await fetch(`${base}/api/inventory/adjust-stock`, {
       method: 'POST', headers, body: JSON.stringify({ id: 2, delta: 0.5 })
     });
     assert.strictEqual(badRes.status, 400);
+
+    // The register has the final say on the floor: a below-zero adjustment is
+    // refused at request time (409) instead of queueing a command the register
+    // would refuse on every drain while the mirror already shows the clamp.
+    const belowRes = await fetch(`${base}/api/inventory/adjust-stock`, {
+      method: 'POST', headers, body: JSON.stringify({ id: 1, delta: -10 })
+    });
+    assert.strictEqual(belowRes.status, 409);
+    const belowBody = await belowRes.json();
+    assert.match(belowBody.error, /below zero/i);
+    const afterBelow = await (await fetch(`${base}/api/overview`, { headers: { Cookie: cookie } })).json();
+    assert.strictEqual(afterBelow.pending_commands, 1, 'the refusal queued no command');
+    const rows = await (await fetch(`${base}/api/rows?table=inventory`, { headers: { Cookie: cookie } })).json();
+    assert.strictEqual(rows.find(r => r.id === 1).stock_quantity, 1.75, 'mirror untouched by the refusal');
   } finally {
     if (child) await stopCloud(child);
     try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {}

@@ -345,3 +345,38 @@ test('feedback dialog composes a pre-filled report with no backend', () => {
   assert.match(html, /id="modal-feedback"/);
   assert.match(html, /data-action="open-feedback"/);
 });
+
+test('fractional order lines show the centavo the register charges', () => {
+  const pos = source('public/js/views/pos.js');
+  // Slice the order-sheet region through the money helpers it needs; renderCart
+  // stays defined but uninvoked, so no extra DOM stubs are required.
+  const code = pos.slice(
+    pos.indexOf('export function renderOrderLines'),
+    pos.indexOf('export function renderCartSummary')
+  ).replace(/export /g, '');
+
+  const boxes = { 'sum-parts': { innerHTML: '', closest: () => null }, 'sum-services': { innerHTML: '', closest: () => null } };
+  const counters = [];
+  const ctx = vm.createContext({
+    S: {
+      currentPriceTier: 'retail',
+      cart: [{ is_labor: false, id: 1, brand: 'Rice', model_name: 'Premium', part_type: 'Grain',
+        price_retail: 12.35, price_technician: 10, qty: 0.3 }],
+      posCatalog: []
+    },
+    document: { getElementById: id => boxes[id] || null },
+    t: (key, fallback) => fallback,
+    escHtml: s => String(s),
+    fmtMoney: v => `P${Number(v).toFixed(2)}`,
+    setCounterText: (id, text) => counters.push(`${id}: ${text}`)
+  });
+  vm.runInContext(code, ctx);
+  ctx.renderOrderLines();
+
+  // server money(12.35 * 0.3) = 3.70; the old Math.round(toCents(unit) * qty)
+  // producted 371, so the line read one centavo above the register total.
+  assert.ok(boxes['sum-parts'].innerHTML.includes('P3.70'), `line must show 3.70, got: ${boxes['sum-parts'].innerHTML}`);
+  assert.ok(!boxes['sum-parts'].innerHTML.includes('P3.71'), 'line must not show the stale 3.71');
+  ctx.document.getElementById = id => (id === 'pos-discount' ? { value: '' } : boxes[id] || null);
+  assert.equal(ctx.cartTotals().subtotal, 3.7, 'cart totals must agree with the displayed line');
+});

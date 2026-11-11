@@ -98,6 +98,18 @@ async function postBatch(url, token, shopId, events, ackCommandIds) {
   } finally { clearTimeout(t); }
 }
 
+// Drained-command notices must reach pos-server.log in the packaged exe,
+// which discards console.log. Same sink pattern as db.js and the updater.
+let syncLogSink = null;
+function setSyncLogSink(fn) { syncLogSink = typeof fn === 'function' ? fn : null; }
+const syncLog = (msg) => { if (syncLogSink) { try { syncLogSink(msg); return; } catch (_) {} } console.log(msg); };
+
+// A command that failed DETERMINISTICALLY (part missing, validation refusal,
+// floor refusal, duplicate SKU) is acked so a poison command cannot retry on
+// every drain forever; the refusal is logged where an operator can see it.
+// A transient failure (SQLITE_BUSY, disk full) stays un-acked and retries.
+const COMMAND_REFUSED = /not found|must be|insufficient|too small|UNIQUE constraint|required/i;
+
 function applyCloudCommands(db, commands) {
   if (!Array.isArray(commands) || commands.length === 0) return [];
   const { adjustStock, importInventory } = require('./inventory');
@@ -126,8 +138,17 @@ function applyCloudCommands(db, commands) {
         ackedIds.push(cmd.id);
       }
     } catch (err) {
-      if (err && /not found|must be/i.test(String(err.message || ''))) {
+      const msg = String((err && err.message) || err || '');
+      if (COMMAND_REFUSED.test(msg)) {
         ackedIds.push(cmd.id);
+        // Push the register's real row back so the cloud's optimistic mirror
+        // self-corrects instead of showing a number the shop never held.
+        if (cmd.kind === 'adjust_stock' && Number(p.id) > 0) {
+          try { enqueueRow(db, 'inventory', Number(p.id)); } catch (_) {}
+        }
+        syncLog(`[sync] cloud command ${cmd.kind} #${cmd.id} refused: ${msg}`);
+      } else {
+        syncLog(`[sync] cloud command ${cmd.kind} #${cmd.id} failed, will retry: ${msg}`);
       }
     }
   }
@@ -326,4 +347,4 @@ function getSyncStatus(db) {
   return { state, pending, synced, total, url_configured: Boolean(url), last_synced_at: lastRow ? lastRow.synced_at : null, pending_rows: pendingRows };
 }
 
-module.exports = { ensureSyncTables, getShopId, getSyncUrl, getSyncToken, enqueue, enqueueRow, enqueueCustomerProfile, enqueueDelete, drainOutbox, getSyncStatus, backfillMirror };
+module.exports = { ensureSyncTables, getShopId, getSyncUrl, getSyncToken, enqueue, enqueueRow, enqueueCustomerProfile, enqueueDelete, drainOutbox, getSyncStatus, backfillMirror, applyCloudCommands, setSyncLogSink };

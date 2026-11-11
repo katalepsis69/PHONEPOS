@@ -1142,7 +1142,9 @@ export function renderOrderLines() {
     const unit = unitPriceOf(item);
     const title = item.is_labor ? item.name : (item.item_name || `${item.brand} ${item.model_name}`);
     const sub = item.is_labor ? '' : (item.item_name ? (item.category || '') : item.part_type);
-    const lineCents = Math.round(toCents(unit) * (Number(item.qty) || 0));
+    // Round the unit*qty product to cents like cartTotals() and the claim stub,
+    // so a fractional line shows the centavo the register actually charges.
+    const lineCents = toCents(unit * (Number(item.qty) || 0));
 
     return `
       <div class="sumline">

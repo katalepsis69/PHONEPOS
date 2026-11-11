@@ -243,7 +243,15 @@ test('Inno Setup installer script configures SYSTEM service, ACLs, and preserves
 
   assert.match(iss, /DisableDirPage\s*=\s*yes/i, 'installer must lock installation directory via DisableDirPage=yes');
   assert.match(iss, /\*S-1-5-18:\(OI\)\(CI\)F/, 'installer must lock ProgramData to SYSTEM via S-1-5-18:(OI)(CI)F');
+  // The data subdirs are created by [Dirs] before the root grant runs, and
+  // icacls without /T does not re-ACL existing children: each one needs its
+  // own SYSTEM-only grant or it keeps ProgramData's Users read inheritance.
+  for (const sub of ['data', 'backups', 'updates']) {
+    assert.match(iss, new RegExp(`TechPartsPOS\\\\${sub}"" \\/inheritance:r \\/grant:r ""\\*S-1-5-18:\\(OI\\)\\(CI\\)F`),
+      `installer must grant SYSTEM-only access to the ${sub} directory (pre-created children do not inherit the root grant)`);
+  }
   assert.match(iss, /\*S-1-5-32-545:\(OI\)\(CI\)R/, 'installer must grant standard users read access to runtime via S-1-5-32-545:(OI)(CI)R');
+  assert.match(iss, /DeveloperToolsAvailability"; ValueData: "0"/, 'installer must refuse DevTools in the kiosk browser, not allow them');
   assert.match(iss, /<BootTrigger>/, 'service task XML must include BootTrigger');
   assert.match(iss, /<LogonTrigger>/, 'service task XML must include LogonTrigger');
   assert.match(iss, /PT0S/, 'service task XML must set ExecutionTimeLimit to PT0S');

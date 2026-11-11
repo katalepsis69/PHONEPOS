@@ -1948,3 +1948,23 @@ serverTest('the paper preview renders the chosen template from the sample sale',
   const boxed = await preview({ template: 'boxed', item_rows: 'two_line', paper_width: '80mm' });
   assert.ok(boxed.data.lines.some((l) => l.text.startsWith('| TOTAL DUE')), 'boxed total missing from preview');
 });
+
+test('fractional quantities print as a measure, not "0.5x"', () => {
+  const slip = renderSaleSlip({
+    ...sampleSale,
+    subtotal: 3.75,
+    discount: 0,
+    total_amount: 3.75,
+    amount_paid: 5,
+    change_amount: 1.25,
+    items: [
+      { item_type: 'part', item_name: 'Rice Premium', quantity: 0.5, unit_price: 7.5, total_price: 3.75 },
+      { item_type: 'labor', item_name: 'LCD Replacement', quantity: 1, unit_price: 450, total_price: 450 }
+    ]
+  }, { ...nastySettings, receipt_item_rows: 'one_line' });
+  const riceLine = slip.find(l => l.text && l.text.includes('Rice Premium')).text;
+  assert.match(riceLine, /0\.5 /, 'fractional qty prints bare: ' + riceLine);
+  assert.doesNotMatch(riceLine, /0\.5x/, 'no x suffix on a fractional qty');
+  const laborLine = slip.find(l => l.text && l.text.includes('LCD Replac')).text;
+  assert.match(laborLine, /1x /, 'integer qty keeps its x suffix: ' + laborLine);
+});

@@ -181,6 +181,11 @@ serverTest('GET /api/backup/download guards, traversal rejection, integrity chec
   const traversalRes = await fetch(`${baseUrl}/api/backup/download?file=../data/shop.db`, { headers: { ...managerAuth } });
   assert.equal(traversalRes.status, 400);
 
+  // 4b. Hostile characters inside the name are refused too: the whitelist for
+  // the download header must stay narrower than "anything but a slash".
+  const hostileRes = await fetch(`${baseUrl}/api/backup/download?file=${encodeURIComponent('shop-a";x=y;.db')}`, { headers: { ...managerAuth } });
+  assert.equal(hostileRes.status, 400);
+
   // 5. Corrupt file rejected (400)
   const dir = process.env.POS_BACKUP_DIR;
   fs.writeFileSync(path.join(dir, 'shop_backup_corrupt.db'), 'definitely not a valid sqlite database');

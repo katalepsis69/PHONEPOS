@@ -2,7 +2,7 @@
 
 This document defines the main HTTP REST API interface exposed by [`src/server.js`](file:///c:/Users/sloth/Downloads/phone-repair-pos/src/server.js).
 
-> Completeness disclaimer: this reference covers the main commerce, auth, settings and system routes by intent, but it is not an exhaustive enumeration of every literal path and dynamic matcher in `src/server.js` (for example the update-check/progress routes and parameterized staff, sale and inventory sub-paths). When in doubt, the router in `src/server.js` is the source of truth.
+> Completeness: Appendix A indexes every literal route in `src/server.js` (51 paths, cross-checked against the router) plus the parameterized sub-paths. When in doubt, the router in `src/server.js` is the source of truth; routes added after this document's date may lag until the next audit refresh.
 
 ---
 
@@ -471,6 +471,7 @@ separate read-only report token.
 | POST | `/api/inventory/bulk-edit` | elevated +PIN | Bulk price/markup/field/archive edit, idempotent by `op_id` |
 | POST | `/api/inventory/seed-starter` | elevated +PIN | Seed the starter catalog |
 | GET | `/api/inventory/barcode/:code` | session | Barcode/SKU lookup |
+| GET | `/api/inventory/reorder` | session | Supplier reorder sheet over a trailing window (`days` 1-90; costs stripped for staff) |
 | POST | `/api/inventory/:id/adjust-stock` | elevated | Stock adjustment, idempotent by `op_id` |
 | GET | `/api/inventory/:id/movements` | session | Stock movement ledger for one part |
 | POST | `/api/inventory/:id/(archive\|unarchive)` | elevated | Archive or restore a part |
@@ -503,11 +504,13 @@ separate read-only report token.
 | POST | `/api/settings/reset-demo` | elevated +PIN | Wipe and reseed demo data |
 | GET | `/api/printers` | session | Enumerate print queues (502 when the lookup breaks) |
 | POST | `/api/print` | session | Render and send a slip (dedup window; `drawer_kick` override) |
+| POST | `/api/receipt/preview` | elevated | Paper preview of a slip layout without printing |
 | GET | `/api/dashboard` | elevated | Dashboard KPIs and ranges |
 | POST | `/api/reconcile/close-day` | elevated +PIN | Day close |
 | GET | `/api/reconcile/:date` | elevated | Reconciliation detail for one date |
 | POST | `/api/backup` | elevated | Take a database backup now |
 | GET | `/api/backup/list` | elevated | List snapshots with sizes and ages |
+| GET | `/api/backup/download` | elevated +PIN | Download a verified snapshot (USB copy; `file` param or newest) |
 | POST | `/api/backup/restore` | elevated +PIN | Restore a snapshot (pre-restore safety snapshot first) |
 | GET | `/api/inventory/export` | elevated | Inventory CSV |
 | GET | `/api/export/sales.csv` | elevated | Sales CSV |
@@ -523,6 +526,9 @@ separate read-only report token.
 | GET | `/api/auth/session` | session | Current session information |
 | POST | `/api/auth/logout` | session | End the session |
 | POST | `/api/auth/change-pin` | exempt | Change the manager PIN |
+| GET | `/api/auth/recovery-status` | exempt | Whether a recovery password is set |
+| POST | `/api/auth/recovery-password` | elevated +PIN | Set the manager recovery password (8+ chars, PBKDF2) |
+| POST | `/api/auth/recover-pin` | exempt (15m lockout) | Reset the manager PIN with the recovery password |
 | POST | `/api/system/heartbeat` | exempt | Kiosk heartbeat that feeds the auto-exit watchdog |
 | POST | `/api/system/shutdown` | elevated +PIN | Clean shutdown |
 | GET | `/api/system/update/check` | exempt (budgeted 10/min per client) | GitHub release check |
@@ -548,5 +554,10 @@ Anything else under `/api/` answers `404 {"error":"Endpoint not found"}`.
 | GET | `/api/standing` | manager session | Outstanding utang, debtor list, inventory value |
 | GET | `/api/rows` | manager session | Mirror rows per table (capped at 500) |
 | GET | `/api/analytics` | manager session | Period analytics over the mirror |
+| GET | `/api/reorder` | manager session | Low-stock reorder list over a trailing window (`days` 1-90) |
+| GET | `/api/dead-stock` | manager session | Stocked items with no sales in the window |
+| GET | `/api/inventory/reorder` | manager session | Reorder sheet matching the counter's net-replenishment math |
+| POST | `/api/inventory/adjust-stock` | manager session | Queue a stock adjustment command for a paired register (409 below the floor) |
+| POST | `/api/inventory/import` | manager session | Queue an inventory import command for a paired register (mirror updated optimistically) |
 | DELETE | `/api/shops/:id` | manager session (own store) | Unlink a shop: purge its mirror rows, shops row and credential |
 | POST | `/api/deploy` | manager session, default store only (30/min) | Push cloud-deploy source to the running server; writes a deploy log and `.prev` rollback copies |

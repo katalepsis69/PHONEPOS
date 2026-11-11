@@ -116,7 +116,9 @@ function validateInventory(data) {
   const price_technician = money(data.price_wholesale ?? data.price_technician ?? 0);
   if (price_technician < 0) throw new Error('Wholesale price cannot be negative');
 
-  const allow_fractional = Number(data.allow_fractional) ? 1 : 0;
+  // parseBoolFlag, not Number truthiness: the CSV path accepts "true"/"yes"
+  // and the API path must not quietly disagree with it.
+  const allow_fractional = parseBoolFlag(data.allow_fractional);
   const stock_quantity = Number(data.stock_quantity ?? 0);
   if (allow_fractional) {
     if (!Number.isFinite(stock_quantity) || stock_quantity < 0) {

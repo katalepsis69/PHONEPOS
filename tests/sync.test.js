@@ -8,7 +8,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { initDb } = require('../src/db');
 const { createSale } = require('../src/sales');
 const { deleteInventoryItem } = require('../src/inventory');
-const { drainOutbox, getShopId, ensureSyncTables } = require('../src/sync');
+const { drainOutbox, getShopId, ensureSyncTables, applyCloudCommands, setSyncLogSink } = require('../src/sync');
 
 function tmpDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-test-'));
@@ -425,6 +425,55 @@ test('cloud commands audit the actor and replay idempotently (F3/F4)', async () 
     assert.strictEqual(db.prepare('SELECT stock_quantity FROM inventory WHERE id = ?').get(imported.id).stock_quantity, 7, 'import replays without doubling stock');
     assert.strictEqual(db.prepare("SELECT COUNT(*) c FROM inventory WHERE sku_barcode = 'CLD-1'").get().c, 1, 'no duplicate part');
   } finally {
+    server.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+test('a deterministically refused cloud command acks, logs and self-corrects the mirror (F5)', async () => {
+  const { db, dir } = tmpDb();
+  db.prepare(`INSERT INTO inventory (brand, model_name, part_type, cost_price, price_retail, price_technician, stock_quantity, min_stock_alert, sku_barcode)
+    VALUES ('Apple', 'iPhone 11', 'LCD', 100, 200, 150, 5, 2, 'DUP-1')`).run();
+  const commands = [
+    { id: 21, kind: 'adjust_stock', payload: { id: 1, delta: -100, reason: 'sale' } },
+    { id: 22, kind: 'import_inventory', payload: { rows: [
+      { brand: 'New', model_name: 'Coil', part_type: 'Filter', sku_barcode: 'DUP-2', stock_quantity: 1, cost_price: 10, price_retail: 20 },
+      { brand: 'New', model_name: 'Coil', part_type: 'Filter', sku_barcode: 'DUP-2', stock_quantity: 1, cost_price: 10, price_retail: 20 }
+    ] } },
+  ];
+  const bodies = [];
+  const server = require('node:http').createServer((req, res) => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      bodies.push(JSON.parse(body));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, ok_ids: ((bodies.at(-1).events) || []).map(e => e.outbox_id), commands }));
+    });
+  });
+  const logs = [];
+  setSyncLogSink(msg => logs.push(msg));
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(`http://127.0.0.1:${server.address().port}`);
+    await drainOutbox(db);
+    // Both refusals (floor breach, duplicate SKU inside one import) are
+    // deterministic: they must ack on the first drain so a poison command
+    // cannot retry on every drain forever, and the refusal must land in the
+    // log an operator can actually read.
+    const acked = (bodies.find(b => Array.isArray(b.ack_command_ids)) || {}).ack_command_ids || [];
+    assert.ok(acked.includes(21), 'floor-breach command acked');
+    assert.ok(acked.includes(22), 'duplicate-SKU command acked');
+    assert.strictEqual(db.prepare('SELECT stock_quantity FROM inventory WHERE id = 1').get().stock_quantity, 5, 'register stock untouched by the floor refusal');
+    const refusals = logs.filter(m => m.includes('refused:'));
+    assert.ok(refusals.some(m => m.includes('#21') && /insufficient/i.test(m)), 'floor refusal logged: ' + JSON.stringify(refusals));
+    assert.ok(refusals.some(m => m.includes('#22') && /UNIQUE constraint/i.test(m)), 'duplicate-SKU refusal logged');
+    // The refused adjustment re-enqueues the register's real row so the
+    // cloud's optimistic mirror self-corrects on the next drain.
+    const pushed = bodies.filter(b => (b.events || []).some(e => e.table === 'inventory' && e.local_id === 1));
+    assert.ok(pushed.length > 0, 'register row pushed back after the refusal');
+  } finally {
+    setSyncLogSink(null);
     server.close();
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });

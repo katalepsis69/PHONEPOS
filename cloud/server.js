@@ -1544,8 +1544,13 @@ const server = http.createServer(async (req, res) => {
 
         const now = new Date().toISOString();
         const rawNext = (Number(item.stock_quantity) || 0) + delta;
-        const nextStock = allowFrac ? Math.max(0, Math.round(rawNext * 1000) / 1000) : Math.max(0, rawNext);
-        item.stock_quantity = nextStock;
+        // The register has the final say on the floor: refusing here answers
+        // the manager immediately instead of queueing a command the register
+        // will refuse on every drain while the mirror already shows the clamp.
+        if (rawNext < -1e-9) {
+          return json(res, 409, { error: `Adjustment would take stock below zero (mirror stock: ${item.stock_quantity}, delta: ${delta}). The register holds the truth; send a smaller delta or receive stock first.` });
+        }
+        item.stock_quantity = allowFrac ? Math.round(rawNext * 1000) / 1000 : rawNext;
         item.updated_at = now;
         const cmdPayload = JSON.stringify({ id, delta, reason, note });
 

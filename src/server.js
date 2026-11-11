@@ -90,6 +90,7 @@ const { checkForUpdates, applyUpdate, getUpdateProgress, consumeHandoffStatus, s
 // [update] lines belong in pos-server.log, which console.log cannot reach in the packaged exe.
 setUpdateLogSink(logLine);
 require('./db').setDbLogSink(logLine);
+require('./sync').setSyncLogSink(logLine);
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -1279,7 +1280,7 @@ function createServer(opts = {}) {
           const files = [];
           try {
             for (const f of fs.readdirSync(backupDir)) {
-              if (!/^(shop-|shop_backup_).*\.db$/.test(f)) continue;
+              if (!/^(shop-|shop_backup_)[A-Za-z0-9._-]*\.db$/.test(f)) continue;
               const st = fs.statSync(path.join(backupDir, f));
               files.push({ file: f, size_bytes: st.size, modified_at: new Date(st.mtimeMs).toISOString() });
             }
@@ -1339,7 +1340,7 @@ function createServer(opts = {}) {
             let newest = null;
             try {
               const files = fs.readdirSync(backupDir)
-                .filter(f => /^(shop-|shop_backup_).*\.db$/.test(f) && path.basename(f) === f)
+                .filter(f => /^(shop-|shop_backup_)[A-Za-z0-9._-]*\.db$/.test(f) && path.basename(f) === f)
                 .map(f => {
                   const p = path.join(backupDir, f);
                   try {
@@ -1805,7 +1806,7 @@ function verifyBackupFile(filePath) {
 
 function resolveVerifiedBackup(backupDir, rawFile, action = 'restored') {
   const name = String(rawFile || '');
-  if (!/^(shop-|shop_backup_).*\.db$/.test(name) || path.basename(name) !== name) {
+  if (!/^(shop-|shop_backup_)[A-Za-z0-9._-]*\.db$/.test(name) || path.basename(name) !== name) {
     const err = new Error('Pick a backup from the list');
     err.statusCode = 400;
     throw err;
@@ -1849,7 +1850,7 @@ function getBackupStatus(db, backupDir = RUNTIME_BACKUP_DIR) {
   let newestMs = 0;
   try {
     for (const f of fs.readdirSync(backupDir)) {
-      if (!/^(shop-|shop_backup_).*\.db$/.test(f)) continue;
+      if (!/^(shop-|shop_backup_)[A-Za-z0-9._-]*\.db$/.test(f)) continue;
       const m = fs.statSync(path.join(backupDir, f)).mtimeMs;
       if (m > newestMs) newestMs = m;
     }
