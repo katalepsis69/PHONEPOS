@@ -306,3 +306,51 @@ test('a slow human Enter after a scan burst does not fire a second scan', () => 
   h.drainTimers();
   assert.deepEqual(h.S.cart, [{ id: 7, qty: 1 }], 'a stray Enter must not rescan the last code');
 });
+
+// A minimal context with a mutable overlay and clock, for the settle-window
+// races the fixed-overlay harness above cannot express.
+function scanCtx({ overlay = null } = {}) {
+  const S = { currentTab: 'pos', scanBuffer: '', lastScanKeyTime: 0, inventoryItems: [SCANNED], posCatalog: [SCANNED], cart: [] };
+  const state = { overlay, t: 1000 };
+  const timers = [];
+  let kd = null;
+  const ctx = vm.createContext({
+    S, Date: { now: () => state.t },
+    window: { addEventListener: (type, fn) => { if (type === 'keydown') kd = fn; } },
+    setTimeout: (fn) => { timers.push(fn); return timers.length; },
+    clearTimeout: () => {},
+    document: { getElementById: () => null, querySelector: () => state.overlay, addEventListener: () => {} },
+    showToast: () => {}, cartQtyFor: () => 0,
+    setPartQty: (id, d) => { const l = S.cart.find(c => c.id === id); if (l) l.qty += d; else S.cart.push({ id, qty: d }); },
+    quickAddPart: id => S.cart.push({ id, qty: 1 }),
+    renderPartsTable: () => {}, getFilteredParts: () => []
+  });
+  vm.runInContext(code, ctx);
+  ctx.initScanListeners();
+  const target = { tagName: 'INPUT', id: 'pos-customer-name', value: '' };
+  const key = (k) => kd({ key: k, target, preventDefault() {} });
+  const drain = () => { for (const fn of timers.splice(0)) fn(); };
+  return { S, state, key, drain, target };
+}
+
+test('a pending scan does not settle behind an overlay opened mid-window (F23)', () => {
+  const h = scanCtx();
+  for (const ch of '6941234567890') h.key(ch);
+  h.key('Enter');
+  assert.deepEqual(h.S.cart, [], 'the scan is pending, not settled yet');
+  h.state.overlay = {};  // a modal opens during the settle window
+  h.drain();
+  assert.deepEqual(h.S.cart, [], 'the pending scan must not mutate the cart behind an open overlay');
+});
+
+test('a stuck modifier key does not keep a stale burst buffer alive (F35)', () => {
+  const h = scanCtx();
+  for (const ch of '694') { h.key(ch); h.state.t += 5; }
+  h.state.t += 500;  // well past the burst window
+  h.key('Shift');    // a stuck modifier auto-repeat must NOT refresh the clock
+  for (const ch of '6941234567890') { h.key(ch); h.state.t += 5; }
+  h.key('Enter');
+  h.state.t += 500;
+  h.drain();
+  assert.deepEqual(h.S.cart, [{ id: 7, qty: 1 }], 'the fresh scan resolves cleanly, not 694 concatenated onto the code');
+});

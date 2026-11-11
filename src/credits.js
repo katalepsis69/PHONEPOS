@@ -1,7 +1,7 @@
 // phone-repair-pos/src/credits.js
 const { money } = require('./money');
 const { audit, txn } = require('./audit');
-const { enqueueRow, enqueueCustomerProfile } = require('./sync');
+const { enqueueRow, enqueueCustomerProfile, enqueueDelete } = require('./sync');
 const { cleanName: normalizeName, foldName, foldSql } = require('./names');
 
 function listCustomers(db, { search = '', filter = '', limit = 2000 } = {}) {
@@ -246,8 +246,15 @@ function setCustomerCreditLimit(db, customerName, creditLimit, notes = '', ctx =
     // A case-variant duplicate ('Muñoz' vs 'MUÑOZ') cannot conflict under
     // NOCASE, so it would insert a second profile row and every read would have
     // to choose between them. Collapse those rows onto the spelling being saved.
-    db.prepare(`DELETE FROM customer_profiles WHERE ${foldSql(db, 'customer_name')} = ? AND customer_name <> ?`)
-      .run(foldName(cleanName), cleanName);
+    // Each removed rowid gets a tombstone so the cloud mirror drops it too;
+    // backfill only adds, so a silent local delete would strand the dead row.
+    const dupRows = db.prepare(`SELECT rowid AS id FROM customer_profiles WHERE ${foldSql(db, 'customer_name')} = ? AND customer_name <> ?`)
+      .all(foldName(cleanName), cleanName);
+    if (dupRows.length) {
+      db.prepare(`DELETE FROM customer_profiles WHERE ${foldSql(db, 'customer_name')} = ? AND customer_name <> ?`)
+        .run(foldName(cleanName), cleanName);
+      for (const r of dupRows) enqueueDelete(db, 'customer_profiles', Number(r.id));
+    }
     db.prepare(`
       INSERT INTO customer_profiles (customer_name, credit_limit, notes, updated_at)
       VALUES (?, ?, ?, CURRENT_TIMESTAMP)

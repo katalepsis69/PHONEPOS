@@ -9,6 +9,27 @@ const { serverTest, ensurePinChanged } = require('./helper');
 const { createInventoryItem } = require('../src/inventory');
 
 serverTest('Server REST endpoints serve inventory, customers, settings, and credit settlement', async (baseUrl, db, auth) => {
+  // While the factory PIN is live, elevate refuses outright (1234 is in the
+  // manual, so an elevation granted against it proves nothing). Assert that
+  // before leaving the factory state, then change the PIN to gain elevation.
+  const stillDefault = await fetch(`${baseUrl}/api/auth/elevate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin: '1234' })
+  });
+  assert.strictEqual(stillDefault.status, 403);
+  const refused = await stillDefault.json();
+  assert.match(refused.error, /factory PIN/i);
+  assert.strictEqual(refused.code, 'elevation_required');
+  const pinChange = await fetch(`${baseUrl}/api/auth/change-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old_pin: '1234', new_pin: '4321' })
+  });
+  assert.strictEqual(pinChange.status, 200);
+  const pinData = await pinChange.json();
+  auth.Authorization = `Bearer ${pinData.token}`;
+  auth['X-Elevation'] = pinData.elevationToken;
   // 1. Create inventory item via POST
   const resPost = await fetch(`${baseUrl}/api/inventory`, {
     method: 'POST',
@@ -77,7 +98,7 @@ serverTest('Server REST endpoints serve inventory, customers, settings, and cred
   assert.strictEqual(settings.license_key, undefined);
   assert.strictEqual(settings.counter_session_secret, undefined);
   assert.strictEqual(settings.sync_token, undefined);
-  assert.strictEqual(settings.pin_change_required, true); // still on the factory PIN
+  assert.strictEqual(settings.pin_change_required, false); // PIN changed during setup
 
   // ...and must not be writable through the generic settings endpoint either,
   // or anyone could install their own PIN hash.
@@ -87,31 +108,6 @@ serverTest('Server REST endpoints serve inventory, customers, settings, and cred
     body: JSON.stringify({ manager_pin_hash: 'deadbeef' })
   });
   assert.notStrictEqual(resPinHijack.status, 200);
-
-  // Elevation replaces the old verify-pin endpoint: PIN → signed 15-min token.
-  // While the factory PIN is live the endpoint refuses outright: 1234 is in the
-  // manual, so an elevation granted against it proves nothing.
-  const stillDefault = await fetch(`${baseUrl}/api/auth/elevate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin: '1234' })
-  });
-  assert.strictEqual(stillDefault.status, 403);
-  const refused = await stillDefault.json();
-  assert.match(refused.error, /factory PIN/i);
-  assert.strictEqual(refused.code, 'elevation_required');
-
-  // The settings save is one of the factory-PIN gates; leave the factory state
-  // the way first-run setup does before saving anything.
-  const pinChange = await fetch(`${baseUrl}/api/auth/change-pin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ old_pin: '1234', new_pin: '4321' })
-  });
-  assert.strictEqual(pinChange.status, 200);
-  const pinData = await pinChange.json();
-  auth.Authorization = `Bearer ${pinData.token}`;
-  auth['X-Elevation'] = pinData.elevationToken;
 
   const resSettingsPost = await fetch(`${baseUrl}/api/settings`, {
     method: 'POST',
@@ -265,6 +261,7 @@ serverTest('GET /api/inventory/barcode/:code returns item or 404', async (baseUr
 });
 
 serverTest('Server supports inventory edits and CSV exports', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   // 1. Create a part, then edit it via PUT (the audit's W3 flow)
   const resPost = await fetch(`${baseUrl}/api/inventory`, {
     method: 'POST',
@@ -323,6 +320,7 @@ serverTest('Server supports inventory edits and CSV exports', async (baseUrl, db
 });
 
 serverTest('Movements endpoint serves a part ledger newest-first, 404s unknown ids', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const resPost = await fetch(`${baseUrl}/api/inventory`, {
     method: 'POST',
     headers: { ...auth, 'Content-Type': 'application/json' },
@@ -368,6 +366,7 @@ serverTest('Movements endpoint serves a part ledger newest-first, 404s unknown i
 });
 
 serverTest('Archive endpoints hide parts from the default catalog and POS list', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const resPost = await fetch(`${baseUrl}/api/inventory`, {
     method: 'POST',
     headers: { ...auth, 'Content-Type': 'application/json' },
@@ -399,6 +398,7 @@ serverTest('Archive endpoints hide parts from the default catalog and POS list',
 });
 
 serverTest('Reprint any sale writes an audit row and never creates a new sale', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const resItem = await fetch(`${baseUrl}/api/inventory`, {
     method: 'POST',
     headers: { ...auth, 'Content-Type': 'application/json' },
@@ -646,6 +646,7 @@ serverTest('internal errors answer 500 generic, never leak engine text', async (
 });
 
 serverTest('CSV export defangs formula prefixes; import strips control chars and caps length', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const mk = body => fetch(`${baseUrl}/api/inventory`, {
     method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
@@ -836,6 +837,7 @@ serverTest('POST /api/settings/pair-cloud validates 6-digit code and pairs with 
 });
 
 serverTest('drawer shifts are connected to reconcile day close and dashboard reports', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const today = new Date().toLocaleDateString('en-CA');
 
   // 1. Open drawer with opening float 100

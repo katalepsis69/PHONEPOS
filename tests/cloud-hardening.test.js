@@ -1038,3 +1038,53 @@ test('reorder, dead-stock, sale-detail and shifts endpoints keep their gates', a
     try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+test('cloud csvCell escapes spreadsheet formulas, cloud/ matches cloud-deploy/, and adjust-stock validates fractional items', async () => {
+  const crypto = require('node:crypto');
+  const vm = require('node:vm');
+  for (const rel of ['server.js', 'public/app.js', 'public/index.html']) {
+    const hCloud = crypto.createHash('sha256').update(fs.readFileSync(path.join(ROOT, 'cloud', rel))).digest('hex');
+    const hDeploy = crypto.createHash('sha256').update(fs.readFileSync(path.join(ROOT, 'cloud-deploy', rel))).digest('hex');
+    assert.strictEqual(hCloud, hDeploy, `cloud/${rel} and cloud-deploy/${rel} must remain byte-identical`);
+  }
+
+  const appSrc = fs.readFileSync(path.join(ROOT, 'cloud', 'public', 'app.js'), 'utf8');
+  const start = appSrc.indexOf('function csvCell(');
+  const end = appSrc.indexOf('\n}', start) + 2;
+  const ctx = vm.createContext({});
+  vm.runInContext(appSrc.slice(start, end), ctx);
+  assert.strictEqual(ctx.csvCell('=SUM(A1)'), "'=SUM(A1)");
+  assert.strictEqual(ctx.csvCell('+cmd'), "'+cmd");
+  assert.strictEqual(ctx.csvCell('@SUM(1,1)'), '"\'@SUM(1,1)"');
+  assert.strictEqual(ctx.csvCell('-cmd'), "'-cmd");
+  assert.strictEqual(ctx.csvCell('-12.5'), '-12.5');
+
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pos-cloud-frac-'));
+  fs.writeFileSync(path.join(dataDir, 'manager-pin.txt'), '2468\n');
+  let child;
+  try {
+    const running = await startCloud(dataDir);
+    child = running.child;
+    const { base } = running;
+    await sync(base, TOKEN_A, 'north', [
+      event(1, 'inventory', 1, { id: 1, brand: 'Gen', model_name: 'Cable', part_type: 'Wire', allow_fractional: 1, stock_quantity: 1.5, archived: 0 }),
+      event(2, 'inventory', 2, { id: 2, brand: 'Apple', model_name: 'iPhone 13', part_type: 'LCD', allow_fractional: 0, stock_quantity: 3, archived: 0 })
+    ]);
+    const { cookie } = await login(base);
+    const headers = { Cookie: cookie, 'Content-Type': 'application/json' };
+    const okRes = await fetch(`${base}/api/inventory/adjust-stock`, {
+      method: 'POST', headers, body: JSON.stringify({ id: 1, delta: 0.25 })
+    });
+    assert.strictEqual(okRes.status, 200);
+    const okData = await okRes.json();
+    assert.strictEqual(okData.item.stock_quantity, 1.75);
+
+    const badRes = await fetch(`${base}/api/inventory/adjust-stock`, {
+      method: 'POST', headers, body: JSON.stringify({ id: 2, delta: 0.5 })
+    });
+    assert.strictEqual(badRes.status, 400);
+  } finally {
+    if (child) await stopCloud(child);
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});

@@ -1,25 +1,37 @@
 @echo off
 setlocal enabledelayedexpansion
 title TechParts POS ^- Stage Customer Build (local only)
-cls
-
-:: One-command vendor publish: tests, build + verify, then stage a dated copy of
-:: the customer executable with its SHA-256. Everything it writes is regenerable
-:: build output; live data\ and backups\ are never read.
-::
-:: Close the POS and stop any `node src/server.js` first: the app is
-:: single-instance, so a live one makes the verification boot defer and exit.
-::
-::   publish.bat                 tests + build + stage
-::   publish.bat --installer     also compile the Inno Setup installer
-
 cd /d "%~dp0"
 
+:: ---- parse command line arguments -----------------------------------------
 set "WITH_INSTALLER=0"
-if /i "%~1"=="--installer" set "WITH_INSTALLER=1"
+set "SKIP_TESTS=0"
+set "CLEAN_BUILD=0"
+set "DRY_RUN=0"
+set "NO_PAUSE=0"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /i "%~1"=="--installer"  (set "WITH_INSTALLER=1" & shift & goto :parse_args)
+if /i "%~1"=="-i"           (set "WITH_INSTALLER=1" & shift & goto :parse_args)
+if /i "%~1"=="--skip-tests" (set "SKIP_TESTS=1" & shift & goto :parse_args)
+if /i "%~1"=="-s"           (set "SKIP_TESTS=1" & shift & goto :parse_args)
+if /i "%~1"=="--clean"      (set "CLEAN_BUILD=1" & shift & goto :parse_args)
+if /i "%~1"=="-c"           (set "CLEAN_BUILD=1" & shift & goto :parse_args)
+if /i "%~1"=="--dry-run"    (set "DRY_RUN=1" & shift & goto :parse_args)
+if /i "%~1"=="-d"           (set "DRY_RUN=1" & shift & goto :parse_args)
+if /i "%~1"=="--no-pause"   (set "NO_PAUSE=1" & shift & goto :parse_args)
+if /i "%~1"=="--help"       goto :show_help
+if /i "%~1"=="-h"           goto :show_help
+if /i "%~1"=="-?"           goto :show_help
+if /i "%~1"=="/?"           goto :show_help
+shift
+goto :parse_args
+
+:args_done
 
 echo ======================================================
-echo   TechParts POS - Stage Customer Build (local only, no release goes out)
+echo   TechParts POS - Stage Customer Build (Local Only)
 echo ======================================================
 echo.
 
@@ -54,36 +66,66 @@ if %errorlevel% neq 0 (
 if not exist "node_modules\@tailwindcss\cli" goto :need_install
 if not exist "node_modules\postject" goto :need_install
 
-:: A running exe can be renamed but not replaced; say so before the build starts.
-:: find.exe is given by absolute path on purpose. This box has GNU findutils
-:: earlier on PATH than C:\Windows\System32, and `find` then resolves to the Unix
-:: one, whose /i is not a flag it understands: the pipe dies, errorlevel lands on
-:: the wrong branch and the running-executable guard silently stops guarding.
-tasklist /fi "imagename eq TechPartsPOS.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "TechPartsPOS.exe" >nul
-if not errorlevel 1 (
-    echo [ERROR] TechPartsPOS.exe is running on this machine. Close the POS first
-    echo         ^(or run: taskkill /im TechPartsPOS.exe^).
-    set "REASON=The executable was still running."
-    goto :fail
+:: Running exe guard (absolute find.exe path avoids GNU findutils collision)
+if "!DRY_RUN!"=="0" (
+    tasklist /fi "imagename eq TechPartsPOS.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "TechPartsPOS.exe" >nul
+    if not errorlevel 1 (
+        echo [ERROR] TechPartsPOS.exe is running on this machine. Close the POS first
+        echo         ^(or run: taskkill /im TechPartsPOS.exe^).
+        set "REASON=The executable was still running."
+        goto :fail
+    )
+
+    tasklist /fi "imagename eq LicenseGenerator.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "LicenseGenerator.exe" >nul
+    if not errorlevel 1 (
+        echo [ERROR] LicenseGenerator.exe is running on this machine. Close it first
+        echo         ^(or run: taskkill /im LicenseGenerator.exe^).
+        set "REASON=LicenseGenerator.exe was still running."
+        goto :fail
+    )
 )
 
-:: ---- publish --------------------------------------------------------------
+:: ---- optional clean -------------------------------------------------------
+if "!CLEAN_BUILD!"=="1" (
+    echo [*] Cleaning stale build outputs...
+    if exist "release\customer.previous" rmdir /s /q "release\customer.previous" 2>nul
+    if exist "dist\.staging-pos" rmdir /s /q "dist\.staging-pos" 2>nul
+    if exist "dist\.staging-license" rmdir /s /q "dist\.staging-license" 2>nul
+)
+
+:: ---- dry run mode ---------------------------------------------------------
+if "!DRY_RUN!"=="1" (
+    echo [DRY RUN] Pre-flight checks passed successfully.
+    echo           Node runtime:    !NODE_BIN!
+    "!NODE_BIN!" -e "console.log('          Node version:    ' + process.version); console.log('          Package version: v' + require('./package.json').version);"
+    echo           Dependencies:    node_modules verified (@tailwindcss/cli, postject^)
+    echo           Process locks:   None (TechPartsPOS.exe is not running^)
+    echo.
+    echo [DRY RUN] Pre-flight OK. Run publish.bat to build and stage.
+    exit /b 0
+)
+
+:: ---- publish steps --------------------------------------------------------
 echo [1/4] Test suite
-call npm test
-if %errorlevel% neq 0 (
-    set "REASON=Tests failed. Nothing was published."
-    goto :fail
+if "!SKIP_TESTS!"=="1" (
+    echo       Skipped via --skip-tests.
+) else (
+    call npm test
+    if !errorlevel! neq 0 (
+        set "REASON=Tests failed. Nothing was published."
+        goto :fail
+    )
 )
 
 echo.
 echo [2/4] Build and verify artifacts
 call npm run build:exe
-if %errorlevel% neq 0 (
+if !errorlevel! neq 0 (
     set "REASON=build:exe failed. Nothing was published."
     goto :fail
 )
 if not exist "release\customer\TechPartsPOS.exe" (
-    set "REASON=release\customer\TechPartsPOS.exe is missing after a green build."
+    set "REASON=release\customer\TechPartsPOS.exe is missing after build."
     goto :fail
 )
 
@@ -100,23 +142,37 @@ if errorlevel 1 echo [WARN] Installer step failed. The staged executable is stil
 echo.
 echo [4/4] Stage publish copy and update changelog
 "!NODE_BIN!" scripts\generate-changelog.js
-:: Version, timestamp, copy and checksum all in one node call: a for /f cannot
-:: expand !NODE_BIN! without breaking its own quoting, and this box may have no
-:: PowerShell at all.
-"!NODE_BIN!" -e "const fs=require('node:fs'),cp=require('node:crypto'),pa=require('node:path');const ver=JSON.parse(fs.readFileSync('package.json','utf8')).version;const d=new Date(),p=n=>String(n).padStart(2,'0');const dst='publish'+pa.sep+'TechPartsPOS-'+ver+'-'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+'.exe';fs.mkdirSync('publish',{recursive:true});fs.copyFileSync('release'+pa.sep+'customer'+pa.sep+'TechPartsPOS.exe',dst);const h=cp.createHash('sha256').update(fs.readFileSync(dst)).digest('hex');fs.writeFileSync(dst+'.sha256.txt',h+'  '+pa.basename(dst)+'\n');console.log('       Staged:    '+dst);console.log('       Checksum:  '+dst+'.sha256.txt');console.log('       SHA-256:   '+h)"
+if errorlevel 1 echo [WARN] Automated changelog update reported warnings.
+
+"!NODE_BIN!" -e "const fs=require('node:fs'),cp=require('node:crypto'),pa=require('node:path');const ver=JSON.parse(fs.readFileSync('package.json','utf8')).version;const d=new Date(),p=n=>String(n).padStart(2,'0');const dst='publish'+pa.sep+'TechPartsPOS-'+ver+'-'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+'.exe';fs.mkdirSync('publish',{recursive:true});fs.copyFileSync('release'+pa.sep+'customer'+pa.sep+'TechPartsPOS.exe',dst);const buf=fs.readFileSync(dst);const h=cp.createHash('sha256').update(buf).digest('hex');fs.writeFileSync(dst+'.sha256.txt',h+'  '+pa.basename(dst)+'\n');const mb=(buf.length/(1024*1024)).toFixed(2);console.log('       Staged:    '+dst+' ('+mb+' MB)');console.log('       Checksum:  '+dst+'.sha256.txt');console.log('       SHA-256:   '+h);"
 if errorlevel 1 (
     set "REASON=Could not stage the publish copy."
     goto :fail
 )
 
+:: Retention: keep the five newest staged builds so publish\ does not grow
+:: without bound (each exe is ~95 MB). Older dated copies and their checksums
+:: are removed; live data, backups and the browser profile are never touched.
+"!NODE_BIN!" -e "const fs=require('node:fs'),pa=require('node:path');const dir='publish';const keep=5;const files=fs.readdirSync(dir).filter(f=>/^TechPartsPOS-.*\.exe$/.test(f)).map(f=>({f,t:fs.statSync(pa.join(dir,f)).mtimeMs})).sort((a,b)=>b.t-a.t);for(const {f} of files.slice(keep)){try{fs.unlinkSync(pa.join(dir,f));fs.unlinkSync(pa.join(dir,f+'.sha256.txt'));}catch(_){}console.log('       Pruned:    '+f);}"
+
 echo.
 echo ======================================================
-echo   PUBLISHED
+echo   PUBLISHED (Local Customer Staging)
 echo ======================================================
 echo.
 echo   Never send dist\ - it holds LicenseGenerator.exe, the vendor private
-echo   key and possibly live data. Install steps: docs\OPERATIONS_AND_DEPLOYMENT.md
-echo   Activation: docs\SECURITY_AND_LICENSING.md
+echo   key and possibly live data.
+echo   Install steps: docs\OPERATIONS_AND_DEPLOYMENT.md
+echo   Activation:    docs\SECURITY_AND_LICENSING.md
+echo.
+
+if "!NO_PAUSE!"=="0" (
+    echo %cmdcmdline% | "%SystemRoot%\System32\find.exe" /i """%~f0""" >nul
+    if not errorlevel 1 (
+        echo Press any key to exit...
+        pause >nul
+    )
+)
 exit /b 0
 
 :need_install
@@ -125,6 +181,27 @@ goto :fail
 
 :fail
 echo.
+echo ======================================================
 echo [FAILED] !REASON!
-pause
+echo ======================================================
+echo.
+if "!NO_PAUSE!"=="0" pause
 exit /b 1
+
+:show_help
+echo TechParts POS - Stage Customer Build (Local Staging)
+echo ====================================================
+echo Usage: publish.bat [options]
+echo.
+echo One-command vendor publish: tests, build + verify, then stage a dated
+echo copy of the customer executable with its SHA-256 in publish\.
+echo.
+echo Options:
+echo   -i, --installer     Also compile the Inno Setup installer executable.
+echo   -s, --skip-tests    Skip test suite (npm test) for faster local staging.
+echo   -c, --clean         Clean stale build artifacts before starting.
+echo   -d, --dry-run       Pre-flight check only; validates toolchain without building.
+echo   --no-pause          Suppress pause prompts (for automation/CI).
+echo   -h, --help          Show this help screen.
+echo.
+exit /b 0

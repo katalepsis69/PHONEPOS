@@ -131,7 +131,7 @@ forward; the apply route keeps its own elevated-session and factory-PIN gates
 | `first_run_ts` | ISO timestamp of the first run of the build; trial end = first run + 14 days. |
 | `last_seen_ts` | High-water mark of observed clock time; advanced at most once per hour (throttled write on the read path, so rollback is caught while running, not just across restarts). |
 | `trial_compromised` | `'1'` once a clock rollback beyond the 24h tolerance or direct database tamper is detected. **Permanent** — only activation opens the gate, the flag itself is never cleared. |
-| `trial_seal` | HMAC-SHA256 seal over `machine_id`, `first_run_ts`, and `trial_compromised`. Any external SQLite edit to `first_run_ts` or `trial_compromised` mismatches the seal and trips `trial_compromised = '1'`. |
+| `trial_seal` | HMAC-SHA256 seal over `machine_id`, `first_run_ts`, and `trial_compromised`. Any external SQLite edit to `first_run_ts` or `trial_compromised` mismatches the seal and trips `trial_compromised = '1'`. A recomputed seal over an edited `first_run_ts` is still floored to the database file's birth time (a settings-row edit cannot move it), so resetting the trial by recomputation is caught unless the file itself is copied or moved. |
 
 `GET /api/license/status` reports `trial_active`, `trial_days_left`, and
 `license_required = !activated && !trial_active`. A demo-data reset clears only the
@@ -159,7 +159,10 @@ inside the 24-hour tolerance is invisible to this rule.
 Local trial state is editable by an expert (SQLite). The goal is stopping casual
 non-payment; an offline product cannot do better. Restoring a fresh DB resets the
 trial but costs all shop data. A badly wrong system clock at first run expires the
-trial immediately (a clock that broken breaks the business day anyway).
+trial immediately (a clock that broken breaks the business day anyway). The seal
+salt ships in source, so an expert can recompute a matching seal over edited rows;
+the birth-time floor catches that edit unless they also copy or move the database
+file to reset its birth time. That deeper edit is the accepted offline ceiling.
 
 ### 3.5 v2 Monetization Path (deferred, no code)
 Upgrade gating can be added later either via a `version` field in the license payload

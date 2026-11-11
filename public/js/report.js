@@ -270,11 +270,80 @@
 
   /* ---------- license screen ---------- */
 
+  var currentMachineId = '';
+
   function showLicense(msg, machineId) {
     $('license-msg').textContent = msg || 'Trial ended. Activate this workstation to continue.';
     var mid = $('license-mid');
+    currentMachineId = machineId || '';
     if (machineId) { mid.textContent = 'Machine ID: ' + machineId; mid.hidden = false; } else { mid.hidden = true; }
+    var errEl = $('rpt-license-err');
+    if (errEl) errEl.hidden = true;
     show('view-license');
+  }
+
+  var copyMidBtn = $('btn-rpt-copy-mid');
+  if (copyMidBtn) {
+    copyMidBtn.addEventListener('click', function () {
+      var val = currentMachineId || ($('license-mid').textContent || '').replace(/^Machine ID:\s*/i, '').trim();
+      if (!val) return;
+      function done(copied) {
+        copyMidBtn.textContent = copied ? ('Copied: ' + val) : ('Machine ID: ' + val);
+        setTimeout(function () { copyMidBtn.textContent = 'Copy Machine ID'; }, 2500);
+      }
+      function legacyCopy() {
+        var ta = document.createElement('textarea');
+        ta.value = val;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, val.length);
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (_) {}
+        ta.remove();
+        done(ok);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(val).then(function () { done(true); }).catch(legacyCopy);
+      } else {
+        legacyCopy();
+      }
+    });
+  }
+
+  var rptActivateBtn = $('btn-rpt-activate');
+  if (rptActivateBtn) {
+    rptActivateBtn.addEventListener('click', function () {
+      var input = $('rpt-license-key');
+      var errEl = $('rpt-license-err');
+      var key = (input && input.value || '').trim();
+      if (!key) {
+        if (errEl) { errEl.textContent = 'Please paste a license key.'; errEl.hidden = false; }
+        return;
+      }
+      if (errEl) errEl.hidden = true;
+      rptActivateBtn.disabled = true;
+      rptActivateBtn.textContent = 'Activating...';
+      fetch('/api/license/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ license_key: key })
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d && d.activated) {
+          if (input) input.value = '';
+          show('view-login');
+        } else {
+          if (errEl) { errEl.textContent = (d && d.error) || 'Invalid license key'; errEl.hidden = false; }
+        }
+      }).catch(function () {
+        if (errEl) { errEl.textContent = 'Could not reach the POS server.'; errEl.hidden = false; }
+      }).finally(function () {
+        rptActivateBtn.disabled = false;
+        rptActivateBtn.textContent = 'Activate Workstation';
+      });
+    });
   }
 
   $('btn-license-back').addEventListener('click', function () {

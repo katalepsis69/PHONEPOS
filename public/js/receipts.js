@@ -68,6 +68,15 @@ function refuseUnprintableAmount(container, printable, field) {
   showToast(why, 'error');
 }
 
+function defaultShopSubtitle() {
+  const type = S.shopSettings?.business_type || 'hybrid';
+  if (type === 'grocery') return 'Grocery & General Merchandise';
+  if (type === 'pc') return 'PC & Electronics Sales & Services';
+  if (type === 'retail') return 'Retail & General Merchandise';
+  if (type === 'hybrid') return 'Sales & Repair Services';
+  return 'Phone Parts, LCDs & Repair Service';
+}
+
 function brandHeaderHtml(isThermal = false, trimmed = false) {
   const name = escHtml(S.shopSettings.gcash_name || 'TECHPARTS POS');
   const addr = S.shopSettings.shop_address ? escHtml(S.shopSettings.shop_address) : '';
@@ -79,13 +88,14 @@ function brandHeaderHtml(isThermal = false, trimmed = false) {
       ? `<div class="rcp-lg" style="font-weight: bold; text-transform: uppercase;">${name}</div>`
       : `<div class="font-bold text-sm tracking-wider uppercase">${name}</div>`;
   }
+  const sub = defaultShopSubtitle();
   if (isThermal) {
     return `<div class="rcp-lg" style="font-weight: bold; text-transform: uppercase;">${name}</div>
-        <div>${addr || 'Phone Parts, LCDs & Repair Service'}</div>
+        <div>${addr || sub}</div>
         <div>Tel/GCash: ${tel}</div>`;
   }
   return `<div class="font-bold text-sm tracking-wider uppercase">${name}</div>
-      ${addr ? `<div class="text-[10px] text-slate-400">${addr}</div>` : `<div class="text-[10px] text-slate-400">Phone Parts & Repair Services</div>`}
+      ${addr ? `<div class="text-[10px] text-slate-400">${addr}</div>` : `<div class="text-[10px] text-slate-400">${sub}</div>`}
       ${tel ? `<div class="text-[10px] text-slate-400 font-mono">Tel/GCash: ${tel}</div>` : ''}`;
 }
 
@@ -973,9 +983,11 @@ export function renderClaimStub(job) {
   const itemsHtml = lines.map(it => {
     const qty = Number(it.qty || 1);
     const unit = Number(it.unit_price || 0);
-    // Integer cents like cartTotals(): a 3-decimal unit price must display
-    // the same centavo the register charges, not a float-multiply artifact.
-    const total = (Math.round(Number(unit) * 100) * qty) / 100;
+    // Round the unit*qty PRODUCT to cents (half away from zero), exactly like
+    // cartTotals() and src/money.js, so the stub line sums to the stub total.
+    const product = unit * qty;
+    const [coef, exp = '0'] = String(Math.abs(product)).split('e');
+    const total = Math.sign(product) * Math.round(Number(`${coef}e${Number(exp) + 2}`)) / 100;
     // Stub rows go through printMoney like every other slip: same grouping,
     // and a broken total refuses to print instead of rendering P0.00.
     return `<div style="display:flex;justify-content:space-between;padding:1px 0;">

@@ -1,14 +1,73 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
+    [Alias("v", "ver")]
     [string]$Version,
+
+    [Alias("c", "notes", "note")]
     [string]$Changelog,
+
+    [Alias("n", "batch")]
     [switch]$NonInteractive,
-    [switch]$DryRun
+
+    [Alias("d", "dry-run")]
+    [switch]$DryRun,
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArgs
 )
+
+# Parse GNU-style flags (--version, --changelog, --dry-run, --non-interactive) and bare positionals safely
+if ($RemainingArgs) {
+    for ($i = 0; $i -lt $RemainingArgs.Count; $i++) {
+        $tok = [string]$RemainingArgs[$i]
+        switch -Regex ($tok) {
+            '^(--version|-v|--ver)$' {
+                if ($i + 1 -lt $RemainingArgs.Count) { $Version = [string]$RemainingArgs[++$i] }
+                break
+            }
+            '^--version=(.+)$' {
+                $Version = $Matches[1]
+                break
+            }
+            '^(--changelog|-c|--notes|--note)$' {
+                if ($i + 1 -lt $RemainingArgs.Count) { $Changelog = [string]$RemainingArgs[++$i] }
+                break
+            }
+            '^--changelog=(.+)$' {
+                $Changelog = $Matches[1]
+                break
+            }
+            '^(--dry-run|--dryrun|-d)$' {
+                $DryRun = $true
+                break
+            }
+            '^(--non-interactive|--noninteractive|-n)$' {
+                $NonInteractive = $true
+                break
+            }
+            '^--no-pause$' {
+                break
+            }
+            default {
+                if ($tok.StartsWith('-')) { break }
+                if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $tok }
+                elseif ([string]::IsNullOrWhiteSpace($Changelog)) { $Changelog = $tok }
+                break
+            }
+        }
+    }
+}
 
 $ErrorActionPreference = "Stop"
 
 $rootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $rootDir
+
+# Fail fast if TechPartsPOS.exe is running before modifying version files or building
+$runningPos = Get-Process -Name "TechPartsPOS" -ErrorAction SilentlyContinue
+if ($runningPos) {
+    throw "TechPartsPOS.exe is currently running on this machine. Close the POS application (or run 'taskkill /im TechPartsPOS.exe') before publishing."
+}
 
 $packageJson = Join-Path $rootDir "package.json"
 if (-not (Test-Path $packageJson)) {
@@ -155,18 +214,21 @@ function Get-NextVersion([string]$current, [string]$bump) {
             return "$major.$minor.$($patch + 1)"
         }
         default {
-            if ($bump -match '^\d+(\.\d+)*$') { return $bump.TrimStart('v', 'V') }
+            $trimmedBump = $bump.TrimStart('v', 'V')
+            if ($trimmedBump -match '^\d+(\.\d+)*$') { return $trimmedBump }
             if ($parts.Length -le 2) { return "$major.$($minor + 1)" }
             return "$major.$minor.$($patch + 1)"
         }
     }
 }
 
-if ($vPkg -gt $publishedMax) {
+$baseVer = if ($vPkg -ge $publishedMax) { $pkgVer } else { $publishedMax.ToString() }
+if (-not [string]::IsNullOrWhiteSpace($Version)) {
+    $cleanVer = Get-NextVersion $baseVer $Version.Trim()
+} elseif ($vPkg -gt $publishedMax) {
     $cleanVer = $pkgVer
     Write-Host "Reusing staged version $cleanVer (nothing was ever published under it; an earlier run stopped before shipping)." -ForegroundColor Yellow
 } else {
-    $baseVer = if ($vPkg -ge $publishedMax) { $pkgVer } else { $publishedMax.ToString() }
     $cleanVer = Get-NextVersion $baseVer "minor"
 }
 
@@ -459,6 +521,13 @@ if ($pending) {
 }
 
 # 6. Push Git tag & branch
+# Refuse a version that already has a PUBLISHED release BEFORE pushing main or
+# moving the tag: a re-run used to land a "Release vX" commit on main and then
+# throw. Drafts are fine (they resume below).
+$pre = @(Get-GithubReleases) | Where-Object { $_.tag_name -eq $tag -and -not $_.draft } | Select-Object -First 1
+if ($pre) {
+    throw "Release $tag is already PUBLISHED. Bump the version, or delete the release, before re-running."
+}
 Write-Host "[3/4] Pushing tag $tag to GitHub ($repo)..." -ForegroundColor Yellow
 & git push origin main
 if ($LASTEXITCODE -ne 0) {
@@ -466,14 +535,6 @@ if ($LASTEXITCODE -ne 0) {
     if ($LASTEXITCODE -ne 0) {
         throw "git push origin main failed. Fix remote and re-run. (Version files are already committed; a re-run will reuse $tag.)"
     }
-}
-
-# Refuse a version that already has a PUBLISHED release BEFORE moving the tag:
-# a force-push onto a new commit used to leave a shipped release pointing at
-# code that never built its assets. Drafts are fine (they resume below).
-$pre = @(Get-GithubReleases) | Where-Object { $_.tag_name -eq $tag -and -not $_.draft } | Select-Object -First 1
-if ($pre) {
-    throw "Release $tag is already PUBLISHED. Bump the version, or delete the release, before re-running."
 }
 & git tag -f $tag
 & git push -f origin $tag

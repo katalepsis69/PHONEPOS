@@ -223,3 +223,149 @@ test('Reorder UI: Export CSV button, custom days input, and actions wired', () =
   const main = fs.readFileSync(path.join(root, 'public', 'js', 'main.js'), 'utf8');
   assert.match(main, /'export-reorder-csv':/, 'export-reorder-csv registered in main ACTIONS');
 });
+
+test('Cloud Reorder parity, Stock CSV Import, and Two-Way Stock Sync end-to-end', async () => {
+  const os = require('node:os');
+  const { initDb } = require('../src/db');
+  const { drainOutbox } = require('../src/sync');
+  const { startCloud, stopCloud, login, TOKEN_A } = require('./cloud-hardening-harness');
+
+  const shopDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cloud-stock-sync-shop-'));
+  const cloudDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cloud-stock-sync-cloud-'));
+  fs.writeFileSync(path.join(cloudDir, 'manager-pin.txt'), '2468\n');
+  const db = initDb(path.join(shopDir, 'shop.db'));
+  let child;
+  try {
+    const partA = createInventoryItem(db, {
+      brand: 'Apple', model_name: 'iPhone 13', part_type: 'LCD', sku_barcode: 'IP13-LCD',
+      cost_price: 1000, price_retail: 2200, price_technician: 1800, stock_quantity: 5,
+      min_stock_alert: 3, supplier: 'Quiapo Parts', location: 'Bin B2'
+    });
+    createSale(db, { items: [{ inventory_id: partA.id, quantity: 3 }], amount_paid: 6600 }, ctxMgr);
+
+    const running = await startCloud(cloudDir, { SHOP_SYNC_CREDENTIALS: JSON.stringify({ north: TOKEN_A }) });
+    child = running.child;
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(running.base);
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_token', ?)").run(TOKEN_A);
+
+    while ((await drainOutbox(db)).synced > 0) {}
+
+    const { cookie } = await login(running.base);
+    const auth = { Cookie: cookie, 'Content-Type': 'application/json' };
+
+    // 1. Cloud /api/inventory/reorder?days=custom matches workstation listReorderSuggestions
+    const cloudReorderRes = await fetch(`${running.base}/api/inventory/reorder?days=5`, { headers: { Cookie: cookie } });
+    assert.strictEqual(cloudReorderRes.status, 200);
+    const cloudReorder = await cloudReorderRes.json();
+    assert.strictEqual(cloudReorder.days, 5);
+    assert.strictEqual(cloudReorder.rows.length, 1);
+    assert.strictEqual(cloudReorder.rows[0].brand, 'Apple');
+    assert.strictEqual(cloudReorder.rows[0].sku_barcode, 'IP13-LCD');
+    assert.strictEqual(cloudReorder.rows[0].qty_sold, 3);
+    assert.strictEqual(cloudReorder.rows[0].stock_quantity, 2);
+    // Parity with the counter sheet (suggested = sold - on hand): 3 - 2 = 1.
+    // The cloud used to buy up max(sold, deficit, 1) = 3, disagreeing with the
+    // workstation; both now use the net replenishment need.
+    assert.strictEqual(cloudReorder.rows[0].suggested_qty, 1);
+    assert.strictEqual(cloudReorder.rows[0].supplier, 'Quiapo Parts');
+
+    // 2. Cloud POST /api/inventory/adjust-stock updates cloud mirror immediately and syncs down to shop POS
+    const adjRes = await fetch(`${running.base}/api/inventory/adjust-stock`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ id: partA.id, delta: 6, reason: 'receive', note: 'Cloud delivery' }),
+    });
+    assert.strictEqual(adjRes.status, 200);
+    const adjBody = await adjRes.json();
+    assert.strictEqual(adjBody.ok, true);
+    assert.strictEqual(adjBody.item.stock_quantity, 8, 'cloud mirror updated immediately from 2 to 8');
+
+    // Before shop POS heartbeat, /api/overview exposes pending_commands = 1 and item delta
+    const ovBefore = await (await fetch(`${running.base}/api/overview`, { headers: { Cookie: cookie } })).json();
+    assert.strictEqual(ovBefore.pending_commands, 1, 'overview shows 1 unacked command queued for counter');
+    assert.strictEqual(ovBefore.pending_command_items.length, 1);
+    assert.strictEqual(ovBefore.pending_command_items[0].inventory_id, partA.id);
+    assert.strictEqual(ovBefore.pending_command_items[0].delta, 6);
+
+    // Shop POS heartbeat drains and applies the cloud command
+    const hb1 = await drainOutbox(db);
+    assert.strictEqual(hb1.commands_applied, 1, 'shop POS applied the adjust_stock command');
+    assert.strictEqual(getInventoryItem(db, partA.id).stock_quantity, 8, 'local shop DB stock updated to 8');
+
+    // After shop POS heartbeat acks the command, /api/overview shows pending_commands = 0
+    const ovAfter = await (await fetch(`${running.base}/api/overview`, { headers: { Cookie: cookie } })).json();
+    assert.strictEqual(ovAfter.pending_commands, 0, 'overview shows 0 pending commands once counter synced');
+    assert.strictEqual(ovAfter.pending_command_items.length, 0);
+
+    // Second heartbeat applies 0 commands (already acked)
+    const hb2 = await drainOutbox(db);
+    assert.strictEqual(hb2.commands_applied, 0, 'acked command is not re-applied');
+    assert.strictEqual(getInventoryItem(db, partA.id).stock_quantity, 8);
+
+    // 3. Cloud POST /api/inventory/import updates existing part (+4) and creates new part (+10)
+    const impRes = await fetch(`${running.base}/api/inventory/import`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        rows: [
+          // Unedited reorder row (Stock Qty = 0 / blank) -> +0 stock change
+          { brand: 'Apple', model_name: 'iPhone 13', part_type: 'LCD', sku_barcode: 'IP13-LCD', cost_price: 1000, price_retail: 2200, stock_quantity: 0 },
+          // Filled reorder row -> +4 added
+          { brand: 'Apple', model_name: 'iPhone 13', part_type: 'LCD', sku_barcode: 'IP13-LCD', cost_price: 1000, price_retail: 2200, stock_quantity: 4 },
+          // New part from CSV -> created with 10 stock
+          { brand: 'Samsung', model_name: 'A54', part_type: 'Battery', sku_barcode: 'SAM-A54-BAT', cost_price: 400, price_retail: 900, stock_quantity: 10, supplier: 'Quiapo Parts' },
+        ],
+      }),
+    });
+    assert.strictEqual(impRes.status, 200);
+    const impBody = await impRes.json();
+    assert.strictEqual(impBody.created, 1);
+    assert.strictEqual(impBody.updated, 2);
+
+    // Verify cloud mirror has both items with updated stock immediately
+    const cloudCatalog = await (await fetch(`${running.base}/api/rows?table=inventory&limit=5000`, { headers: { Cookie: cookie } })).json();
+    const cloudIp13 = cloudCatalog.find(i => i.sku_barcode === 'IP13-LCD');
+    const cloudA54 = cloudCatalog.find(i => i.sku_barcode === 'SAM-A54-BAT');
+    assert.strictEqual(cloudIp13.stock_quantity, 12, 'cloud mirror added +4 to 8 -> 12');
+    assert.strictEqual(cloudA54.stock_quantity, 10, 'cloud mirror created new part with 10');
+
+    // Shop POS drains and applies the import_inventory command
+    const hb3 = await drainOutbox(db);
+    assert.strictEqual(hb3.commands_applied, 1, 'shop POS applied import_inventory command');
+    assert.strictEqual(getInventoryItem(db, partA.id).stock_quantity, 12, 'local shop DB updated to 12');
+    const localA54 = db.prepare("SELECT * FROM inventory WHERE sku_barcode = 'SAM-A54-BAT'").get();
+    assert.ok(localA54, 'new part created in local shop DB');
+    assert.strictEqual(localA54.stock_quantity, 10);
+  } finally {
+    if (child) await stopCloud(child);
+    try { db.close(); } catch (_) {}
+    try { fs.rmSync(shopDir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(cloudDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+test('Cloud UI: Reorder toolbar, Stock catalog/import/export actions, and CSV parser wired', () => {
+  const root = path.join(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'cloud', 'public', 'index.html'), 'utf8');
+  const appJs = fs.readFileSync(path.join(root, 'cloud', 'public', 'app.js'), 'utf8');
+
+  assert.match(html, /id="cloud-reorder-bar"/);
+  assert.match(html, /id="cloud-reorder-custom-days"/);
+  assert.match(html, /id="cloud-copy-order-btn"/);
+  assert.match(html, /id="cloud-export-reorder-btn"/);
+  assert.match(html, /id="cloud-import-reorder-btn"/);
+  assert.match(html, /id="cloud-stock-bar"/);
+  assert.match(html, /id="cloud-import-stock-btn"/);
+  assert.match(html, /id="cloud-template-csv-btn"/);
+  assert.match(html, /id="cloud-export-stock-btn"/);
+  assert.match(html, /id="stock-modal"/);
+  assert.match(html, /id="import-modal"/);
+  assert.match(html, /id="sync-state-badge"/);
+
+  assert.match(appJs, /function exportCloudReorderCsv/);
+  assert.match(appJs, /function parseCloudImportRows/);
+  assert.match(appJs, /function updateCloudSyncStateBadge/);
+  assert.match(appJs, /function getPendingDeltaForItem/);
+  assert.match(appJs, /\/api\/inventory\/adjust-stock/);
+  assert.match(appJs, /\/api\/inventory\/import/);
+});

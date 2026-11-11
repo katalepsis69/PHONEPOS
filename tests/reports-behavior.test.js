@@ -18,7 +18,7 @@ function context(extra = {}) {
     PERIOD_DAYS:{day:1,'7d':7}, URLSearchParams,
     hasElevation:()=>true, wireDashboardControls(){}, syncPeriodUi(){},
     renderDashboard(){}, showToast(){}, console,
-    fmtMoney:n=>Number(n).toFixed(2), escHtml:s=>String(s),
+    fmtMoney:n=>Number(n).toFixed(2), escHtml:s=>String(s), t:(k,fb)=>fb||k,
     windowLabel:()=> 'Jan 9–15', deltaTag(){}, renderTrend(){},
     renderTopProducts(){},renderDeadStock(){},renderReorder(){},
     ...extra

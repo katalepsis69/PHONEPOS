@@ -8,6 +8,11 @@ let lastLoadedData = null;
 let eventSource = null;
 let currentPairingCode = '';
 let pairingTimerInterval = null;
+let reorderDays = 7;
+let reorderCustomTimer = null;
+const reorderOrderQtyOverrides = new Map();
+let activeStockModalItem = null;
+let pendingImportRows = [];
 
 const fmtMoney = n => '₱' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -230,8 +235,96 @@ function copyPairingCode() {
 // Timestamp of the last refresh that actually returned data, so a failed poll
 // can say how stale the numbers on screen are.
 let lastOkRefreshAt = null;
+let lastOverviewState = null;
 const STALE_MAX_MS = 300000;
+const REGISTER_STALE_MS = 120000;
 const POLL_MS = 20000;
+
+function updateCloudSyncStateBadge({ inFlight = false, overview = lastOverviewState, fetchError = false } = {}) {
+  const badge = document.getElementById('sync-state-badge');
+  if (!badge) return;
+  badge.classList.remove('warn', 'off', 'syncing');
+
+  if (inFlight) {
+    badge.classList.add('syncing');
+    badge.textContent = 'Syncing...';
+    badge.title = 'Refreshing store telemetry and sync queue';
+    return;
+  }
+
+  if (fetchError) {
+    const ageMs = lastOkRefreshAt ? (Date.now() - lastOkRefreshAt) : Infinity;
+    const isStale = ageMs < STALE_MAX_MS;
+    badge.classList.add(isStale ? 'warn' : 'off');
+    badge.textContent = isStale ? 'Stale · Retrying' : 'Unsynced · Offline';
+    badge.title = lastOkRefreshAt
+      ? `Cloud connection interrupted; last update ${timeAgo(new Date(lastOkRefreshAt).toISOString())}`
+      : 'Could not reach cloud server';
+    return;
+  }
+
+  const shops = Array.isArray(overview?.shops) ? overview.shops : [];
+  if (shops.length === 0) {
+    badge.classList.add('off');
+    badge.textContent = 'Not synced (unpaired)';
+    badge.title = 'Pair a counter POS register to start syncing';
+    return;
+  }
+
+  const scopedShops = selectedShop ? shops.filter(s => s.shop_id === selectedShop) : shops;
+  const targetShops = scopedShops.length ? scopedShops : shops;
+  const pendingCount = (overview?.pending_command_items || []).filter(
+    c => !selectedShop || c.shop_id === selectedShop
+  ).length;
+
+  if (pendingCount > 0) {
+    badge.classList.add('warn');
+    badge.textContent = `Unsynced · ${pendingCount} queued`;
+    badge.title = `${pendingCount} cloud stock change${pendingCount === 1 ? '' : 's'} waiting for counter POS heartbeat`;
+    return;
+  }
+
+  const now = Date.now();
+  let minAgeMs = Infinity;
+  let freshestIso = '';
+  for (const s of targetShops) {
+    const t = Date.parse(s.last_seen);
+    if (Number.isFinite(t)) {
+      const age = Math.max(0, now - t);
+      if (age < minAgeMs) {
+        minAgeMs = age;
+        freshestIso = s.last_seen;
+      }
+    }
+  }
+
+  if (minAgeMs >= STALE_MAX_MS) {
+    badge.classList.add('off');
+    badge.textContent = `Counter offline (${timeAgo(freshestIso)})`;
+    badge.title = `Counter POS has not heartbeated since ${freshestIso}`;
+  } else if (minAgeMs >= REGISTER_STALE_MS) {
+    badge.classList.add('warn');
+    badge.textContent = `Counter stale (${timeAgo(freshestIso)})`;
+    badge.title = `Last counter heartbeat ${timeAgo(freshestIso)}`;
+  } else {
+    badge.textContent = 'Synced · Live';
+    badge.title = freshestIso ? `Counter synced (${timeAgo(freshestIso)})` : 'Live sync active';
+  }
+}
+
+function getPendingDeltaForItem(data, item) {
+  const items = data?.pendingCommandItems || [];
+  const shopId = item.shop_id || selectedShop || '';
+  let delta = 0;
+  let count = 0;
+  for (const c of items) {
+    if (c.kind === 'adjust_stock' && Number(c.inventory_id) === Number(item.id) && (!shopId || !c.shop_id || c.shop_id === shopId)) {
+      delta += Number(c.delta) || 0;
+      count++;
+    }
+  }
+  return count > 0 ? { count, delta } : null;
+}
 
 function setCloudFreshness(ok) {
   const beacon = document.getElementById('conn-beacon');
@@ -246,6 +339,7 @@ function setCloudFreshness(ok) {
       staleBadge.classList.remove('warn', 'off');
       staleBadge.classList.add('hidden');
     }
+    updateCloudSyncStateBadge({ inFlight: false, overview: lastOverviewState, fetchError: false });
     return;
   }
   const ageMs = lastOkRefreshAt ? (Date.now() - lastOkRefreshAt) : Infinity;
@@ -263,6 +357,7 @@ function setCloudFreshness(ok) {
       : 'Data: offline (no update yet)';
     staleBadge.classList.remove('hidden');
   }
+  updateCloudSyncStateBadge({ inFlight: false, overview: lastOverviewState, fetchError: true });
 }
 
 function syncShopSelector(shops, rowCounts = {}) {
@@ -424,6 +519,9 @@ function setDeltaPill(el, delta) {
 
 async function refresh() {
   if (!loggedIn) return;
+  updateCloudSyncStateBadge({ inFlight: true });
+  const countEl = document.getElementById('feed-count');
+  if (countEl && !lastLoadedData) countEl.textContent = 'Syncing...';
   try {
     const shopQuery = selectedShop ? `&shop=${encodeURIComponent(selectedShop)}` : '';
     const shopParam = selectedShop ? `?shop=${encodeURIComponent(selectedShop)}` : '';
@@ -434,10 +532,10 @@ async function refresh() {
       const t = document.getElementById('range-to')?.value;
       analyticsQuery = `period=custom&from=${encodeURIComponent(f || '')}` + (t ? `&to=${encodeURIComponent(t)}` : '') + shopQuery;
     }
-    const [sales, utang, reorder, rets, reconciliations, adjustments, shifts, overview, analytics, standing, deadStock] = await Promise.all([
+    const [sales, utang, reorder, rets, reconciliations, adjustments, shifts, overview, analytics, standing, deadStock, reorderSheet, inventory] = await Promise.all([
       api('/api/rows?table=sales' + shopQuery),
       api('/api/rows?table=credit_payments' + shopQuery),
-      api('/api/reorder' + shopParam),
+      api('/api/reorder?days=' + reorderDays + shopQuery),
       api('/api/rows?table=warranty_returns' + shopQuery),
       api('/api/rows?table=day_reconciliations' + shopQuery),
       api('/api/rows?table=cash_adjustments' + shopQuery),
@@ -446,16 +544,24 @@ async function refresh() {
       api('/api/analytics?' + analyticsQuery),
       api(standingPath),
       api('/api/dead-stock' + shopParam),
+      api('/api/inventory/reorder?days=' + reorderDays + shopQuery).catch(() => ({ days: reorderDays, rows: [] })),
+      api('/api/rows?table=inventory&limit=5000' + shopQuery).catch(() => []),
     ]);
 
+    lastOverviewState = overview;
     const shopsBadge = document.getElementById('shops-badge');
     if (shopsBadge) {
       // Honest count: a paired-but-dead register is not online. The shop
       // heartbeats once a minute, so five minutes of silence is offline.
       const now = Date.now();
-      const online = (overview.shops || []).filter(s => now - Date.parse(s.last_seen) < 5 * 60 * 1000).length;
+      const allShops = overview.shops || [];
+      const online = allShops.filter(s => now - Date.parse(s.last_seen) < 5 * 60 * 1000).length;
       const n = online;
-      shopsBadge.textContent = `${n} shop${n === 1 ? '' : 's'} online`;
+      shopsBadge.textContent = allShops.length === 0
+        ? 'No register'
+        : `${n} shop${n === 1 ? '' : 's'} online`;
+      shopsBadge.classList.toggle('warn', allShops.length > 0 && n === 0);
+      shopsBadge.classList.toggle('off', allShops.length === 0);
     }
     syncShopSelector(overview.shops, overview.rowCounts);
 
@@ -530,6 +636,9 @@ async function refresh() {
       sales,
       utang,
       reorder,
+      reorderSheet: reorderSheet && Array.isArray(reorderSheet.rows) ? reorderSheet.rows : [],
+      inventory: Array.isArray(inventory) ? inventory.filter(i => !i.archived) : [],
+      pendingCommandItems: Array.isArray(overview.pending_command_items) ? overview.pending_command_items : [],
       rets,
       reconciliations,
       adjustments,
@@ -563,10 +672,11 @@ const CHIP_CONFIG = {
     { id: 'all', label: 'All Alerts' },
     { id: 'out', label: 'Stockout (0)' },
     { id: 'low', label: 'Low Stock (1+)' },
-    { id: 'fast', label: 'Fast Movers' }
+    { id: 'fast', label: 'Fast Movers' },
+    { id: 'catalog', label: 'All Catalog' }
   ],
   reorder: [
-    { id: 'all', label: 'All' },
+    { id: 'all', label: 'Sold in Window' },
     { id: 'below', label: 'Below Minimum' },
     { id: 'fast', label: 'Fast Movers' }
   ],
@@ -667,6 +777,8 @@ function renderTab(data) {
   const box = document.getElementById('rows');
   if (titleEl) titleEl.textContent = titleMap[currentTab] || 'Activity';
   renderChipsForTab();
+  document.getElementById('cloud-reorder-bar')?.classList.toggle('hidden', currentTab !== 'reorder');
+  document.getElementById('cloud-stock-bar')?.classList.toggle('hidden', currentTab !== 'stock');
 
   if (currentTab === 'sales') {
     const allSales = (data.sales || []).filter(s => {
@@ -770,17 +882,56 @@ function renderTab(data) {
         </div>
       </div>
     `).join('');
-  } else if (currentTab === 'stock' || currentTab === 'reorder') {
+  } else if (currentTab === 'stock') {
+    if (feedChip === 'catalog') {
+      const catalog = (data.inventory || []).filter(item => {
+        const name = [item.brand, item.model_name, item.part_type, item.sku_barcode, item.supplier].filter(Boolean).join(' ');
+        return matchesQuery(name);
+      });
+      const rows = catalog.slice(0, 200);
+      if (countEl) countEl.textContent = `${catalog.length} parts`;
+      if (!rows.length) {
+        box.innerHTML = '<div class="empty-state">No inventory parts match this search.</div>';
+        return;
+      }
+      box.innerHTML = rows.map(item => {
+        const qty = Number(item.stock_quantity) || 0;
+        const minAlert = Number(item.min_stock_alert ?? 2);
+        const name = [item.brand, item.model_name, item.part_type].filter(Boolean).join(' ');
+        const badgeCls = qty <= 0 ? 'utang' : (qty <= minAlert ? 'warn' : 'cash');
+        const pend = getPendingDeltaForItem(data, item);
+        const pendHtml = pend
+          ? `<span class="badge warn" title="Waiting for counter POS heartbeat">Pending sync (${pend.delta > 0 ? '+' + pend.delta : pend.delta})</span>`
+          : '';
+        return `
+          <div class="feed-item">
+            <div class="feed-left">
+              <div class="feed-code-row">
+                <span class="feed-code">${esc(name || 'Part')}</span>
+                ${item.sku_barcode ? `<span class="badge gcash">${esc(item.sku_barcode)}</span>` : ''}
+                ${pendHtml}
+              </div>
+              <div class="feed-meta">Retail ${fmtMoney(item.price_retail)} · Capital ${fmtMoney(item.cost_price)} · Min ${esc(minAlert)}${item.supplier ? ` · ${esc(item.supplier)}` : ''}</div>
+            </div>
+            <div class="feed-right" style="display: flex; align-items: center; gap: 8px;">
+              <span class="badge ${badgeCls}">${esc(qty)} in stock</span>
+              <button type="button" class="row-stock-btn" data-add-stock-id="${esc(item.id)}" data-add-stock-shop="${esc(item.shop_id || selectedShop || '')}" data-add-stock-name="${esc(name)}" data-add-stock-qty="${esc(qty)}">+ Stock</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+      return;
+    }
+
     const filtered = (data.reorder || []).filter(item => {
       const qty = Number(item.stock_quantity) || 0;
       if (feedChip === 'out' && qty > 0) return false;
       if (feedChip === 'low' && qty <= 0) return false;
-      if (feedChip === 'below' && !item.below_min) return false;
       if (feedChip === 'fast' && !(!item.below_min && Number(item.units_sold) > 0)) return false;
       return matchesQuery(item.name);
     });
-    const rows = filtered.slice(0, 50);
-    if (countEl) countEl.textContent = `${rows.length} ${currentTab === 'reorder' ? 'parts' : 'alerts'}`;
+    const rows = filtered.slice(0, 100);
+    if (countEl) countEl.textContent = `${rows.length} alerts`;
     if (!rows.length) {
       box.innerHTML = `<div class="empty-state">${feedChip === 'fast' ? 'No fast movers are running low on cover.' : 'All parts are at or above healthy stock levels.'}</div>`;
       return;
@@ -788,16 +939,67 @@ function renderTab(data) {
     box.innerHTML = rows.map(item => {
       const qty = Number(item.stock_quantity) || 0;
       const coverNote = item.cover_days !== null && item.cover_days !== undefined
-        ? ` · ${item.units_sold} sold/30d · ${item.cover_days}d cover`
+        ? ` · ${item.units_sold} sold/${reorderDays}d · ${item.cover_days}d cover`
+        : '';
+      const pend = getPendingDeltaForItem(data, item);
+      const pendHtml = pend
+        ? `<span class="badge warn" title="Waiting for counter POS heartbeat">Pending sync (${pend.delta > 0 ? '+' + pend.delta : pend.delta})</span>`
         : '';
       return `
         <div class="feed-item">
           <div class="feed-left">
-            <span class="feed-code">${esc(item.name || 'Part')}</span>
+            <div class="feed-code-row">
+              <span class="feed-code">${esc(item.name || 'Part')}</span>
+              ${pendHtml}
+            </div>
             <div class="feed-meta">Alert threshold: ${esc(item.min_stock_alert)} · Restock ${esc(item.restock_qty)} (${fmtMoney(item.restock_cost)})${coverNote}</div>
           </div>
-          <div class="feed-right">
+          <div class="feed-right" style="display: flex; align-items: center; gap: 8px;">
             <span class="badge ${qty <= 0 ? 'utang' : 'warn'}">${esc(item.stock_quantity)} units left</span>
+            <button type="button" class="row-stock-btn" data-add-stock-id="${esc(item.id)}" data-add-stock-shop="${esc(item.shop_id || selectedShop || '')}" data-add-stock-name="${esc(item.name || 'Part')}" data-add-stock-qty="${esc(qty)}">+ Stock</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } else if (currentTab === 'reorder') {
+    const activeRows = getActiveReorderRows(data);
+    updateCloudReorderSummary(activeRows);
+    const rows = activeRows.slice(0, 150);
+    if (countEl) countEl.textContent = `${rows.length} parts`;
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty-state">${feedChip === 'all' ? `No parts sold in the last ${reorderDays} day${reorderDays === 1 ? '' : 's'}.` : 'No parts match this reorder filter.'}</div>`;
+      return;
+    }
+    box.innerHTML = rows.map(item => {
+      const qty = Number(item.stock_quantity) || 0;
+      const minAlert = Number(item.min_stock_alert) || 0;
+      const sold = Number(item.qty_sold ?? item.units_sold) || 0;
+      const name = item.name || [item.brand, item.model_name, item.part_type].filter(Boolean).join(' ');
+      const key = `${item.shop_id || selectedShop || ''}:${item.id}`;
+      const orderQty = reorderOrderQtyOverrides.has(key)
+        ? reorderOrderQtyOverrides.get(key)
+        : (Number(item.suggested_qty ?? item.restock_qty) || 1);
+      const badgeCls = qty <= 0 ? 'utang' : (qty <= minAlert ? 'warn' : 'cash');
+      const pend = getPendingDeltaForItem(data, item);
+      const pendHtml = pend
+        ? `<span class="badge warn" title="Waiting for counter POS heartbeat">Pending sync (${pend.delta > 0 ? '+' + pend.delta : pend.delta})</span>`
+        : '';
+      return `
+        <div class="feed-item">
+          <div class="feed-left">
+            <div class="feed-code-row">
+              <span class="feed-code">${esc(name || 'Part')}</span>
+              ${item.supplier ? `<span class="badge gcash">${esc(item.supplier)}</span>` : ''}
+              ${pendHtml}
+            </div>
+            <div class="feed-meta">Sold ${esc(sold)} (${reorderDays}d) · On hand <span class="badge ${badgeCls}" style="padding: 1px 5px; font-size: 10px;">${esc(qty)}</span> · Min ${esc(minAlert)} · Cost ${fmtMoney(item.cost_price)}</div>
+          </div>
+          <div class="feed-right" style="display: flex; align-items: center; gap: 8px;">
+            <label style="display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 11px; color: var(--text-muted);">
+              <span>Order</span>
+              <input type="number" class="order-qty-input" min="0" step="${item.allow_fractional ? 'any' : '1'}" value="${esc(orderQty)}" data-order-key="${esc(key)}" data-unit-cost="${esc(Number(item.cost_price) || 0)}" aria-label="Order quantity for ${esc(name)}">
+            </label>
+            <button type="button" class="row-stock-btn" data-add-stock-id="${esc(item.id)}" data-add-stock-shop="${esc(item.shop_id || selectedShop || '')}" data-add-stock-name="${esc(name)}" data-add-stock-qty="${esc(qty)}">+ Stock</button>
           </div>
         </div>
       `;
@@ -1080,10 +1282,11 @@ document.addEventListener('keydown', e => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (/^[0-9]$/.test(e.key)) {
     e.preventDefault();
-    if (keypadPin.length < 4) {
+    // Accumulate up to 12 digits and submit on Enter: rotated PINs are 8, so
+    // auto-firing at 4 made the hardware-keyboard path unable to log in.
+    if (keypadPin.length < 12) {
       keypadPin += e.key;
       updateKeypadDots();
-      if (keypadPin.length === 4) submitLoginPin(keypadPin);
     }
   } else if (e.key === 'Enter') {
     e.preventDefault();
@@ -1195,10 +1398,485 @@ document.querySelectorAll('.period-tab').forEach(tab => {
 document.getElementById('range-from')?.addEventListener('change', () => refresh());
 document.getElementById('range-to')?.addEventListener('change', () => refresh());
 
+const CLOUD_IMPORT_TEMPLATE_HEADERS = [
+  'Brand', 'Model Name', 'Part Type', 'SKU / Barcode',
+  'Capital', 'Retail Price', 'Wholesale Price', 'Stock Qty',
+  'Min Stock Alert', 'Supplier', 'Location',
+];
+
+const CLOUD_REORDER_CSV_HEADERS = [
+  'Brand', 'Model Name', 'Part Type', 'SKU / Barcode',
+  'Capital', 'Retail Price', 'Wholesale Price', 'Sold', 'In Stock', 'Stock Qty',
+  'Min Stock Alert', 'Supplier', 'Location',
+];
+
+const CLOUD_HEADER_ALIASES = {
+  item_name:        ['itemname', 'productname', 'name'],
+  brand:            ['brand', 'make', 'manufacturer'],
+  model_name:       ['model', 'modelname', 'device', 'phone', 'unit'],
+  part_type:        ['parttype', 'part', 'type', 'category', 'item', 'description'],
+  category:         ['category', 'cat'],
+  uom:              ['uom', 'unitofmeasure'],
+  allow_fractional: ['allowfractional', 'fractional', 'decimal'],
+  sku_barcode:      ['sku', 'barcode', 'skubarcode', 'code', 'partnumber', 'partno', 'upc', 'ean'],
+  cost_price:       ['costprice', 'cost', 'unitcost', 'buyprice', 'capital', ' puhunan', 'puhunan', 'wholesale'],
+  price_retail:     ['priceretail', 'retail', 'retailprice', 'price', 'sellingprice', 'srp', 'walkin'],
+  price_technician: ['pricetechnician', 'technicianprice', 'techprice', 'tprice', 'dealer', 'dealerprice', 'wholesaleprice'],
+  stock_quantity:   ['stockquantity', 'stock', 'qty', 'quantity', 'onhand', 'stockqty'],
+  min_stock_alert:  ['minstockalert', 'minstock', 'reorderlevel', 'alert', 'lowstock', 'min'],
+  supplier:         ['supplier', 'vendor', 'source'],
+  location:         ['location', 'bin', 'shelf', 'drawer', 'slot'],
+};
+
+function getActiveReorderRows(data) {
+  if (!data) return [];
+  const base = feedChip === 'all'
+    ? (data.reorderSheet || [])
+    : (data.reorder || []).filter(item => {
+        if (feedChip === 'below') return Boolean(item.below_min);
+        if (feedChip === 'fast') return !item.below_min && Number(item.units_sold) > 0;
+        return true;
+      });
+  return base.filter(item => {
+    const text = [item.name, item.brand, item.model_name, item.part_type, item.sku_barcode, item.supplier].filter(Boolean).join(' ');
+    return matchesQuery(text);
+  });
+}
+
+function getRowOrderQty(item) {
+  const key = `${item.shop_id || selectedShop || ''}:${item.id}`;
+  if (reorderOrderQtyOverrides.has(key)) return reorderOrderQtyOverrides.get(key);
+  const raw = Number(item.suggested_qty ?? item.restock_qty) || 1;
+  return Math.max(0, Math.round(raw * 1000) / 1000);
+}
+
+function updateCloudReorderSummary(rows) {
+  const summaryEl = document.getElementById('cloud-reorder-summary');
+  if (!summaryEl) return;
+  const list = Array.isArray(rows) ? rows : getActiveReorderRows(lastLoadedData);
+  let totalUnits = 0;
+  let totalCost = 0;
+  for (const r of list) {
+    const qty = getRowOrderQty(r);
+    const cost = Number(r.cost_price) || 0;
+    totalUnits += qty;
+    totalCost += qty * cost;
+  }
+  const cleanUnits = Math.round(totalUnits * 1000) / 1000;
+  summaryEl.textContent = `${list.length} part${list.length === 1 ? '' : 's'} · ${cleanUnits} to order · Est ${fmtMoney(totalCost)}`;
+}
+
+function csvCell(val) {
+  let s = String(val ?? '');
+  if (/^[=+@\t\r]/.test(s) || (/^-/.test(s) && !/^-?\d+(\.\d+)?$/.test(s))) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function triggerCsvDownload(filename, lines) {
+  const csv = '\uFEFF' + lines.join('\r\n') + '\r\n';
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function copyCloudReorderOrder() {
+  const rows = getActiveReorderRows(lastLoadedData);
+  if (!rows.length) {
+    showToast('Nothing to copy');
+    return;
+  }
+  const bySupplier = new Map();
+  let count = 0;
+  for (const r of rows) {
+    const qty = getRowOrderQty(r);
+    if (qty <= 0) continue;
+    const sup = (r.supplier || '').trim() || 'Unspecified supplier';
+    if (!bySupplier.has(sup)) bySupplier.set(sup, []);
+    const sku = r.sku_barcode ? ` [${r.sku_barcode}]` : '';
+    const label = [r.brand, r.model_name, r.part_type].filter(Boolean).join(' ') || r.name || 'Part';
+    bySupplier.get(sup).push(`  ${qty}x ${label}${sku}`);
+    count++;
+  }
+  if (!count) {
+    showToast('All order quantities are 0');
+    return;
+  }
+  const lines = [];
+  for (const [sup, items] of bySupplier) {
+    lines.push(`=== ${sup} ===`, ...items, '');
+  }
+  navigator.clipboard.writeText(lines.join('\n').trim()).then(
+    () => showToast(`Copied ${count} line${count === 1 ? '' : 's'} to clipboard`),
+    () => showToast('Clipboard unavailable')
+  );
+}
+
+function exportCloudReorderCsv() {
+  const rows = getActiveReorderRows(lastLoadedData);
+  if (!rows.length) {
+    showToast('No reorder items to export');
+    return;
+  }
+  const body = rows.map(r => [
+    r.brand || '',
+    r.model_name || '',
+    r.part_type || '',
+    r.sku_barcode || '',
+    r.cost_price ?? 0,
+    r.price_retail ?? 0,
+    r.price_technician ?? r.price_retail ?? 0,
+    r.qty_sold ?? r.units_sold ?? 0,
+    r.stock_quantity ?? 0,
+    '',
+    r.min_stock_alert ?? 2,
+    r.supplier || '',
+    r.location || '',
+  ].map(csvCell).join(','));
+  const stamp = new Date().toISOString().slice(0, 10);
+  triggerCsvDownload(`techparts-reorder-${stamp}.csv`, [CLOUD_REORDER_CSV_HEADERS.map(csvCell).join(','), ...body]);
+  showToast(`Exported ${body.length} reorder row${body.length === 1 ? '' : 's'} (fill Stock Qty when order arrives)`);
+}
+
+function downloadCloudTemplateCsv() {
+  const example = ['Samsung', 'A15 5G', 'LCD Screen', 'SAM-A15-LCD', '650', '1200', '950', '5', '2', 'Quiapo Parts', 'Drawer A2'];
+  triggerCsvDownload('techparts-import-template.csv', [
+    CLOUD_IMPORT_TEMPLATE_HEADERS.map(csvCell).join(','),
+    example.map(csvCell).join(','),
+  ]);
+  showToast('Template CSV downloaded');
+}
+
+function exportCloudStockCsv() {
+  const items = lastLoadedData?.inventory || [];
+  if (!items.length) {
+    showToast('No inventory items to export');
+    return;
+  }
+  const body = items.map(r => [
+    r.brand || '',
+    r.model_name || '',
+    r.part_type || '',
+    r.sku_barcode || '',
+    r.cost_price ?? 0,
+    r.price_retail ?? 0,
+    r.price_technician ?? 0,
+    r.stock_quantity ?? 0,
+    r.min_stock_alert ?? 2,
+    r.supplier || '',
+    r.location || '',
+  ].map(csvCell).join(','));
+  const stamp = new Date().toISOString().slice(0, 10);
+  triggerCsvDownload(`techparts-inventory-${stamp}.csv`, [CLOUD_IMPORT_TEMPLATE_HEADERS.map(csvCell).join(','), ...body]);
+  showToast(`Exported ${items.length} part${items.length === 1 ? '' : 's'}`);
+}
+
+function parseDelimitedText(text) {
+  const firstLine = text.split(/\r?\n/)[0] || '';
+  const delim = (firstLine.match(/\t/g) || []).length > (firstLine.match(/,/g) || []).length ? '\t' : ',';
+  const rows = [];
+  let row = [], cell = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') inQuotes = false;
+      else cell += c;
+    } else if (c === '"' && cell === '') {
+      inQuotes = true;
+    } else if (c === delim) {
+      row.push(cell.trim()); cell = '';
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell.trim()); cell = '';
+      if (row.some(v => v !== '')) rows.push(row);
+      row = [];
+    } else {
+      cell += c;
+    }
+  }
+  if (cell !== '' || row.length) {
+    row.push(cell.trim());
+    if (row.some(v => v !== '')) rows.push(row);
+  }
+  return rows;
+}
+
+function parseCloudImportRows(text) {
+  const cleanText = String(text || '').replace(/^\uFEFF/, '');
+  const grid = parseDelimitedText(cleanText);
+  if (grid.length < 2) return [];
+  const headers = grid[0].map(h => String(h || '').toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const mapping = {};
+  for (const [field, aliases] of Object.entries(CLOUD_HEADER_ALIASES)) {
+    const idx = headers.findIndex(h => aliases.includes(h));
+    if (idx !== -1) mapping[field] = idx;
+  }
+  const num = v => {
+    const n = Number(String(v ?? '').replace(/[₱$,\s]/g, ''));
+    return Number.isFinite(n) ? n : 0;
+  };
+  const out = [];
+  for (const r of grid.slice(1)) {
+    const get = f => mapping[f] !== undefined ? (r[mapping[f]] ?? '') : '';
+    const item_name = String(get('item_name')).trim();
+    const brand = String(get('brand')).trim() || (item_name ? 'General' : '');
+    const model_name = String(get('model_name')).trim() || item_name;
+    const category = String(get('category')).trim();
+    const part_type = String(get('part_type')).trim() || category || (item_name ? 'General' : '');
+    if (!brand || !model_name || !part_type) continue;
+    const rawMin = String(get('min_stock_alert')).trim();
+    const rawFrac = String(get('allow_fractional')).trim();
+    out.push({
+      item_name,
+      brand,
+      model_name,
+      part_type,
+      category: category || part_type,
+      uom: String(get('uom')).trim(),
+      allow_fractional: rawFrac !== '' ? (/^(1|true|yes)$/i.test(rawFrac) ? 1 : 0) : '',
+      sku_barcode: String(get('sku_barcode')).trim(),
+      cost_price: num(get('cost_price')),
+      price_retail: num(get('price_retail')),
+      price_technician: get('price_technician') !== '' ? num(get('price_technician')) : num(get('price_retail')),
+      stock_quantity: Math.max(0, Math.round(num(get('stock_quantity')) * 1000) / 1000),
+      min_stock_alert: rawMin !== '' ? Math.max(0, Math.round(num(rawMin) * 1000) / 1000) : '',
+      supplier: String(get('supplier')).trim(),
+      location: String(get('location')).trim(),
+    });
+  }
+  return out;
+}
+
+function openStockModal(item) {
+  activeStockModalItem = item;
+  const modal = document.getElementById('stock-modal');
+  const partEl = document.getElementById('stock-modal-part');
+  const deltaEl = document.getElementById('stock-modal-delta');
+  const reasonEl = document.getElementById('stock-modal-reason');
+  const noteEl = document.getElementById('stock-modal-note');
+  const errEl = document.getElementById('stock-modal-err');
+  if (!modal) return;
+  if (partEl) partEl.textContent = `${item.name} · Currently ${item.qty} in stock`;
+  if (deltaEl) deltaEl.value = '1';
+  if (reasonEl) reasonEl.value = 'receive';
+  if (noteEl) noteEl.value = '';
+  if (errEl) errEl.textContent = '';
+  modal.classList.add('open');
+  setTimeout(() => deltaEl?.focus(), 40);
+}
+
+async function submitStockModal() {
+  if (!activeStockModalItem) return;
+  const deltaEl = document.getElementById('stock-modal-delta');
+  const reasonEl = document.getElementById('stock-modal-reason');
+  const noteEl = document.getElementById('stock-modal-note');
+  const errEl = document.getElementById('stock-modal-err');
+  const saveBtn = document.getElementById('stock-modal-save');
+  const rawDelta = Number(deltaEl?.value);
+  const delta = Math.round(rawDelta * 1000) / 1000;
+  if (!Number.isFinite(rawDelta) || delta === 0) {
+    if (errEl) errEl.textContent = 'Enter a non-zero number (+ to add, - to deduct).';
+    return;
+  }
+  const origText = saveBtn ? saveBtn.textContent : 'Save Stock Update';
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+  }
+  updateCloudSyncStateBadge({ inFlight: true });
+  try {
+    await api('/api/inventory/adjust-stock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: Number(activeStockModalItem.id),
+        shop_id: activeStockModalItem.shop || selectedShop || '',
+        delta,
+        reason: reasonEl?.value || 'receive',
+        note: noteEl?.value || 'Added from Cloud',
+      }),
+    });
+    document.getElementById('stock-modal')?.classList.remove('open');
+    activeStockModalItem = null;
+    showToast(`Stock ${delta > 0 ? '+' + delta : delta} saved and queued for counter sync`);
+    await refresh();
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'Could not update stock';
+    updateCloudSyncStateBadge({ inFlight: false });
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = origText;
+    }
+  }
+}
+
+function openCloudImportModal(fileName, rows) {
+  pendingImportRows = rows;
+  const modal = document.getElementById('import-modal');
+  const subEl = document.getElementById('import-modal-sub');
+  const previewEl = document.getElementById('import-modal-preview');
+  const errEl = document.getElementById('import-modal-err');
+  const confirmBtn = document.getElementById('import-modal-confirm');
+  if (!modal) return;
+  const addingCount = rows.filter(r => (Number(r.stock_quantity) || 0) > 0).length;
+  const totalAddingUnits = rows.reduce((s, r) => s + (Number(r.stock_quantity) || 0), 0);
+  if (subEl) {
+    subEl.textContent = `${fileName}: ${rows.length} row${rows.length === 1 ? '' : 's'} ready (${addingCount} adding +${totalAddingUnits} units total)`;
+  }
+  if (previewEl) {
+    previewEl.innerHTML = rows.slice(0, 40).map(r => {
+      const label = [r.brand, r.model_name, r.part_type].filter(Boolean).join(' ');
+      const qty = Number(r.stock_quantity) || 0;
+      return `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid var(--border);">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span>
+        <span style="color:${qty > 0 ? 'var(--cash)' : 'var(--text-muted)'};font-weight:700;">+${esc(qty)}</span>
+      </div>`;
+    }).join('');
+  }
+  if (errEl) errEl.textContent = '';
+  if (confirmBtn) confirmBtn.textContent = `Import ${rows.length} Row${rows.length === 1 ? '' : 's'}`;
+  modal.classList.add('open');
+}
+
+async function confirmCloudCsvImport() {
+  if (!pendingImportRows.length) return;
+  const errEl = document.getElementById('import-modal-err');
+  const confirmBtn = document.getElementById('import-modal-confirm');
+  const origText = confirmBtn ? confirmBtn.textContent : 'Import Rows';
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Importing...';
+  }
+  updateCloudSyncStateBadge({ inFlight: true });
+  try {
+    const res = await api('/api/inventory/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shop_id: selectedShop || '',
+        rows: pendingImportRows,
+      }),
+    });
+    document.getElementById('import-modal')?.classList.remove('open');
+    pendingImportRows = [];
+    showToast(`Imported: ${res.created || 0} new, ${res.updated || 0} updated`);
+    await refresh();
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message || 'CSV import failed';
+    updateCloudSyncStateBadge({ inFlight: false });
+  } finally {
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = origText;
+    }
+  }
+}
+
 document.getElementById('rows')?.addEventListener('click', e => {
+  const stockBtn = e.target.closest('[data-add-stock-id]');
+  if (stockBtn) {
+    e.stopPropagation();
+    openStockModal({
+      id: stockBtn.getAttribute('data-add-stock-id'),
+      shop: stockBtn.getAttribute('data-add-stock-shop') || '',
+      name: stockBtn.getAttribute('data-add-stock-name') || 'Part',
+      qty: Number(stockBtn.getAttribute('data-add-stock-qty')) || 0,
+    });
+    return;
+  }
   if (currentTab !== 'sales') return;
   const item = e.target.closest('.sale-row');
   if (item) toggleSaleDetail(item);
+});
+
+document.getElementById('rows')?.addEventListener('input', e => {
+  const qtyInput = e.target.closest('.order-qty-input');
+  if (!qtyInput) return;
+  const key = qtyInput.getAttribute('data-order-key');
+  const raw = Math.max(0, Number(qtyInput.value) || 0);
+  const val = qtyInput.step === 'any' ? Math.round(raw * 1000) / 1000 : Math.trunc(raw);
+  if (key) reorderOrderQtyOverrides.set(key, val);
+  updateCloudReorderSummary();
+});
+
+document.querySelectorAll('[data-reorder-days]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const d = Math.max(1, Math.min(90, Number(btn.getAttribute('data-reorder-days')) || 7));
+    reorderDays = d;
+    reorderOrderQtyOverrides.clear();
+    document.querySelectorAll('[data-reorder-days]').forEach(b => b.classList.toggle('active', b === btn));
+    const customInput = document.getElementById('cloud-reorder-custom-days');
+    if (customInput) customInput.value = '';
+    refresh();
+  });
+});
+
+function applyCloudCustomReorderDays(raw, clampInput = false) {
+  const parsed = parseInt(String(raw || '').trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return;
+  const d = Math.max(1, Math.min(90, parsed));
+  const customInput = document.getElementById('cloud-reorder-custom-days');
+  if (clampInput && customInput) customInput.value = String(d);
+  reorderDays = d;
+  reorderOrderQtyOverrides.clear();
+  document.querySelectorAll('[data-reorder-days]').forEach(b => b.classList.remove('active'));
+  refresh();
+}
+
+document.getElementById('cloud-reorder-custom-days')?.addEventListener('input', e => {
+  clearTimeout(reorderCustomTimer);
+  reorderCustomTimer = setTimeout(() => applyCloudCustomReorderDays(e.target.value, false), 260);
+});
+document.getElementById('cloud-reorder-custom-days')?.addEventListener('change', e => {
+  clearTimeout(reorderCustomTimer);
+  applyCloudCustomReorderDays(e.target.value, true);
+});
+
+document.getElementById('cloud-copy-order-btn')?.addEventListener('click', copyCloudReorderOrder);
+document.getElementById('cloud-export-reorder-btn')?.addEventListener('click', exportCloudReorderCsv);
+document.getElementById('cloud-template-csv-btn')?.addEventListener('click', downloadCloudTemplateCsv);
+document.getElementById('cloud-export-stock-btn')?.addEventListener('click', exportCloudStockCsv);
+
+const csvFileInput = document.getElementById('cloud-csv-file-input');
+document.getElementById('cloud-import-reorder-btn')?.addEventListener('click', () => csvFileInput?.click());
+document.getElementById('cloud-import-stock-btn')?.addEventListener('click', () => csvFileInput?.click());
+
+csvFileInput?.addEventListener('change', async e => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const rows = parseCloudImportRows(text);
+    if (!rows.length) {
+      showToast('No valid inventory rows found in CSV');
+      return;
+    }
+    openCloudImportModal(file.name, rows);
+  } catch (err) {
+    showToast('Could not read CSV file');
+  }
+});
+
+document.querySelectorAll('[data-stock-preset]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const deltaEl = document.getElementById('stock-modal-delta');
+    if (deltaEl) deltaEl.value = String(btn.getAttribute('data-stock-preset') || '1');
+  });
+});
+document.getElementById('stock-modal-save')?.addEventListener('click', submitStockModal);
+document.getElementById('stock-modal-cancel')?.addEventListener('click', () => {
+  document.getElementById('stock-modal')?.classList.remove('open');
+  activeStockModalItem = null;
+});
+document.getElementById('import-modal-confirm')?.addEventListener('click', confirmCloudCsvImport);
+document.getElementById('import-modal-cancel')?.addEventListener('click', () => {
+  document.getElementById('import-modal')?.classList.remove('open');
+  pendingImportRows = [];
 });
 document.getElementById('rows')?.addEventListener('keydown', e => {
   if (currentTab !== 'sales' || (e.key !== 'Enter' && e.key !== ' ')) return;
@@ -1242,6 +1920,10 @@ if (savedTheme === 'light') applyTheme(true);
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     document.getElementById('pair-modal')?.classList.remove('open');
+    document.getElementById('stock-modal')?.classList.remove('open');
+    document.getElementById('import-modal')?.classList.remove('open');
+    activeStockModalItem = null;
+    pendingImportRows = [];
     if (pairingTimerInterval) clearInterval(pairingTimerInterval);
   }
 });

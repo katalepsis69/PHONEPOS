@@ -1,7 +1,7 @@
 import { S } from '../state.js';
 import { t } from '../i18n.js';
 import { attachCombo, confirmModal, escHtml, fmtMoney, inputModal, openModal, setCounterText, showToast } from '../ui.js';
-import { renderInvBrandFilter, renderPartTypeOptions } from '../views/inventory.js';
+import { renderInvBrandFilter, renderPartTypeOptions, itemMatchesProfile, TEMPLATE_BRANDS, TEMPLATE_CATEGORIES } from '../views/inventory.js';
 import { autoPrintSlip, renderClaimStub, renderReceipt, shopIdentityIsPlaceholder } from '../receipts.js';
 import { serializeCartForRecovery, deserializeCartForRecovery } from '../cart-recovery.js';
 
@@ -104,22 +104,26 @@ export function customerComboboxInit() {
 // -------------------------------------------------------------
 // POS CATALOG & CART
 // -------------------------------------------------------------
+export const isWholesaleTier = t => t === 'wholesale' || t === 'technician';
+
 // Tier flip re-prices every line on the job sheet, so a mid-job accidental
 // click asks first. `quiet` skips the guard when code restores a draft's tier.
 export async function setPriceTier(tier, opts = {}) {
   if (S.saleInFlight) return; // sale in flight: the job on screen is the request payload
-  if (tier !== S.currentPriceTier && S.cart.length > 0 && !opts.quiet) {
-    const ok = await confirmModal(`${S.cart.length} line(s) on this job will switch to ${tier === 'technician' ? 'wholesale' : 'retail'} prices.`, { title: 'Re-price this job?', yes: 'Re-price', danger: false });
+  const currentIsWholesale = isWholesaleTier(S.currentPriceTier);
+  const targetIsWholesale = isWholesaleTier(tier);
+  if (currentIsWholesale !== targetIsWholesale && S.cart.length > 0 && !opts.quiet) {
+    const ok = await confirmModal(`${S.cart.length} line(s) on this job will switch to ${targetIsWholesale ? 'wholesale' : 'retail'} prices.`, { title: 'Re-price this job?', yes: 'Re-price', danger: false });
     if (!ok) return;
   }
 
-  S.currentPriceTier = tier;
-  syncTierButtons(tier);
+  S.currentPriceTier = targetIsWholesale ? 'wholesale' : 'retail';
+  syncTierButtons(S.currentPriceTier);
 
   // Recalculate unit_price for each line item in S.cart
   S.cart.forEach(item => {
     if (!item.is_labor) {
-      item.unit_price = tier === 'technician' ? item.price_technician : item.price_retail;
+      item.unit_price = targetIsWholesale ? (item.price_wholesale ?? item.price_technician) : item.price_retail;
     }
   });
 
@@ -358,6 +362,10 @@ function flushPendingScan() {
   pendingScan = null;
   if (!scan) return;
   S.scanBuffer = '';
+  // The keydown listener refuses to mutate the cart behind an overlay or off
+  // the POS tab; the settle timer must honor the same gate, or a scan scheduled
+  // just before a modal opens lands in the cart behind it.
+  if (S.currentTab !== 'pos' || document.querySelector('.modal-backdrop:not(.hidden), .gate:not(.hidden)')) return;
   if (scan.restore) scan.restore();
   handleBarcodeScan(scan.code);
 }
@@ -399,7 +407,10 @@ export function initScanListeners() {
       // window belongs to a burst that is over.
       S.scanBuffer = ''; burstStart = null; clearPendingScan();
     }
-    S.lastScanKeyTime = now;
+    // Only printable keys and Enter refresh the burst clock: a stuck modifier
+    // auto-repeating otherwise keeps a stale buffer alive past the slow-typing
+    // reset and concatenates onto the next real scan.
+    if (e.key === 'Enter' || e.key.length === 1) S.lastScanKeyTime = now;
 
     if (e.key === 'Enter') {
       const code = S.scanBuffer.trim();
@@ -493,7 +504,7 @@ export function brandTone(brand) {
 
 // "LCD (Incell)" and "LCD (OLED)" are the same aisle to a counter clerk.
 export function categoryOf(item) {
-  return String(item.part_type || 'Other').split('(')[0].trim() || 'Other';
+  return String(item.category || item.part_type || 'Other').split('(')[0].trim() || 'Other';
 }
 
 export function categoryIcon(item) {
@@ -502,8 +513,10 @@ export function categoryIcon(item) {
   if (c.includes('lcd') || c.includes('screen') || c.includes('display')) return 'device-mobile';
   if (c.includes('charging') || c.includes('flex')) return 'lightning';
   if (c.includes('camera')) return 'camera';
-  if (c.includes('speaker') || c.includes('earpiece')) return 'speaker-high';
-  if (c.includes('board') || c.includes('ic')) return 'cpu';
+  if (c.includes('speaker') || c.includes('earpiece') || c.includes('audio')) return 'speaker-high';
+  if (c.includes('board') || c.includes('ic') || c.includes('cpu') || c.includes('gpu') || c.includes('ram')) return 'cpu';
+  if (c.includes('beverage') || c.includes('drink')) return 'cup';
+  if (c.includes('food') || c.includes('snack') || c.includes('grocery') || c.includes('canned')) return 'basket';
   return 'package';
 }
 
@@ -515,7 +528,20 @@ export function renderBrandOptions() {
 export function renderBrandChips() {
   const box = document.getElementById('pos-brand-chips');
   if (!box) return;
-  const brands = [...new Set(S.inventoryItems.map(i => i.brand))].sort();
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const catalog = S.posCatalog || S.inventoryItems;
+  const profileItems = (mode !== 'hybrid')
+    ? catalog.filter(i => itemMatchesProfile(i, mode))
+    : catalog;
+
+  const catalogBrands = [...new Set(profileItems.map(i => (i.brand || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const templateBrands = (TEMPLATE_BRANDS?.[mode] || TEMPLATE_BRANDS?.retail || []).filter(b => b !== 'Other');
+  const brands = catalogBrands.length > 0 ? catalogBrands : templateBrands;
+
+  if (S.posBrandFilter && !brands.includes(S.posBrandFilter)) {
+    S.posBrandFilter = '';
+  }
+
   box.innerHTML = `<button type="button" class="brand-chip${S.posBrandFilter ? '' : ' is-active'}" data-action="pos-brand" data-brand="">All</button>` +
     brands.map(b => `<button type="button" class="brand-chip${S.posBrandFilter === b ? ' is-active' : ''}" data-action="pos-brand" data-brand="${escHtml(b)}">${escHtml(b)}</button>`).join('');
 }
@@ -523,8 +549,16 @@ export function renderBrandChips() {
 export function renderCategoryOptions() {
   const sel = document.getElementById('pos-category-filter');
   if (!sel) return;
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const catalog = S.posCatalog || S.inventoryItems;
+  const profileItems = (mode !== 'hybrid')
+    ? catalog.filter(i => itemMatchesProfile(i, mode))
+    : catalog;
 
-  const cats = [...new Set(S.inventoryItems.map(item => categoryOf(item)))].sort();
+  const catalogCats = [...new Set(profileItems.map(item => categoryOf(item)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const templateCats = (TEMPLATE_CATEGORIES?.[mode] || TEMPLATE_CATEGORIES?.retail || []).filter(c => c !== 'Other');
+  const cats = catalogCats.length > 0 ? catalogCats : templateCats;
+
   sel.innerHTML = `<option value="">All categories</option>` +
     cats.map(c => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
   sel.value = cats.includes(S.posCategoryFilter) ? S.posCategoryFilter : '';
@@ -557,8 +591,8 @@ export function onDeviceSelected(val) {
   } else {
     if (sumName) sumName.textContent = 'No device chosen';
     if (sumMeta) sumMeta.textContent = 'Universal / all parts shown.';
-    if (shelfTitle) shelfTitle.textContent = 'All Available Parts';
-    if (shelfHint) shelfHint.textContent = 'Showing all active parts in inventory.';
+    if (shelfTitle) shelfTitle.textContent = t('pos.shelf_title', 'All Available Parts');
+    if (shelfHint) shelfHint.textContent = t('pos.shelf_hint', 'Showing all active parts in inventory.');
   }
   renderPartsTable();
 }
@@ -638,13 +672,18 @@ export function deviceNoteLine() {
 // -------------------------------------------------------------
 // LIVE PARTS SHELF & QUICK ADD
 // -------------------------------------------------------------
+const roundQty = q => Math.round((Number(q) || 0) * 1000) / 1000;
+
 export function getFilteredParts() {
   const catalog = S.posCatalog || S.inventoryItems;
+  const mode = S.shopSettings?.business_type || 'hybrid';
+
   const q = (document.getElementById('pos-search-input')?.value || '').trim().toLowerCase();
   const devStr = typeof S.activeDevice === 'string' ? S.activeDevice.toLowerCase() : (deviceLabel().toLowerCase());
   const devTokens = devStr ? devStr.split(/\s+/).filter(Boolean) : [];
 
   return catalog.filter(item => {
+    if (mode !== 'hybrid' && typeof itemMatchesProfile === 'function' && !itemMatchesProfile(item, mode)) return false;
     if (devTokens.length > 0) {
       const itemDev = `${item.brand || ''} ${item.model_name || ''}`.toLowerCase();
       const matches = itemDev.includes(devStr) || devStr.includes(itemDev) || devTokens.every(token => itemDev.includes(token));
@@ -654,7 +693,7 @@ export function getFilteredParts() {
     if (S.posCategoryFilter && categoryOf(item) !== S.posCategoryFilter) return false;
     if (S.posInStockOnly && item.stock_quantity <= 0) return false;
     if (!q) return true;
-    return `${item.brand} ${item.model_name} ${item.part_type} ${item.sku_barcode || ''}`.toLowerCase().includes(q);
+    return `${item.item_name || ''} ${item.brand} ${item.model_name} ${item.part_type} ${item.category || ''} ${item.sku_barcode || ''}`.toLowerCase().includes(q);
   });
 }
 
@@ -670,6 +709,11 @@ export function renderPartsTable() {
   const rows = getFilteredParts();
   const catalog = S.posCatalog || S.inventoryItems;
   const partLines = S.cart.filter(c => !c.is_labor).length;
+
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const profileCatalog = (mode !== 'hybrid')
+    ? catalog.filter(i => itemMatchesProfile(i, mode))
+    : catalog;
 
   // Failed load with nothing to fall back on: say so and offer a retry —
   // this must never wear the "no parts in inventory yet" empty state.
@@ -688,15 +732,15 @@ export function renderPartsTable() {
     return;
   }
 
-  if (catalog.length === 0) {
+  if (profileCatalog.length === 0) {
     body.innerHTML = `
       <tr>
         <td colspan="5">
           <div class="empty">
             <div class="empty__icon"><i class="ph ph-package w-5 h-5"></i></div>
-            <div class="empty__title">No parts in inventory yet</div>
-            <p class="empty__body">Add your first phone part, or import your catalog from Settings → Data.</p>
-            <button type="button" class="chip" data-action="open-add-part" data-manager-only>+ Add new part</button>
+            <div class="empty__title">${escHtml(t('pos.empty_catalog_title', 'No items in catalog yet'))}</div>
+            <p class="empty__body">${escHtml(t('pos.empty_catalog', 'Add your first item, or import your catalog from Settings > Data.'))}</p>
+            <button type="button" class="chip" data-action="open-add-part" data-manager-only>+ ${escHtml(t('inv.add_part', 'Add Item'))}</button>
           </div>
         </td>
       </tr>`;
@@ -708,9 +752,10 @@ export function renderPartsTable() {
     if (S.posCategoryFilter) active.push('category');
     if (q) active.push('search');
     if (S.posInStockOnly) active.push('in-stock');
+    const countUnit = t('inv.parts_count', 'items');
     const why = active.length
-      ? `Nothing matches the ${active.join(', ')} filter${active.length > 1 ? 's' : ''}. Reset them, or add the part to inventory.`
-      : 'Nothing matches yet. Add the part to inventory.';
+      ? `Nothing matches the ${active.join(', ')} filter${active.length > 1 ? 's' : ''}. Reset them, or add the item to inventory.`
+      : 'Nothing matches yet. Add the item to inventory.';
     const isOnlyInStock = active.length === 1 && S.posInStockOnly;
     const resetText = (isOnlyInStock && catalog.length > 0)
       ? `Show all ${catalog.length} parts`
@@ -720,20 +765,22 @@ export function renderPartsTable() {
         <td colspan="5">
           <div class="empty">
             <div class="empty__icon"><i class="ph ph-package w-5 h-5"></i></div>
-            <div class="empty__title">No parts match these filters</div>
+            <div class="empty__title">${escHtml(t('pos.filter_empty', 'No items match these filters'))}</div>
             <p class="empty__body">${why}</p>
             <div class="flex gap-2">
               <button type="button" class="chip" data-action="reset-pos-filters">${resetText}</button>
-              <button type="button" class="chip" data-action="open-add-part" data-manager-only>+ Add part</button>
+              <button type="button" class="chip" data-action="open-add-part" data-manager-only>+ ${escHtml(t('inv.add_part', 'Add item'))}</button>
             </div>
           </div>
         </td>
       </tr>`;
   } else {
     body.innerHTML = rows.map(item => {
-      const price = Number(S.currentPriceTier === 'technician' ? item.price_technician : item.price_retail);
+      const price = Number(isWholesaleTier(S.currentPriceTier) ? (item.price_wholesale ?? item.price_technician) : item.price_retail);
       const out = item.stock_quantity <= 0;
       const low = !out && item.stock_quantity <= item.min_stock_alert;
+      const titleText = item.item_name || `${item.brand} ${item.model_name}`;
+      const subText = item.item_name ? (item.category || item.part_type || '') : item.part_type;
 
       return `
         <tr class="${out ? 'is-out' : ''}">
@@ -741,8 +788,8 @@ export function renderPartsTable() {
             <div class="pname">
               <span class="pname__icon"><i class="ph ph-${categoryIcon(item)} w-4 h-4"></i></span>
               <div>
-                <div class="pname__t">${escHtml(item.brand)} ${escHtml(item.model_name)}</div>
-                <div class="pname__s">${escHtml(item.part_type)}${item.sku_barcode ? ` · ${escHtml(item.sku_barcode)}` : ''}</div>
+                <div class="pname__t">${escHtml(titleText)}</div>
+                <div class="pname__s">${escHtml(subText)}${item.sku_barcode ? ` · ${escHtml(item.sku_barcode)}` : ''}</div>
               </div>
             </div>
           </td>
@@ -756,9 +803,10 @@ export function renderPartsTable() {
     }).join('');
   }
 
-  setCounterText('parts-count-note', catalog.length === 0
-    ? 'No parts in inventory yet'
-    : `${rows.length} of ${catalog.length} parts shown · ${partLines} in ticket`);
+  const countUnit = t('inv.parts_count', 'items');
+  setCounterText('parts-count-note', profileCatalog.length === 0
+    ? `No ${countUnit} in inventory yet`
+    : `${rows.length} of ${profileCatalog.length} ${countUnit} shown · ${partLines} in ticket`);
 
   if (highlightedPartIndex >= rows.length) highlightedPartIndex = -1;
   updateHighlightedPartRow();
@@ -773,32 +821,40 @@ export function quickAddPart(partId) {
     showToast(`${part.brand} ${part.model_name} ${part.part_type} is out of stock`, 'warning');
     return;
   }
+  const maxStock = Number(part.stock_quantity) || 0;
   const existing = S.cart.find(c => !c.is_labor && c.id === part.id);
   if (existing) {
-    if (existing.qty >= part.stock_quantity) {
+    if (existing.qty >= maxStock - 1e-6) {
       showToast(`Cannot add more than available stock (${part.stock_quantity})`, 'warning');
       return;
     }
-    existing.qty += 1;
+    existing.qty = part.allow_fractional && existing.qty + 1 > maxStock
+      ? roundQty(maxStock)
+      : roundQty(existing.qty + 1);
   } else {
+    const initQty = (part.allow_fractional && maxStock < 1) ? roundQty(maxStock) : 1;
     S.cart.push({
       id: part.id,
       sku: part.sku_barcode,
       brand: part.brand,
       model_name: part.model_name,
       part_type: part.part_type,
-      name: `${part.brand} ${part.model_name} ${part.part_type}`,
+      item_name: part.item_name || null,
+      name: part.item_name || `${part.brand} ${part.model_name} ${part.part_type}`.trim(),
       price_retail: part.price_retail,
       price_technician: part.price_technician,
-      unit_price: S.currentPriceTier === 'technician' ? part.price_technician : part.price_retail,
-      qty: 1,
+      price_wholesale: part.price_wholesale ?? part.price_technician,
+      unit_price: isWholesaleTier(S.currentPriceTier) ? (part.price_wholesale ?? part.price_technician) : part.price_retail,
+      qty: initQty,
       stock: part.stock_quantity,
+      allow_fractional: Boolean(part.allow_fractional),
+      uom: part.uom || 'pcs',
       is_labor: false
     });
   }
   renderCart();
   renderPartsTable();
-  showToast(`Added ${part.part_type}`, 'success');
+  showToast(`Added ${part.item_name || part.part_type}`, 'success');
 }
 
 export function setPartQty(itemId, delta) {
@@ -921,7 +977,7 @@ export async function resumeRepairDraft() {
   localStorage.removeItem(REPAIR_DRAFT_KEY);
   refreshDraftChip();
 
-  setPriceTier(draft.tier === 'technician' ? 'technician' : 'retail', { quiet: true });
+  setPriceTier(isWholesaleTier(draft.tier) ? 'wholesale' : 'retail', { quiet: true });
   onCustomerNameInput();
   renderRepairRef();
   renderSummaryDevice();
@@ -1005,11 +1061,18 @@ export function updateCartQty(index, delta) {
   } else {
     const catalog = S.posCatalog || S.inventoryItems;
     const inv = catalog.find(i => i.id === item.id);
-    if (delta > 0 && inv && item.qty >= inv.stock_quantity) {
-      showToast(`Only ${inv.stock_quantity} available in stock`, 'warning');
-      return;
+    const maxStock = inv ? Number(inv.stock_quantity) : Number(item.stock);
+    const allowFrac = Boolean(item.allow_fractional) || Boolean(inv?.allow_fractional);
+    if (delta > 0 && Number.isFinite(maxStock)) {
+      if (item.qty >= maxStock - 1e-6) {
+        showToast(t('pos.stock_ceiling', 'Only {n} available in stock').replace('{n}', maxStock), 'warning');
+        return;
+      }
+      const next = roundQty(item.qty + delta);
+      item.qty = (allowFrac && next > maxStock) ? roundQty(maxStock) : next;
+    } else {
+      item.qty = allowFrac ? roundQty(item.qty + delta) : Math.round(item.qty + delta);
     }
-    item.qty += delta;
     if (item.qty <= 0) S.cart.splice(index, 1);
   }
 
@@ -1021,17 +1084,27 @@ export async function editCartQtyPrompt(index) {
   if (S.saleInFlight) return; // sale in flight: the job on screen is the request payload
   const item = S.cart[index];
   if (!item) return;
-  const label = item.is_labor ? item.name : `${item.brand} ${item.model_name} ${item.part_type}`;
+  const catalog = S.posCatalog || S.inventoryItems;
+  const inv = !item.is_labor ? catalog.find(i => i.id === item.id) : null;
+  const allowFrac = !item.is_labor && (Boolean(item.allow_fractional) || Boolean(inv?.allow_fractional));
+  const label = item.is_labor ? item.name : (item.item_name || `${item.brand} ${item.model_name} ${item.part_type}`);
   const v = await inputModal(`Quantity for ${label}`, {
     inputType: 'number',
-    placeholder: '1',
+    step: allowFrac ? 'any' : '1',
+    placeholder: allowFrac ? '0.5' : '1',
     defaultValue: String(item.qty),
     yes: 'Set quantity'
   });
   if (v === null) return;
-  const qty = Number(v);
-  if (String(v).trim() === '' || !Number.isInteger(qty) || qty < 0) {
-    showToast('Quantity must be a whole number (0 to remove)', 'error');
+  const trimmed = String(v).trim();
+  const rawQty = Number(trimmed);
+  const qty = allowFrac ? roundQty(rawQty) : rawQty;
+  if (trimmed === '' || !Number.isFinite(rawQty) || rawQty < 0 || (!allowFrac && !Number.isInteger(rawQty))) {
+    showToast(allowFrac ? t('pos.qty_valid_number', 'Quantity must be a valid number (0 to remove)') : t('pos.qty_whole_number', 'Quantity must be a whole number (0 to remove)'), 'error');
+    return;
+  }
+  if (allowFrac && rawQty > 0 && qty === 0) {
+    showToast(t('pos.qty_min', 'Quantity must be at least 0.001 (0 to remove)'), 'error');
     return;
   }
   if (qty === 0) {
@@ -1039,15 +1112,15 @@ export async function editCartQtyPrompt(index) {
     return;
   }
   if (!item.is_labor) {
-    const catalog = S.posCatalog || S.inventoryItems;
-    const inv = catalog.find(i => i.id === item.id);
-    const maxStock = inv ? inv.stock_quantity : item.stock;
-    if (Number.isFinite(maxStock) && qty > maxStock) {
+    const maxStock = inv ? Number(inv.stock_quantity) : Number(item.stock);
+    if (Number.isFinite(maxStock) && qty > maxStock + 1e-6) {
       showToast(`Only ${maxStock} available in stock`, 'warning');
       return;
     }
+    item.qty = Number.isFinite(maxStock) && qty > maxStock ? roundQty(maxStock) : qty;
+  } else {
+    item.qty = qty;
   }
-  item.qty = qty;
   renderCart();
   renderPartsTable();
 }
@@ -1067,14 +1140,15 @@ export function renderOrderLines() {
 
   const lineHtml = ({ item, index }) => {
     const unit = unitPriceOf(item);
-    const title = item.is_labor ? item.name : `${item.brand} ${item.model_name}`;
-    const sub = item.is_labor ? '' : item.part_type;
+    const title = item.is_labor ? item.name : (item.item_name || `${item.brand} ${item.model_name}`);
+    const sub = item.is_labor ? '' : (item.item_name ? (item.category || '') : item.part_type);
+    const lineCents = Math.round(toCents(unit) * (Number(item.qty) || 0));
 
     return `
       <div class="sumline">
-        <span class="sumline__t">${escHtml(title)}${sub ? ` <span class="sumline__q">${escHtml(sub)}</span>` : ''}${item.qty > 1 ? ` <span class="sumline__q">×${item.qty} @ ${fmtMoney(Number(unit))}</span>` : ''}</span>
+        <span class="sumline__t">${escHtml(title)}${sub ? ` <span class="sumline__q">${escHtml(sub)}</span>` : ''}${item.qty !== 1 ? ` <span class="sumline__q">×${item.qty} @ ${fmtMoney(Number(unit))}</span>` : ''}</span>
         <button type="button" class="sumline__qty" data-action="edit-line-qty" data-index="${index}" title="Set quantity" aria-label="Quantity ${item.qty} for ${escHtml(title)}">×${item.qty}</button>
-        <span class="sumline__a">${fmtMoney((toCents(unit) * (Number(item.qty) || 0)) / 100)}</span>
+        <span class="sumline__a">${fmtMoney(lineCents / 100)}</span>
         <button type="button" class="sumline__x" data-action="remove-line" data-index="${index}" title="Remove" aria-label="Remove ${escHtml(title)}">
           <i class="ph ph-x w-3 h-3"></i>
         </button>
@@ -1093,12 +1167,12 @@ export function renderOrderLines() {
   if (partBox) {
     partBox.innerHTML = parts.length
       ? parts.map(lineHtml).join('')
-      : `<p class="sum-empty">No parts on this job. Click + Add in the parts shelf.</p>`;
+      : `<p class="sum-empty">${escHtml(t('pos.cart_empty_hint', 'No items in this order. Click + Add on the shelf.'))}</p>`;
   }
 
   let svcCents = 0, partCents = 0;
-  for (const l of services) svcCents += toCents(unitPriceOf(l.item)) * (Number(l.item.qty) || 0);
-  for (const l of parts) partCents += toCents(unitPriceOf(l.item)) * (Number(l.item.qty) || 0);
+  for (const l of services) svcCents += Math.round(toCents(unitPriceOf(l.item)) * (Number(l.item.qty) || 0));
+  for (const l of parts) partCents += Math.round(toCents(unitPriceOf(l.item)) * (Number(l.item.qty) || 0));
   const svcTotal = svcCents / 100;
   const partTotal = partCents / 100;
   setCounterText('sum-services-count', `(${services.length})`);
@@ -1129,26 +1203,34 @@ function repriceCartLines() {
     if (!inv) continue;
     line.price_retail = Number(inv.price_retail) || 0;
     line.price_technician = Number(inv.price_technician) || 0;
+    // unitPriceOf prefers price_wholesale; leaving it frozen at add time quoted
+    // a stale wholesale price the register would not charge.
+    line.price_wholesale = Number(inv.price_wholesale ?? inv.price_technician) || 0;
     line.stock = inv.stock_quantity;
+    line.item_name = inv.item_name || null;
+    line.allow_fractional = Boolean(inv.allow_fractional);
+    line.uom = inv.uom || 'pcs';
   }
 }
 
 function syncTierButtons(tier) {
   const retailBtn = document.getElementById('tier-retail-btn');
   const wholesaleBtn = document.getElementById('tier-wholesale-btn');
+  const wholesaleActive = tier === 'wholesale' || tier === 'technician';
   if (retailBtn) {
-    retailBtn.classList.toggle('is-active', tier === 'retail');
-    retailBtn.setAttribute('aria-pressed', tier === 'retail' ? 'true' : 'false');
+    retailBtn.classList.toggle('is-active', !wholesaleActive);
+    retailBtn.setAttribute('aria-pressed', !wholesaleActive ? 'true' : 'false');
   }
   if (wholesaleBtn) {
-    wholesaleBtn.classList.toggle('is-active', tier !== 'retail');
-    wholesaleBtn.setAttribute('aria-pressed', tier !== 'retail' ? 'true' : 'false');
+    wholesaleBtn.classList.toggle('is-active', wholesaleActive);
+    wholesaleBtn.setAttribute('aria-pressed', wholesaleActive ? 'true' : 'false');
   }
 }
 
 export function unitPriceOf(item) {
   if (item.is_labor) return item.unit_price;
-  return S.currentPriceTier === 'technician' ? item.price_technician : item.price_retail;
+  const isWholesale = S.currentPriceTier === 'wholesale' || S.currentPriceTier === 'technician';
+  return isWholesale ? (item.price_wholesale ?? item.price_technician) : item.price_retail;
 }
 
 // Integer centavos, rounded the way src/money.js rounds: Math.round(v * 100)
@@ -1161,7 +1243,11 @@ const toCents = v => {
 
 export function cartTotals() {
   let subtotalCents = 0;
-  for (const item of S.cart) subtotalCents += toCents(unitPriceOf(item)) * (Number(item.qty) || 0);
+  // Round the unit*qty PRODUCT to cents, exactly like src/money.js does on the
+  // server. Math.round(toCents(unit) * qty) rounds a binary float product and
+  // lands a centavo off on decimal halves (0.25 x 0.58), so the register and
+  // the displayed total disagreed and cash sales were refused as underpaid.
+  for (const item of S.cart) subtotalCents += toCents(unitPriceOf(item) * (Number(item.qty) || 0));
   const discountCents = Math.min(subtotalCents, Math.max(0, toCents(document.getElementById('pos-discount')?.value || 0)));
   return {
     subtotal: subtotalCents / 100,
@@ -1191,7 +1277,7 @@ export function renderCartSummary() {
     checkoutBtn.classList.toggle('is-ready', isReady);
     const labelSpan = checkoutBtn.querySelector('span');
     if (labelSpan) {
-      labelSpan.textContent = isReady ? 'Take payment & print (F9)' : 'Add items to checkout (F9)';
+      labelSpan.textContent = isReady ? t('pos.checkout_ready', 'Take payment & print (F9)') : t('pos.checkout_idle', 'Add items to checkout (F9)');
     }
   }
 
@@ -1273,7 +1359,7 @@ let autoPrintHintShown = false;
 export async function completeSale() {
   if (S.saleInFlight) return;
   if (S.cart.length === 0) {
-    showToast('Add phone parts to the order first', 'warning');
+    showToast(t('pos.err_no_items', 'Add items to the order first'), 'warning');
     return;
   }
   // A zero-peso sale (blank device line alone, or everything discounted away)
@@ -1356,7 +1442,7 @@ export async function completeSale() {
   const checkoutBtn = document.querySelector('[data-action="complete-sale"]');
   const checkoutLabel = checkoutBtn?.querySelector('span');
   const checkoutOrig = checkoutLabel?.textContent || '';
-  if (checkoutBtn) { checkoutBtn.disabled = true; if (checkoutLabel) checkoutLabel.textContent = 'Processing payment…'; }
+  if (checkoutBtn) { checkoutBtn.disabled = true; if (checkoutLabel) checkoutLabel.textContent = t('pos.processing_payment', 'Processing payment…'); }
   try {
     const res = await fetch('/api/sales', {
       method: 'POST',
@@ -1413,6 +1499,7 @@ export async function completeSale() {
       });
     }
     showToast(`Sale #${sale.sale_code} completed`, 'success');
+    if (typeof window.refreshSyncChip === 'function') window.refreshSyncChip();
   } catch (err) {
     showToast(`Error completing sale: ${err.message}`, 'error');
   } finally {

@@ -51,7 +51,7 @@ test('repair counter: unit icon badge and checkout CTA calm idle state', () => {
   assert.match(indexHtml, /data-action="complete-sale"[\s\S]*?Add items to checkout \(F9\)/);
 
   // pos.js updates button text dynamically
-  assert.match(posJs, /labelSpan\.textContent = isReady \? 'Take payment & print \(F9\)' : 'Add items to checkout \(F9\)';/);
+  assert.match(posJs, /labelSpan\.textContent = isReady \? t\('pos\.checkout_ready', 'Take payment & print \(F9\)'\) : t\('pos\.checkout_idle', 'Add items to checkout \(F9\)'\);/);
 
   // pos.js shows count when reset filters is needed
   assert.match(posJs, /Show all \$\{catalog\.length\} parts/);

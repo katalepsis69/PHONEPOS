@@ -1,8 +1,8 @@
 import { S } from './state.js';
 import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, debouncedViewLoad, initConfirmModal, initInputModal, initLiveClock, openModal, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
-import { applyRoleVisibility, checkLicenseStatus, clearQrImage, disconnectCloud, dismissLicenseOverlay, doLogout, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal } from './auth.js';
+import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, syncCloudUi } from './auth.js';
 import { autoPrintEnabled, calculateChange, calculateCreditBalance, clearDeviceSelection, setPosBrandFilter, clearRepairOrder, completeSale, copyRepairRef, customerComboboxInit, editCartQtyPrompt, fillExactAmount, focusImeiForScan, loadCustomerSuggestions, loadPosCatalog, newRepairRef, onCustomerNameInput, onDeviceSelected, onPartSearchKeydown, onRepairIntakeInput, printClaimStub, quickAddPart, refreshDraftChip, removeCartItem, renderCartSummary, resetPosFilters, resetRepairCounter, restoreCartRecovery, saveRepairDraft, setPartCategory, setInStockOnly, setPaymentMethod, setPriceTier, toggleRepairNote, renderPartsTable, initScanListeners, resumeRepairDraft } from './views/pos.js';
-import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
+import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, setAddItemTemplate, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
 import { editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, dismissUpdateBanner, openUpdateModal } from './views/backoffice.js';
 import { openShiftPrompt, closeShiftPrompt } from './views/pos.js';
 import { printModalSlip, printTestReceipt, printZReport, reprintLastReceipt } from './receipts.js';
@@ -19,9 +19,9 @@ const TAB_ORDER = ['pos', 'credits', 'inventory', 'returns', 'sales', 'dashboard
 
 // Workspace header titles per tab.
 const TAB_META = {
-  pos: { title: 'Repair counter' },
+  pos: { title: 'Register' },
   credits: { title: 'Customers' },
-  inventory: { title: 'Parts inventory' },
+  inventory: { title: 'Inventory' },
   returns: { title: 'Warranty & returns' },
   sales: { title: 'Sales history' },
   dashboard: { title: 'Reports & profit' },
@@ -278,6 +278,7 @@ const ACTIONS = {
   'clear-device': () => clearDeviceSelection(),
   'focus-imei': () => focusImeiForScan(),
   'open-add-part': () => openAddPartModal(),
+  'set-add-template': el => setAddItemTemplate(el.dataset.template),
   'copy-ref': () => copyRepairRef(),
   'toggle-note': () => toggleRepairNote(),
   'set-tier': el => setPriceTier(el.dataset.tier),
@@ -333,6 +334,12 @@ const ACTIONS = {
   'refresh-printers': () => loadPrinters(),
   'activate-license': () => submitLicenseActivation(),
   'dismiss-license': () => dismissLicenseOverlay(),
+  'open-license-settings': () => openSettingsModal('data'),
+  'open-license-overlay': () => { closeModal('modal-settings'); checkLicenseStatus(true); },
+  'copy-machine-id': el => copyMachineId(el),
+  'paste-license-key': () => pasteLicenseKeyTo('license-key-input', 'license-key-preview'),
+  'paste-settings-license': () => pasteLicenseKeyTo('settings-license-key-input', 'settings-license-preview'),
+  'activate-settings-license': () => submitSettingsLicenseActivation(),
   'open-pin-setup': () => openPinSetup(),
   'save-pin-setup': () => submitPinSetup(),
   'skip-pin-setup': () => skipPinSetup(),
@@ -479,6 +486,7 @@ function initFormWiring() {
   on('settings-template', 'change', loadReceiptPreview);
   on('settings-item-rows', 'change', loadReceiptPreview);
   on('settings-paper-width', 'change', loadReceiptPreview);
+  on('settings-business-type', 'change', e => applyBusinessPreset(e.target.value));
 
   on('form-add-part', 'submit', submitAddPart);
   on('form-edit-part', 'submit', submitEditPart);
@@ -495,6 +503,11 @@ function initFormWiring() {
   document.getElementById('form-settings')?.addEventListener('invalid', () => switchSettingsTab('store'), true);
   on('settings-gcash-qr', 'input', onSettingsQrPathInput);
   on('settings-qr-file', 'change', handleQrFileUpload);
+  on('license-key-input', 'input', () => updateLicensePreview('license-key-input', 'license-key-preview'));
+  on('settings-license-key-input', 'input', () => updateLicensePreview('settings-license-key-input', 'settings-license-preview'));
+  on('setup-license-key', 'input', () => updateLicensePreview('setup-license-key', 'setup-license-preview'));
+  on('license-file-input', 'change', e => handleLicenseFileUpload(e, 'license-key-input', 'license-key-preview'));
+  on('settings-license-file', 'change', e => handleLicenseFileUpload(e, 'settings-license-key-input', 'settings-license-preview'));
   on('settings-pin-btn', 'click', submitPinChange);
   on('settings-current-pin', 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submitPinChange(); } });
   on('settings-new-pin', 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submitPinChange(); } });
@@ -918,14 +931,19 @@ function initMobileNav() {
 // CLOUD SYNC CHIP — mirrors /api/sync/status in the topbar. Hidden
 // while sync is off so the offline-first default stays visually quiet.
 // -------------------------------------------------------------
-async function refreshSyncChip() {
+export async function refreshSyncChip() {
   const chip = document.getElementById('sync-status-chip');
-  if (!chip) return;
   try {
     const res = await fetch('/api/sync/status');
-    if (res.status === 401 || res.status === 403) { chip.classList.add('hidden'); return; }
+    if (res.status === 401 || res.status === 403) {
+      if (chip) chip.classList.add('hidden');
+      syncCloudUi({ offline: true });
+      return;
+    }
     if (!res.ok) throw new Error('status unavailable');
     const s = await res.json();
+    syncCloudUi(s);
+    if (!chip) return;
     if (!s.url_configured) { chip.classList.add('hidden'); return; }
     chip.classList.remove('hidden');
     const n = s.pending || 0;
@@ -940,11 +958,29 @@ async function refreshSyncChip() {
     chip.textContent = (s.state === 'synced' && s.last_error)
       ? 'Cloud sync error'
       : (labels[s.state] || 'Cloud sync');
+    if (s.in_flight) {
+      chip.textContent = n > 0 ? `Syncing ${n} change${n === 1 ? '' : 's'}...` : 'Syncing...';
+    } else if (s.state === 'synced' && !s.last_error && s.stale) {
+      chip.textContent = 'Cloud stale';
+    }
+    chip.classList.remove('is-synced', 'is-syncing', 'is-error', 'is-local');
+    if (s.in_flight || s.state === 'syncing') chip.classList.add('is-syncing');
+    else if (s.last_error || s.state === 'attention') chip.classList.add('is-error');
+    else if (s.state === 'local') chip.classList.add('is-local');
+    else if (s.state === 'synced' && !s.stale) chip.classList.add('is-synced');
     chip.title = `Cloud sync: ${chip.textContent}`
       + (s.last_synced_at ? `. Last push: ${new Date(s.last_synced_at).toLocaleString()}` : '')
       + (s.last_error ? `. Last error: ${s.last_error}` : '');
-  } catch (_) { /* server unreachable: keep the last known state */ }
+  } catch (_) {
+    syncCloudUi({ offline: true });
+    if (chip) {
+      chip.classList.remove('is-synced', 'is-syncing', 'is-local');
+      chip.classList.add('is-error');
+      chip.textContent = 'Sync offline';
+    }
+  }
 }
+window.refreshSyncChip = refreshSyncChip;
 refreshSyncChip();
 setInterval(refreshSyncChip, 30000);
 checkForAppUpdates(true);

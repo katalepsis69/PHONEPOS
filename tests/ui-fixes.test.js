@@ -65,6 +65,7 @@ test('completeSale executes: the in-flight lock, the op_id round trip, and the b
       SALE_OP_KEY: 'pos_sale_op_id',
       autoPrintHintShown: false,
       showToast: (m, t) => calls.toasts.push(`${t}:${m}`),
+      t: (k, fb) => fb || k,
       cartTotals: () => ({ discount: 0, total: 100 }),
       unitPriceOf: () => 100,
       deviceNoteLine: () => '',
@@ -167,6 +168,7 @@ test('a settlement ledger refresh failure never reads as a failed payment', asyn
       pendingSettleCustomer: null,
       newOpId: () => 'settle-op-1',
       showToast: (m, t) => calls.toasts.push(`${t}:${m}`),
+      t: (k, fb) => fb || k,
       fmtMoney: (v) => `P${v}`,
       hasElevation: () => true,
       requireManagerPin: () => {},
@@ -1230,6 +1232,7 @@ test('cart quantity editor validates, clamps to stock, and removes at zero', asy
     renderCart() { renders++; },
     renderPartsTable() {},
     showToast: (m) => toasts.push(m),
+    t: (k, fb) => fb || k,
   });
   let removed = false;
   let renders = 0;

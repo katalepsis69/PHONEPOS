@@ -81,17 +81,87 @@ function enqueueCustomerProfile(db, customerName) {
   if (row) enqueue(db, 'customer_profiles', Number(row.id), row);
 }
 
-async function postBatch(url, token, shopId, events) {
+async function postBatch(url, token, shopId, events, ackCommandIds) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 8000);
+  const body = { shop_id: shopId, events };
+  if (Array.isArray(ackCommandIds) && ackCommandIds.length > 0) {
+    body.ack_command_ids = ackCommandIds;
+  }
   try {
     return await fetch(url.replace(/\/$/, '') + '/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-sync-token': token },
-      body: JSON.stringify({ shop_id: shopId, events }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
   } finally { clearTimeout(t); }
+}
+
+function applyCloudCommands(db, commands) {
+  if (!Array.isArray(commands) || commands.length === 0) return [];
+  const { adjustStock, importInventory } = require('./inventory');
+  const ackedIds = [];
+  for (const cmd of commands) {
+    if (!cmd || !Number.isSafeInteger(cmd.id) || cmd.id <= 0) continue;
+    const p = cmd.payload && typeof cmd.payload === 'object' ? cmd.payload : {};
+    const opId = cmd.op_id || `cloud-cmd-${cmd.id}`;
+    try {
+      if (cmd.kind === 'adjust_stock') {
+        // adjustStock(db, id, delta, meta, ctx): op_id rides meta, actor rides
+        // ctx. Actor in meta left ctx empty, so audit() wrote no row.
+        adjustStock(db, Number(p.id), Number(p.delta), {
+          reason: p.reason || 'receive',
+          note: p.note || 'Added from Cloud',
+          op_id: opId,
+        }, { actor: { type: 'manager', id: null, name: 'Cloud Manager' } });
+        ackedIds.push(cmd.id);
+      } else if (cmd.kind === 'import_inventory') {
+        // importInventory(db, rows, ctx, meta): actor rides ctx, op_id rides
+        // meta. op_id in ctx left meta empty, so a redelivered command doubled
+        // every row's stock instead of replaying.
+        importInventory(db, Array.isArray(p.rows) ? p.rows : [], {
+          actor: { type: 'manager', id: null, name: 'Cloud Manager' },
+        }, { op_id: opId });
+        ackedIds.push(cmd.id);
+      }
+    } catch (err) {
+      if (err && /not found|must be/i.test(String(err.message || ''))) {
+        ackedIds.push(cmd.id);
+      }
+    }
+  }
+  return ackedIds;
+}
+
+async function ackAndFlushCommands(db, url, token, shopId, appliedIds, batch = 50) {
+  if (!appliedIds.length) return;
+  const rows = db.prepare(
+    'SELECT id, table_name, local_id, payload FROM sync_outbox WHERE synced_at IS NULL ORDER BY id LIMIT ?'
+  ).all(batch);
+  const events = [];
+  for (const r of rows) {
+    try {
+      const payload = JSON.parse(r.payload);
+      const deleted = payload && payload._deleted === true;
+      events.push({ outbox_id: r.id, table: r.table_name, local_id: r.local_id, deleted, row: deleted ? null : payload });
+    } catch (_) {}
+  }
+  const res = await postBatch(url, token, shopId, events, appliedIds).catch(() => null);
+  if (!res || !res.ok) return;
+  const ack = await res.json().catch(() => ({}));
+  const acked = new Set(ack.ok_ids || []);
+  if (acked.size > 0) {
+    const mark = db.prepare('UPDATE sync_outbox SET synced_at = ? WHERE id = ?');
+    const now = new Date().toISOString();
+    db.exec('BEGIN');
+    try {
+      for (const id of acked) mark.run(now, id);
+      db.exec('COMMIT');
+    } catch (_) {
+      db.exec('ROLLBACK');
+    }
+  }
 }
 
 // Pair-time initial sync. The outbox only captures writes made while it
@@ -157,13 +227,19 @@ async function drainOutbox(db, { batch = 50 } = {}) {
   const shopId = getShopId(db);
   if (!shopId) return { skipped: true, reason: 'no shop_id' };
 
+  const token = getSyncToken(db);
   const rows = db.prepare(
     'SELECT id, table_name, local_id, payload FROM sync_outbox WHERE synced_at IS NULL ORDER BY id LIMIT ?'
   ).all(batch);
   if (rows.length === 0) {
-    const res = await postBatch(url, getSyncToken(db), shopId, []);
+    const res = await postBatch(url, token, shopId, []);
     if (!res.ok) throw new Error(`cloud sync responded ${res.status}`);
-    return { synced: 0, heartbeat: true };
+    const ack = await res.json().catch(() => ({}));
+    const appliedIds = applyCloudCommands(db, ack.commands);
+    if (appliedIds.length > 0) {
+      await ackAndFlushCommands(db, url, token, shopId, appliedIds, batch);
+    }
+    return { synced: 0, heartbeat: true, commands_applied: appliedIds.length };
   }
 
   // One corrupt payload row must not poison the whole oldest-first window:
@@ -195,7 +271,7 @@ async function drainOutbox(db, { batch = 50 } = {}) {
     return { synced: 0, unreadable, quarantined: unreadableIds.length };
   }
 
-  const res = await postBatch(url, getSyncToken(db), shopId, events);
+  const res = await postBatch(url, token, shopId, events);
   if (!res.ok) throw new Error(`cloud sync responded ${res.status}`);
   const ack = await res.json().catch(() => ({}));
   const acked = new Set(ack.ok_ids || []);
@@ -224,11 +300,15 @@ async function drainOutbox(db, { batch = 50 } = {}) {
     db.exec('ROLLBACK');
     throw err;
   }
+  const appliedIds = applyCloudCommands(db, ack.commands);
+  if (appliedIds.length > 0) {
+    await ackAndFlushCommands(db, url, token, shopId, appliedIds, batch);
+  }
   // A 200 that acks nothing is a confused endpoint, not success: treating it
   // as success reset the backoff and re-POSTed the same batch every 2s
   // forever. Throwing feeds the normal failure backoff instead.
   if (marked === 0 && quarantined === 0) throw new Error(`Cloud sync acknowledged none of ${rows.length} queued rows`);
-  return { synced: marked, unreadable, quarantined };
+  return { synced: marked, unreadable, quarantined, commands_applied: appliedIds.length };
 }
 
 function getSyncStatus(db) {

@@ -103,6 +103,50 @@ test('publish.bat calls the Windows find by absolute path', () => {
   assert.ok(bat.includes('tasklist /fi "imagename eq TechPartsPOS.exe" 2>nul | "%SystemRoot%\\System32\\find.exe" /i "TechPartsPOS.exe"'),
     'the running-executable guard no longer calls Windows find by absolute path');
   assert.ok(!bat.includes('| find /i'), 'a bare `find` is back on the pipe, and a GNU findutils earlier on PATH defeats the guard');
+  assert.match(bat, /--help/, 'publish.bat must support --help');
+  assert.match(bat, /--skip-tests/, 'publish.bat must support --skip-tests');
+  assert.match(bat, /--clean/, 'publish.bat must support --clean');
+  assert.match(bat, /--dry-run/, 'publish.bat must support --dry-run');
+  assert.match(bat, /--no-pause/, 'publish.bat must support --no-pause');
+});
+
+test('publish.bat CLI help and dry-run execution on Windows', (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Batch file execution requires Windows');
+    return;
+  }
+  const help = spawnSync('cmd.exe', ['/c', 'publish.bat --help'], { cwd: ROOT_DIR, encoding: 'utf8' });
+  assert.equal(help.status, 0, `publish.bat --help failed: ${help.stderr}`);
+  assert.match(help.stdout, /Usage: publish\.bat \[options\]/);
+  assert.match(help.stdout, /--skip-tests/);
+  assert.match(help.stdout, /--clean/);
+
+  const dryRun = spawnSync('cmd.exe', ['/c', 'publish.bat --dry-run'], { cwd: ROOT_DIR, encoding: 'utf8' });
+  assert.equal(dryRun.status, 0, `publish.bat --dry-run failed: ${dryRun.stderr}`);
+  assert.match(dryRun.stdout, /\[DRY RUN\] Pre-flight checks passed successfully/);
+  assert.match(dryRun.stdout, /Dependencies:\s+node_modules verified/);
+});
+
+test('publish-release.bat CLI help and argument normalization on Windows', (t) => {
+  const batPath = path.join(ROOT_DIR, 'publish-release.bat');
+  const bat = fs.readFileSync(batPath, 'utf8');
+  assert.match(bat, /--dry-run/, 'publish-release.bat must support --dry-run');
+  assert.match(bat, /--version/, 'publish-release.bat must support --version');
+  assert.match(bat, /--changelog/, 'publish-release.bat must support --changelog');
+  assert.match(bat, /--non-interactive/, 'publish-release.bat must support --non-interactive');
+  assert.match(bat, /--no-pause/, 'publish-release.bat must support --no-pause');
+  assert.ok(bat.includes('tasklist /fi "imagename eq TechPartsPOS.exe" 2>nul | "%SystemRoot%\\System32\\find.exe" /i "TechPartsPOS.exe"'),
+    'publish-release.bat must guard against running TechPartsPOS.exe');
+
+  if (process.platform !== 'win32') {
+    t.skip('Batch file execution requires Windows');
+    return;
+  }
+  const help = spawnSync('cmd.exe', ['/c', 'publish-release.bat --help'], { cwd: ROOT_DIR, encoding: 'utf8' });
+  assert.equal(help.status, 0, `publish-release.bat --help failed: ${help.stderr}`);
+  assert.match(help.stdout, /Usage: publish-release\.bat \[options\]/);
+  assert.match(help.stdout, /-d, --dry-run/);
+  assert.match(help.stdout, /-v, --version/);
 });
 
 // The release pipeline had no test at all (grep: no match for publish-release
@@ -171,4 +215,23 @@ test('cloud rotate-pin writes the new manager PIN only to its 0600 file, never s
     assert.doesNotMatch(block, /Manager PIN: \$\{pin\}/, `${rel} must not echo the rotated PIN to stdout`);
     assert.match(block, /MANAGER_PIN_PATH/, `${rel} must name the file the PIN was saved to`);
   }
+});
+
+test('publish-release.ps1 parses --version and --changelog flags without positional collision', (t) => {
+  const probe = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) {
+    t.skip('PowerShell is not available on this machine');
+    return;
+  }
+  const ps1Path = path.join(ROOT_DIR, 'scripts', 'publish-release.ps1');
+  const src = fs.readFileSync(ps1Path, 'utf8');
+  // Extract param block + CLI argument loop only (up to $ErrorActionPreference)
+  const header = src.slice(0, src.indexOf('$ErrorActionPreference'));
+  const runner = `${header}\nWrite-Output ("VER=" + $Version + "|NOTE=" + $Changelog + "|DRY=" + [bool]$DryRun + "|NON=" + [bool]$NonInteractive)`;
+  const wrapped = `& { ${runner} } --version 2.9 --changelog "Test Note" --dry-run --non-interactive`;
+  const res = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', wrapped], { encoding: 'utf8' });
+  assert.equal(res.status, 0, `publish-release param parser failed: ${res.stderr}`);
+  assert.match(res.stdout, /VER=2\.9\|NOTE=Test Note\|DRY=True\|NON=True/);
+
+  assert.match(src, /if \(-not \[string\]::IsNullOrWhiteSpace\(\$Version\)\)/, 'publish-release.ps1 must apply non-empty -Version overrides');
 });

@@ -148,10 +148,17 @@
     .status-badge.warn {
       color: var(--warn);
       border-color: var(--warn);
+      background: var(--warn-soft);
     }
     .status-badge.off {
       color: var(--alert);
       border-color: var(--alert);
+      background: var(--alert-soft);
+    }
+    .status-badge.syncing {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: var(--accent-soft);
     }
     .header-actions {
       display: flex;
@@ -613,6 +620,96 @@
       color: var(--accent);
       border-color: var(--accent);
     }
+    .feed-action-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    .feed-action-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .tool-btn {
+      min-height: 44px;
+      padding: 0 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-variant-numeric: tabular-nums;
+      transition-property: background-color, border-color, color;
+      transition-duration: 120ms;
+    }
+    .tool-btn:hover { background: var(--surface-interactive); border-color: var(--border-focus); }
+    .tool-btn.primary {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+    .days-input, .order-qty-input {
+      width: 58px;
+      min-height: 44px;
+      padding: 4px 6px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      appearance: textfield;
+      -moz-appearance: textfield;
+    }
+    .days-input::-webkit-outer-spin-button,
+    .days-input::-webkit-inner-spin-button,
+    .order-qty-input::-webkit-outer-spin-button,
+    .order-qty-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .reorder-summary-pill {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-variant-numeric: tabular-nums;
+    }
+    .row-stock-btn {
+      min-height: 44px;
+      padding: 0 11px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface-elevated);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      transition-property: background-color, border-color;
+      transition-duration: 120ms;
+    }
+    .row-stock-btn:hover { background: var(--surface-interactive); border-color: var(--accent); }
     .feed-list {
       display: flex;
       flex-direction: column;
@@ -714,12 +811,14 @@
     .nav-btn {
       flex: 1;
       min-height: 48px;
+      padding: 4px 2px;
       background: transparent;
       border: 0;
       color: var(--text-muted);
       font-family: var(--sans);
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 600;
+      white-space: nowrap;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -747,6 +846,8 @@
     .modal-box {
       width: 100%;
       max-width: 380px;
+      max-height: 90dvh;
+      overflow-y: auto;
       background: var(--surface);
       border: 1px solid var(--border-strong);
       border-radius: 20px;
@@ -1047,6 +1148,7 @@
           <span class="brand-title">TechParts Live</span>
           <span class="status-badge" id="store-badge" style="display: none; background: var(--accent-soft); color: var(--accent); font-weight: 600;"></span>
           <span class="status-badge" id="shops-badge">0 shops</span>
+          <span class="status-badge syncing" id="sync-state-badge" role="status">Syncing...</span>
           <span class="status-badge hidden" id="stale-badge" role="status">Data: stale</span>
         </div>
         <div class="header-actions">
@@ -1217,6 +1319,37 @@
           <div class="feed-toolbar">
             <input type="search" id="feed-search" class="feed-search" placeholder="Search ticket, customer, or part..." aria-label="Search current feed" autocomplete="off">
             <div class="feed-chips" id="feed-chips" role="group" aria-label="Feed filter"></div>
+            <div class="feed-action-bar hidden" id="cloud-reorder-bar">
+              <div class="feed-action-group" role="group" aria-label="Sold in last N days">
+                <span style="font-family: var(--mono); font-size: 11px; color: var(--text-muted);">Sold in last</span>
+                <button type="button" class="chip-btn" data-reorder-days="1">1d</button>
+                <button type="button" class="chip-btn" data-reorder-days="3">3d</button>
+                <button type="button" class="chip-btn active" data-reorder-days="7">7d</button>
+                <button type="button" class="chip-btn" data-reorder-days="14">14d</button>
+                <button type="button" class="chip-btn" data-reorder-days="30">30d</button>
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--text-muted);">
+                  <span>Custom</span>
+                  <input type="number" id="cloud-reorder-custom-days" class="days-input" min="1" max="90" step="1" placeholder="1-90" aria-label="Custom reorder days (1 to 90)">
+                  <span>d</span>
+                </label>
+              </div>
+              <div class="feed-action-group" style="width: 100%; justify-content: space-between;">
+                <span class="reorder-summary-pill" id="cloud-reorder-summary">0 parts · 0 to order · Est ₱0.00</span>
+                <div class="feed-action-group">
+                  <button type="button" class="tool-btn primary" id="cloud-copy-order-btn">Copy order</button>
+                  <button type="button" class="tool-btn" id="cloud-export-reorder-btn" title="Export reorder sheet as CSV with blank Stock Qty">Export CSV</button>
+                  <button type="button" class="tool-btn" id="cloud-import-reorder-btn" title="Import a filled-in CSV to add arrived stock">Import CSV</button>
+                </div>
+              </div>
+            </div>
+            <div class="feed-action-bar hidden" id="cloud-stock-bar">
+              <div class="feed-action-group">
+                <button type="button" class="tool-btn primary" id="cloud-import-stock-btn">Import CSV</button>
+                <button type="button" class="tool-btn" id="cloud-template-csv-btn">Template</button>
+                <button type="button" class="tool-btn" id="cloud-export-stock-btn">Export CSV</button>
+              </div>
+            </div>
+            <input type="file" id="cloud-csv-file-input" class="hidden" accept=".csv,.tsv,.txt">
           </div>
           <div class="feed-list" id="rows">
             <div class="empty-state">Waiting for synchronized data...</div>
@@ -1339,6 +1472,49 @@
         <h3 class="modal-title" style="color: var(--cash);">Shop Register Connected</h3>
         <p class="modal-sub" id="pair-success-desc">Shop register has been verified and permanently paired via SSE handshake.</p>
         <button class="primary-btn" id="close-pair-success">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add / Adjust Stock Modal -->
+  <div class="modal-backdrop" id="stock-modal" role="dialog" aria-modal="true" aria-labelledby="stock-modal-title">
+    <div class="modal-box" style="text-align: left;">
+      <h3 class="modal-title" id="stock-modal-title">Add or Adjust Stock</h3>
+      <p class="modal-sub" id="stock-modal-part" style="margin-bottom: 12px;"></p>
+      <div class="feed-action-group" style="margin-bottom: 12px;">
+        <button type="button" class="chip-btn" data-stock-preset="1">+1</button>
+        <button type="button" class="chip-btn" data-stock-preset="5">+5</button>
+        <button type="button" class="chip-btn" data-stock-preset="10">+10</button>
+        <button type="button" class="chip-btn" data-stock-preset="20">+20</button>
+      </div>
+      <label style="display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;" for="stock-modal-delta">Quantity change (+ to add, - to deduct)</label>
+      <input type="number" id="stock-modal-delta" class="form-input" step="any" inputmode="decimal" value="1" style="margin-bottom: 10px;">
+      <label style="display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;" for="stock-modal-reason">Reason</label>
+      <select id="stock-modal-reason" class="form-input" style="font-size: 13px; text-align: left; margin-bottom: 10px;">
+        <option value="receive">Delivery / Restock received</option>
+        <option value="count">Inventory count correction</option>
+        <option value="damage">Damaged / Shrinkage</option>
+      </select>
+      <label style="display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;" for="stock-modal-note">Note (optional)</label>
+      <input type="text" id="stock-modal-note" class="form-input" placeholder="e.g. Supplier delivery" style="font-family: var(--sans); font-size: 13px; text-align: left; margin-bottom: 10px;">
+      <p id="stock-modal-err" style="color: var(--alert); font-size: 12px; min-height: 18px; margin: 0 0 10px;"></p>
+      <div class="modal-actions">
+        <button type="button" class="primary-btn" id="stock-modal-save">Save Stock Update</button>
+        <button type="button" class="secondary-btn" id="stock-modal-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CSV Import Preview Modal -->
+  <div class="modal-backdrop" id="import-modal" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
+    <div class="modal-box" style="max-width: 460px; text-align: left;">
+      <h3 class="modal-title" id="import-modal-title">Import Inventory CSV</h3>
+      <p class="modal-sub" id="import-modal-sub" style="margin-bottom: 10px;"></p>
+      <div id="import-modal-preview" style="max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-elevated); padding: 8px 12px; margin-bottom: 12px; font-family: var(--mono); font-size: 11px;"></div>
+      <p id="import-modal-err" style="color: var(--alert); font-size: 12px; min-height: 18px; margin: 0 0 10px;"></p>
+      <div class="modal-actions">
+        <button type="button" class="primary-btn" id="import-modal-confirm">Import Rows</button>
+        <button type="button" class="secondary-btn" id="import-modal-cancel">Cancel</button>
       </div>
     </div>
   </div>

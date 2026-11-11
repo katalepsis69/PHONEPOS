@@ -199,7 +199,59 @@ export const I18N = {
     'returns.restock_note': 'Returning a part puts it back into inventory stock.',
 
     // Settings Hints
-    'settings.markup_note': 'Markup applied when importing parts with blank prices or recalculating in bulk.'
+    'settings.markup_note': 'Markup applied when importing parts with blank prices or recalculating in bulk.',
+
+    // General POS & Inventory
+    'pos.qa_add_item': 'Add an item',
+    'pos.empty_catalog': 'Add your first item, or import your catalog from Settings > Data.',
+    'pos.err_no_items': 'Add items to the order first',
+    'pos.filter_empty': 'No items match these filters',
+    'pos.stock_ceiling': 'Only {n} available in stock',
+    'pos.qty_valid_number': 'Quantity must be a valid number (0 to remove)',
+    'pos.qty_whole_number': 'Quantity must be a whole number (0 to remove)',
+    'pos.qty_min': 'Quantity must be at least 0.001 (0 to remove)',
+    'pos.checkout_ready': 'Take payment & print (F9)',
+    'pos.checkout_idle': 'Add items to checkout (F9)',
+    'pos.processing_payment': 'Processing payment…',
+    'inv.empty_catalog_hint': 'Adjust the filter, or add a new item to the catalog.',
+    'inv.part_added_toast': 'Item added to catalog',
+    'inv.search_ph': 'Search phone model, part type, or SKU...',
+    'inv.all_brands': 'All Brands',
+    'dash.top_title': 'Top performing parts',
+    'dash.trend_hint_day': 'Per day, hover a bar for detail.',
+    'dash.trend_hint_month': 'Per month, hover a bar for detail.',
+    'dash.parts': 'Parts',
+    'dash.labor': 'Labor',
+    'dash.no_returns': 'no returns',
+    'dash.return_count': '{n} return',
+    'dash.returns_count': '{n} returns',
+    'dash.swap_count': '{n} swap',
+    'dash.swaps_count': '{n} swaps',
+    'dash.cash_refunded': 'cash refunded',
+    'dash.off_utang': 'off utang',
+    'dash.collected': 'Collected',
+    'dash.net': 'Net',
+    'dash.after_refunds': 'after refunds',
+    'dash.after_refunds_replacements': 'after refunds & replacements',
+    'dash.shortage': 'shortage',
+    'dash.overage': 'overage',
+    'dash.drawer': 'Drawer',
+    'dash.adj': 'Adj',
+    'pos.shelf_title': 'All Available Parts',
+    'pos.shelf_hint': 'Showing all active parts in inventory.',
+    'pos.th_item_name': 'Part Name',
+    'pos.sum_items': 'Parts',
+    'nav.rail_sub': 'Sales & service',
+    'pos.add_part_link': '+ Add new part to inventory',
+    'pos.add_part_link_tt': 'Add new part to inventory (Alt+A)',
+    'pos.summary_title': 'Repair summary',
+    'pos.cart_empty_hint': 'No parts on this job. Click + Add in the parts shelf.',
+    'pos.hold_job': 'Hold job',
+    'pos.hold_job_tt': 'Hold current job (Alt+H)',
+    'pos.claim_stub': 'Claim stub',
+    'pos.claim_stub_tt': 'Print claim stub before repair starts',
+    'pos.empty_catalog_title': 'No parts in inventory yet',
+    'inv.empty_title': 'No parts in catalog yet'
   },
   tl: {
     // Topbar & Nav
@@ -400,9 +452,470 @@ export const I18N = {
     'returns.restock_note': 'Ang isinauling piyesa ay ibabalik sa stock ng imbentaryo.',
 
     // Settings Hints
-    'settings.markup_note': 'Tubong idaragdag kapag nag-import ng blangkong presyo o nagkuwenta nang maramihan.'
+    'settings.markup_note': 'Tubong idaragdag kapag nag-import ng blangkong presyo o nagkuwenta nang maramihan.',
+
+    // General POS & Inventory
+    'pos.qa_add_item': 'Magdagdag ng item',
+    'pos.empty_catalog': 'Magdagdag ng unang item, o mag-import mula sa Settings > Data.',
+    'pos.err_no_items': 'Magdagdag muna ng item sa order',
+    'pos.filter_empty': 'Walang item na tumutugma sa mga filter',
+    'pos.stock_ceiling': '{n} na lang ang available sa stock',
+    'pos.qty_valid_number': 'Dapat valid na numero ang quantity (0 para alisin)',
+    'pos.qty_whole_number': 'Dapat buong numero ang quantity (0 para alisin)',
+    'pos.qty_min': 'Dapat hindi bababa sa 0.001 ang quantity (0 para alisin)',
+    'pos.checkout_ready': 'Kumuha ng bayad at i-print (F9)',
+    'pos.checkout_idle': 'Magdagdag ng item para mag-checkout (F9)',
+    'pos.processing_payment': 'Pinoproseso ang bayad…',
+    'inv.empty_catalog_hint': 'I-adjust ang filter, o magdagdag ng bagong item sa katalogo.',
+    'inv.part_added_toast': 'Naidagdag ang item sa katalogo',
+    'inv.search_ph': 'Maghanap ng modelo, uri ng piyesa, o SKU...',
+    'inv.all_brands': 'Lahat ng Brand',
+    'dash.top_title': 'Pinakamabentang mga piyesa',
+    'dash.trend_hint_day': 'Bawat araw, i-hover ang bar para sa detalye.',
+    'dash.trend_hint_month': 'Bawat buwan, i-hover ang bar para sa detalye.',
+    'dash.parts': 'Mga Piyesa',
+    'dash.labor': 'Labor',
+    'dash.no_returns': 'walang balik',
+    'dash.return_count': '{n} na balik',
+    'dash.returns_count': '{n} na balik',
+    'dash.swap_count': '{n} palit',
+    'dash.swaps_count': '{n} palit',
+    'dash.cash_refunded': 'cash naibalik',
+    'dash.off_utang': 'bawas utang',
+    'dash.collected': 'Nakolekta',
+    'dash.net': 'Net',
+    'dash.after_refunds': 'pagkatapos ng refund',
+    'dash.after_refunds_replacements': 'pagkatapos ng refund at palit',
+    'dash.shortage': 'kulang',
+    'dash.overage': 'sobra',
+    'dash.drawer': 'Drawer',
+    'dash.adj': 'Adj',
+    'pos.shelf_title': 'Lahat ng Makukuhang Piyesa',
+    'pos.shelf_hint': 'Ipinapakita ang lahat ng aktibong piyesa sa imbentaryo.',
+    'pos.th_item_name': 'Pangalan ng Piyesa',
+    'pos.sum_items': 'Mga Piyesa',
+    'nav.rail_sub': 'Benta at serbisyo',
+    'pos.add_part_link': '+ Magdagdag ng bagong piyesa sa imbentaryo',
+    'pos.add_part_link_tt': 'Magdagdag ng bagong piyesa sa imbentaryo (Alt+A)',
+    'pos.summary_title': 'Buod ng repair',
+    'pos.cart_empty_hint': 'Walang piyesa sa gawaing ito. Pindutin ang + Add sa estante ng piyesa.',
+    'pos.hold_job': 'I-hold ang trabaho',
+    'pos.hold_job_tt': 'I-hold ang kasalukuyang trabaho (Alt+H)',
+    'pos.claim_stub': 'Claim stub',
+    'pos.claim_stub_tt': 'I-print ang claim stub bago magsimula ang repair',
+    'pos.empty_catalog_title': 'Wala pang piyesa sa imbentaryo',
+    'inv.empty_title': 'Wala pang piyesa sa katalogo'
   }
 };
+
+export const PROFILE_VOCAB = {
+  grocery: {
+    en: {
+      'nav.pos': 'Checkout',
+      'nav.new_repair': 'New sale',
+      'nav.stock': 'Stock & inventory',
+      'nav.inventory': 'Products',
+      'nav.rail_sub': 'Checkout',
+      'title.pos': 'Checkout Counter',
+      'title.inventory': 'Product Inventory',
+      'inv.add_part': 'Add Product',
+      'inv.th_model': 'Product / Brand',
+      'inv.th_type': 'Category / Department',
+      'inv.all_types': 'All Categories',
+      'inv.stat_parts': 'Products in catalog',
+      'inv.parts_count': 'product(s)',
+      'bulk.title': 'Bulk Edit Selected Products',
+      'bulk.parts_count': 'product(s)',
+      'bulk.opt_archive': 'Archive selected products',
+      'bulk.opt_unarchive': 'Restore / unarchive selected products',
+      'part.add_title': 'Add Product',
+      'part.edit_title': 'Edit Product',
+      'part.save': 'Save Product',
+      'part.brand': 'Brand / Maker',
+      'part.model': 'Product Name *',
+      'part.type': 'Category / Department *',
+      'pos.intake_placeholder': 'Search products by name, barcode, or SKU...',
+      'pos.cart_empty': 'No items in current sale',
+      'pos.collect': 'Complete Sale & Collect',
+      'pos.search_ph': 'Scan barcode or type product (press Enter to add)',
+      'pos.qa_add_item': 'Add a product',
+      'returns.restock_note': 'Returning a product puts it back into inventory stock.',
+      'inv.search_ph': 'Search product name, category, or barcode...',
+      'inv.all_brands': 'All Brands',
+      'dash.top_title': 'Top performing products',
+      'pos.shelf_title': 'All Available Products',
+      'pos.shelf_hint': 'Showing all active products in stock.',
+      'pos.th_item_name': 'Product Name',
+      'pos.sum_items': 'Products',
+      'pos.add_part_link': '+ Add new product to inventory',
+      'pos.add_part_link_tt': 'Add new product to inventory (Alt+A)',
+      'pos.summary_title': 'Sale summary',
+      'pos.cart_empty_hint': 'No products in current sale. Click + Add on the product shelf.',
+      'pos.hold_job': 'Hold sale',
+      'pos.hold_job_tt': 'Hold current sale (Alt+H)',
+      'pos.claim_stub': 'Claim stub',
+      'pos.claim_stub_tt': 'Print claim stub before sale starts',
+      'pos.empty_catalog_title': 'No products in inventory yet',
+      'inv.empty_title': 'No products in catalog yet'
+    },
+    tl: {
+      'nav.pos': 'Kaha ng benta',
+      'nav.new_repair': 'Bagong benta',
+      'nav.stock': 'Imbentaryo ng Paninda',
+      'nav.inventory': 'Mga Produkto',
+      'nav.rail_sub': 'Kaha ng benta',
+      'title.pos': 'Kaha ng Benta',
+      'title.inventory': 'Imbentaryo ng Produkto',
+      'inv.add_part': 'Magdagdag ng Produkto',
+      'inv.th_model': 'Produkto / Brand',
+      'inv.th_type': 'Kategorya',
+      'inv.all_types': 'Lahat ng Kategorya',
+      'inv.stat_parts': 'Produkto sa katalogo',
+      'inv.parts_count': 'produkto',
+      'bulk.title': 'Sabayang Pag-edit ng Produkto',
+      'bulk.parts_count': 'produkto',
+      'bulk.opt_archive': 'I-archive ang napiling mga produkto',
+      'bulk.opt_unarchive': 'Ibalik / i-unarchive ang napiling mga produkto',
+      'part.add_title': 'Magdagdag ng Produkto',
+      'part.edit_title': 'I-edit ang Produkto',
+      'part.save': 'I-save ang Produkto',
+      'part.brand': 'Brand / Gumawa',
+      'part.model': 'Pangalan ng Produkto *',
+      'part.type': 'Kategorya / Departamento *',
+      'pos.intake_placeholder': 'Maghanap ng produkto gamit ang pangalan, barcode, o SKU...',
+      'pos.cart_empty': 'Walang item sa benta na ito',
+      'pos.collect': 'Singilin at Tapusin ang Benta',
+      'pos.search_ph': 'I-scan ang barcode o i-type ang produkto (Enter para idagdag)',
+      'pos.qa_add_item': 'Magdagdag ng produkto',
+      'returns.restock_note': 'Ang isinauling produkto ay ibabalik sa stock ng imbentaryo.',
+      'inv.search_ph': 'Maghanap ng produkto, kategorya, o barcode...',
+      'inv.all_brands': 'Lahat ng Brand',
+      'dash.top_title': 'Pinakamabentang mga produkto',
+      'pos.shelf_title': 'Lahat ng Makukuhang Produkto',
+      'pos.shelf_hint': 'Ipinapakita ang lahat ng aktibong produkto sa imbentaryo.',
+      'pos.th_item_name': 'Pangalan ng Produkto',
+      'pos.sum_items': 'Mga Produkto',
+      'pos.add_part_link': '+ Magdagdag ng bagong produkto sa imbentaryo',
+      'pos.add_part_link_tt': 'Magdagdag ng bagong produkto sa imbentaryo (Alt+A)',
+      'pos.summary_title': 'Buod ng benta',
+      'pos.cart_empty_hint': 'Walang produkto sa bentang ito. Pindutin ang + Add sa estante ng produkto.',
+      'pos.hold_job': 'I-hold ang benta',
+      'pos.hold_job_tt': 'I-hold ang kasalukuyang benta (Alt+H)',
+      'pos.claim_stub': 'Claim stub',
+      'pos.claim_stub_tt': 'I-print ang claim stub bago magsimula ang benta',
+      'pos.empty_catalog_title': 'Wala pang produkto sa imbentaryo',
+      'inv.empty_title': 'Wala pang produkto sa katalogo'
+    }
+  },
+  pc: {
+    en: {
+      'nav.pos': 'Sales & service',
+      'nav.new_repair': 'New job',
+      'nav.stock': 'Stock & service',
+      'nav.inventory': 'Components',
+      'nav.rail_sub': 'Sales & service',
+      'title.pos': 'Sales & Service Counter',
+      'title.inventory': 'Hardware Inventory',
+      'inv.add_part': 'Add PC Component',
+      'inv.th_model': 'Brand / Model',
+      'inv.th_type': 'Category / Specification',
+      'inv.all_types': 'All Categories',
+      'inv.stat_parts': 'Components in catalog',
+      'inv.parts_count': 'component(s)',
+      'bulk.title': 'Bulk Edit Selected Components',
+      'bulk.parts_count': 'component(s)',
+      'bulk.opt_archive': 'Archive selected components',
+      'bulk.opt_unarchive': 'Restore / unarchive selected components',
+      'part.add_title': 'Add PC Component',
+      'part.edit_title': 'Edit Component',
+      'part.save': 'Save Component',
+      'part.brand': 'Brand *',
+      'part.model': 'Model / Component Name *',
+      'part.type': 'Category / Specification *',
+      'pos.intake_placeholder': 'Search parts, components, serials, or SKU...',
+      'pos.cart_empty': 'No items in current order',
+      'pos.collect': 'Complete Sale & Collect',
+      'pos.search_ph': 'Scan barcode or type component (press Enter to add)',
+      'pos.qa_add_item': 'Add a component',
+      'returns.restock_note': 'Returning a component puts it back into inventory stock.',
+      'inv.search_ph': 'Search component, model, specs, or SKU...',
+      'inv.all_brands': 'All Brands',
+      'dash.top_title': 'Top performing components',
+      'pos.shelf_title': 'All Available Hardware',
+      'pos.shelf_hint': 'Showing all active components in inventory.',
+      'pos.th_item_name': 'Component Name',
+      'pos.sum_items': 'Components',
+      'pos.add_part_link': '+ Add new component to inventory',
+      'pos.add_part_link_tt': 'Add new component to inventory (Alt+A)',
+      'pos.summary_title': 'Service summary',
+      'pos.cart_empty_hint': 'No components in this job. Click + Add on the hardware shelf.',
+      'pos.hold_job': 'Hold ticket',
+      'pos.hold_job_tt': 'Hold current ticket (Alt+H)',
+      'pos.claim_stub': 'Claim stub',
+      'pos.claim_stub_tt': 'Print claim stub before service starts',
+      'pos.empty_catalog_title': 'No components in inventory yet',
+      'inv.empty_title': 'No components in catalog yet'
+    },
+    tl: {
+      'nav.pos': 'Benta & serbisyo',
+      'nav.new_repair': 'Bagong trabaho',
+      'nav.stock': 'Piyesa & Serbisyo',
+      'nav.inventory': 'Mga Component',
+      'nav.rail_sub': 'Benta & serbisyo',
+      'title.pos': 'Kaha ng Benta at Serbisyo',
+      'title.inventory': 'Imbentaryo ng Hardware',
+      'inv.add_part': 'Magdagdag ng Component',
+      'inv.th_model': 'Brand / Modelo',
+      'inv.th_type': 'Kategorya / Detalye',
+      'inv.all_types': 'Lahat ng Kategorya',
+      'inv.stat_parts': 'Component sa katalogo',
+      'inv.parts_count': 'component',
+      'bulk.title': 'Sabayang Pag-edit ng Component',
+      'bulk.parts_count': 'component',
+      'bulk.opt_archive': 'I-archive ang napiling mga component',
+      'bulk.opt_unarchive': 'Ibalik / i-unarchive ang napiling mga component',
+      'part.add_title': 'Magdagdag ng Component',
+      'part.edit_title': 'I-edit ang Component',
+      'part.save': 'I-save ang Component',
+      'part.brand': 'Brand *',
+      'part.model': 'Pangalan ng Modelo / Component *',
+      'part.type': 'Kategorya / Detalye *',
+      'pos.intake_placeholder': 'Maghanap ng piyesa gamit ang pangalan, modelo, o SKU...',
+      'pos.cart_empty': 'Walang item sa trabaho na ito',
+      'pos.collect': 'Singilin at Tapusin ang Benta',
+      'pos.search_ph': 'I-scan ang barcode o i-type ang component (Enter para idagdag)',
+      'pos.qa_add_item': 'Magdagdag ng component',
+      'returns.restock_note': 'Ang isinauling component ay ibabalik sa stock ng imbentaryo.',
+      'inv.search_ph': 'Maghanap ng component, modelo, specs, o SKU...',
+      'inv.all_brands': 'Lahat ng Brand',
+      'dash.top_title': 'Pinakamabentang mga component',
+      'pos.shelf_title': 'Lahat ng Makukuhang Hardware',
+      'pos.shelf_hint': 'Ipinapakita ang lahat ng aktibong component sa imbentaryo.',
+      'pos.th_item_name': 'Pangalan ng Component',
+      'pos.sum_items': 'Mga Component',
+      'pos.add_part_link': '+ Magdagdag ng bagong component sa imbentaryo',
+      'pos.add_part_link_tt': 'Magdagdag ng bagong component sa imbentaryo (Alt+A)',
+      'pos.summary_title': 'Buod ng serbisyo',
+      'pos.cart_empty_hint': 'Walang component sa gawaing ito. Pindutin ang + Add sa estante ng hardware.',
+      'pos.hold_job': 'I-hold ang ticket',
+      'pos.hold_job_tt': 'I-hold ang kasalukuyang ticket (Alt+H)',
+      'pos.claim_stub': 'Claim stub',
+      'pos.claim_stub_tt': 'I-print ang claim stub bago magsimula ang serbisyo',
+      'pos.empty_catalog_title': 'Wala pang component sa imbentaryo',
+      'inv.empty_title': 'Wala pang component sa katalogo'
+    }
+  },
+  retail: {
+    en: {
+      'nav.pos': 'Checkout',
+      'nav.new_repair': 'New sale',
+      'nav.stock': 'Stock & inventory',
+      'nav.inventory': 'Item catalog',
+      'nav.rail_sub': 'Checkout',
+      'title.pos': 'Checkout Counter',
+      'title.inventory': 'Product Inventory',
+      'inv.add_part': 'Add Item',
+      'inv.th_model': 'Item / Brand',
+      'inv.th_type': 'Category / Variant',
+      'inv.all_types': 'All Categories',
+      'inv.stat_parts': 'Items in catalog',
+      'inv.parts_count': 'item(s)',
+      'bulk.title': 'Bulk Edit Selected Items',
+      'bulk.parts_count': 'item(s)',
+      'bulk.opt_archive': 'Archive selected items',
+      'bulk.opt_unarchive': 'Restore / unarchive selected items',
+      'part.add_title': 'Add Product',
+      'part.edit_title': 'Edit Product',
+      'part.save': 'Save Product',
+      'part.brand': 'Brand / Maker',
+      'part.model': 'Item Name *',
+      'part.type': 'Category / Variant *',
+      'pos.intake_placeholder': 'Search items by name, barcode, or SKU...',
+      'pos.cart_empty': 'No items in current sale',
+      'pos.collect': 'Complete Sale & Collect',
+      'pos.search_ph': 'Scan barcode or type item (press Enter to add)',
+      'pos.qa_add_item': 'Add an item',
+      'returns.restock_note': 'Returning an item puts it back into inventory stock.',
+      'inv.search_ph': 'Search item name, brand, or SKU...',
+      'inv.all_brands': 'All Brands',
+      'dash.top_title': 'Top performing items',
+      'pos.shelf_title': 'All Available Items',
+      'pos.shelf_hint': 'Showing all active items in stock.',
+      'pos.th_item_name': 'Item Name',
+      'pos.sum_items': 'Items',
+      'pos.add_part_link': '+ Add new item to inventory',
+      'pos.add_part_link_tt': 'Add new item to inventory (Alt+A)',
+      'pos.summary_title': 'Sale summary',
+      'pos.cart_empty_hint': 'No items in current sale. Click + Add on the item shelf.',
+      'pos.hold_job': 'Hold sale',
+      'pos.hold_job_tt': 'Hold current sale (Alt+H)',
+      'pos.claim_stub': 'Claim stub',
+      'pos.claim_stub_tt': 'Print claim stub before sale starts',
+      'pos.empty_catalog_title': 'No items in inventory yet',
+      'inv.empty_title': 'No items in catalog yet'
+    },
+    tl: {
+      'nav.pos': 'Kaha ng benta',
+      'nav.new_repair': 'Bagong benta',
+      'nav.stock': 'Imbentaryo ng Paninda',
+      'nav.inventory': 'Mga Item',
+      'nav.rail_sub': 'Kaha ng benta',
+      'title.pos': 'Kaha ng Benta',
+      'title.inventory': 'Imbentaryo ng Produkto',
+      'inv.add_part': 'Magdagdag ng Item',
+      'inv.th_model': 'Item / Brand',
+      'inv.th_type': 'Kategorya / Klase',
+      'inv.all_types': 'Lahat ng Kategorya',
+      'inv.stat_parts': 'Item sa katalogo',
+      'inv.parts_count': 'item',
+      'bulk.title': 'Sabayang Pag-edit ng Item',
+      'bulk.parts_count': 'item',
+      'bulk.opt_archive': 'I-archive ang napiling mga item',
+      'bulk.opt_unarchive': 'Ibalik / i-unarchive ang napiling mga item',
+      'part.add_title': 'Magdagdag ng Produkto',
+      'part.edit_title': 'I-edit ang Produkto',
+      'part.save': 'I-save ang Produkto',
+      'part.brand': 'Brand / Gumawa',
+      'part.model': 'Pangalan ng Item *',
+      'part.type': 'Kategorya / Klase *',
+      'pos.intake_placeholder': 'Maghanap ng item gamit ang pangalan, barcode, o SKU...',
+      'pos.cart_empty': 'Walang item sa benta na ito',
+      'pos.collect': 'Singilin at Tapusin ang Benta',
+      'pos.search_ph': 'I-scan ang barcode o i-type ang item (Enter para idagdag)',
+      'pos.qa_add_item': 'Magdagdag ng item',
+      'returns.restock_note': 'Ang isinauling item ay ibabalik sa stock ng imbentaryo.',
+      'inv.search_ph': 'Maghanap ng item, brand, o SKU...',
+      'inv.all_brands': 'Lahat ng Brand',
+      'dash.top_title': 'Pinakamabentang mga item',
+      'pos.shelf_title': 'Lahat ng Makukuhang Item',
+      'pos.shelf_hint': 'Ipinapakita ang lahat ng aktibong item sa imbentaryo.',
+      'pos.th_item_name': 'Pangalan ng Item',
+      'pos.sum_items': 'Mga Item',
+      'pos.add_part_link': '+ Magdagdag ng bagong item sa imbentaryo',
+      'pos.add_part_link_tt': 'Magdagdag ng bagong item sa imbentaryo (Alt+A)',
+      'pos.summary_title': 'Buod ng benta',
+      'pos.cart_empty_hint': 'Walang item sa bentang ito. Pindutin ang + Add sa estante ng item.',
+      'pos.hold_job': 'I-hold ang benta',
+      'pos.hold_job_tt': 'I-hold ang kasalukuyang benta (Alt+H)',
+      'pos.claim_stub': 'Claim stub',
+      'pos.claim_stub_tt': 'I-print ang claim stub bago magsimula ang benta',
+      'pos.empty_catalog_title': 'Wala pang item sa imbentaryo',
+      'inv.empty_title': 'Wala pang item sa katalogo'
+    }
+  },
+  hybrid: {
+    en: {
+      'nav.pos': 'Sales & service',
+      'nav.new_repair': 'New order',
+      'nav.stock': 'Stock & catalog',
+      'nav.inventory': 'Master catalog',
+      'nav.rail_sub': 'Sales & service',
+      'title.pos': 'Sales & Service Counter',
+      'title.inventory': 'Master Inventory',
+      'inv.add_part': 'Add Item / Part',
+      'inv.th_model': 'Item / Brand / Model',
+      'inv.th_type': 'Category / Type',
+      'inv.all_types': 'All Categories & Types',
+      'inv.stat_parts': 'Items in catalog',
+      'inv.parts_count': 'item(s)',
+      'bulk.title': 'Bulk Edit Selected Items',
+      'bulk.parts_count': 'item(s)',
+      'bulk.opt_archive': 'Archive selected items',
+      'bulk.opt_unarchive': 'Restore / unarchive selected items',
+      'part.add_title': 'Add Item or Part',
+      'part.edit_title': 'Edit Item',
+      'part.save': 'Save Item',
+      'part.brand': 'Brand / Maker',
+      'part.model': 'Item / Model Name *',
+      'part.type': 'Category / Type *',
+      'pos.intake_placeholder': 'Search inventory by name, barcode, model, or SKU...',
+      'pos.cart_empty': 'No items in current order',
+      'pos.collect': 'Complete Order & Collect',
+      'pos.search_ph': 'Scan barcode or type item (press Enter to add)',
+      'pos.qa_add_item': 'Add item or part',
+      'returns.restock_note': 'Returning an item puts it back into inventory stock.',
+      'inv.search_ph': 'Search item, part, model, or SKU...',
+      'inv.all_brands': 'All Brands',
+      'dash.top_title': 'Top performing catalog items',
+      'pos.shelf_title': 'All Available Items & Parts',
+      'pos.shelf_hint': 'Showing all active catalog items in inventory.',
+      'pos.th_item_name': 'Item / Part Name',
+      'pos.sum_items': 'Items',
+      'pos.add_part_link': '+ Add item or part to inventory',
+      'pos.add_part_link_tt': 'Add item or part to inventory (Alt+A)',
+      'pos.summary_title': 'Order summary',
+      'pos.cart_empty_hint': 'No items in this order. Click + Add on the shelf.',
+      'pos.hold_job': 'Hold order',
+      'pos.hold_job_tt': 'Hold current order (Alt+H)',
+      'pos.claim_stub': 'Claim stub',
+      'pos.claim_stub_tt': 'Print claim stub before service starts',
+      'pos.empty_catalog_title': 'No items in inventory yet',
+      'inv.empty_title': 'No items in catalog yet'
+    },
+    tl: {
+      'nav.pos': 'Benta & serbisyo',
+      'nav.new_repair': 'Bagong order',
+      'nav.stock': 'Imbentaryo & Katalogo',
+      'nav.inventory': 'Katalogo ng Paninda',
+      'nav.rail_sub': 'Benta & serbisyo',
+      'title.pos': 'Kaha ng Benta at Serbisyo',
+      'title.inventory': 'Pangkalahatang Imbentaryo',
+      'inv.add_part': 'Magdagdag ng Item o Piyesa',
+      'inv.th_model': 'Item / Brand / Modelo',
+      'inv.th_type': 'Kategorya / Uri',
+      'inv.all_types': 'Lahat ng Kategorya',
+      'inv.stat_parts': 'Item sa katalogo',
+      'inv.parts_count': 'item',
+      'bulk.title': 'Sabayang Pag-edit ng Item',
+      'bulk.parts_count': 'item',
+      'bulk.opt_archive': 'I-archive ang napiling mga item',
+      'bulk.opt_unarchive': 'Ibalik / i-unarchive ang napiling mga item',
+      'part.add_title': 'Magdagdag ng Item o Piyesa',
+      'part.edit_title': 'I-edit ang Item',
+      'part.save': 'I-save ang Item',
+      'part.brand': 'Brand / Gumawa',
+      'part.model': 'Pangalan ng Item o Modelo *',
+      'part.type': 'Kategorya / Uri *',
+      'pos.intake_placeholder': 'Maghanap gamit ang pangalan, barcode, o SKU...',
+      'pos.cart_empty': 'Walang item sa order na ito',
+      'pos.collect': 'Singilin at Tapusin ang Order',
+      'pos.search_ph': 'I-scan ang barcode o i-type ang item (Enter para idagdag)',
+      'pos.qa_add_item': 'Magdagdag ng item o piyesa',
+      'returns.restock_note': 'Ang isinauling item ay ibabalik sa stock ng imbentaryo.',
+      'inv.search_ph': 'Maghanap ng item, piyesa, modelo, o SKU...',
+      'inv.all_brands': 'Lahat ng Brand',
+      'dash.top_title': 'Pinakamabentang mga item sa katalogo',
+      'pos.shelf_title': 'Lahat ng Makukuhang Item at Piyesa',
+      'pos.shelf_hint': 'Ipinapakita ang lahat ng aktibong item sa imbentaryo.',
+      'pos.th_item_name': 'Pangalan ng Item o Piyesa',
+      'pos.sum_items': 'Mga Item',
+      'pos.add_part_link': '+ Magdagdag ng item o piyesa sa imbentaryo',
+      'pos.add_part_link_tt': 'Magdagdag ng item o piyesa sa imbentaryo (Alt+A)',
+      'pos.summary_title': 'Buod ng order',
+      'pos.cart_empty_hint': 'Walang item sa order na ito. Pindutin ang + Add sa estante.',
+      'pos.hold_job': 'I-hold ang order',
+      'pos.hold_job_tt': 'I-hold ang kasalukuyang order (Alt+H)',
+      'pos.claim_stub': 'Claim stub',
+      'pos.claim_stub_tt': 'I-print ang claim stub bago magsimula ang order',
+      'pos.empty_catalog_title': 'Wala pang item sa imbentaryo',
+      'inv.empty_title': 'Wala pang item sa katalogo'
+    }
+  },
+  phone: {
+    en: {},
+    tl: {}
+  }
+};
+
+let currentProfile = 'hybrid';
+
+export function setBusinessProfile(profile) {
+  currentProfile = profile || 'hybrid';
+}
+
+export function getBusinessProfile() {
+  return currentProfile;
+}
 
 export function getLang() {
   return localStorage.getItem('pos_lang') || 'en';
@@ -410,6 +923,11 @@ export function getLang() {
 
 export function t(key, fallback = '') {
   const lang = getLang();
+  const profile = currentProfile || 'hybrid';
+  const overlay = PROFILE_VOCAB[profile]?.[lang] || PROFILE_VOCAB[profile]?.en;
+  if (overlay && overlay[key]) {
+    return overlay[key];
+  }
   return I18N[lang]?.[key] || I18N.en[key] || fallback || key;
 }
 
@@ -418,32 +936,34 @@ export function applyLanguage(lang) {
   localStorage.setItem('pos_lang', active);
   document.documentElement.lang = active;
 
+  const profile = currentProfile || 'hybrid';
+  const overlay = PROFILE_VOCAB[profile]?.[active] || PROFILE_VOCAB[profile]?.en || {};
+
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.dataset.i18n;
-    if (I18N[active]?.[key]) {
-      el.textContent = I18N[active][key];
-    } else if (I18N.en[key]) {
-      el.textContent = I18N.en[key];
-    }
+    const text = overlay[key] || I18N[active]?.[key] || I18N.en[key];
+    if (text) el.textContent = text;
   });
 
   document.querySelectorAll('[data-i18n-ph]').forEach(el => {
     const key = el.dataset.i18nPh;
-    if (I18N[active]?.[key]) {
-      el.placeholder = I18N[active][key];
-    } else if (I18N.en[key]) {
-      el.placeholder = I18N.en[key];
-    }
+    const ph = overlay[key] || I18N[active]?.[key] || I18N.en[key];
+    if (ph) el.placeholder = ph;
   });
 
   document.querySelectorAll('[data-i18n-title]').forEach(el => {
     const key = el.dataset.i18nTitle;
-    const val = I18N[active]?.[key] || I18N.en[key];
+    const val = overlay[key] || I18N[active]?.[key] || I18N.en[key];
     if (val) {
       el.title = val;
       el.setAttribute('aria-label', val);
     }
   });
+
+  const railSub = document.getElementById('rail-sub-title');
+  if (railSub) {
+    railSub.textContent = overlay['nav.rail_sub'] || I18N[active]?.['nav.rail_sub'] || I18N.en['nav.rail_sub'];
+  }
 
   const toggleLabel = document.getElementById('lang-toggle-label');
   if (toggleLabel) {
@@ -457,8 +977,9 @@ export function applyLanguage(lang) {
 
   const pageTitle = document.getElementById('page-title');
   const currentTab = document.body.dataset.tab;
-  if (pageTitle && currentTab && I18N[active]?.[`title.${currentTab}`]) {
-    pageTitle.textContent = I18N[active][`title.${currentTab}`];
+  if (pageTitle && currentTab) {
+    const titleKey = `title.${currentTab}`;
+    pageTitle.textContent = overlay[titleKey] || I18N[active]?.[titleKey] || I18N.en[titleKey] || pageTitle.textContent;
   }
 
   const bulkCount = document.getElementById('inv-bulk-count');

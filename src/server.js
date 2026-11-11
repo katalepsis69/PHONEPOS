@@ -88,6 +88,7 @@ const { resetDemoData, seedInitialParts } = require('./seed');
 const { checkForUpdates, applyUpdate, getUpdateProgress, consumeHandoffStatus, setUpdateLogSink, CURRENT_VERSION } = require('./updater');
 // [update] lines belong in pos-server.log, which console.log cannot reach in the packaged exe.
 setUpdateLogSink(logLine);
+require('./db').setDbLogSink(logLine);
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -685,7 +686,7 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           // none may be filed by a staff session.
           if (!elevated) return elevationDenied();
           const body = await parseBody(req);
-          return sendJson(res, 201, createWarrantyReturn(db, { sale_id: Number(returnSaleMatch[1]), ...body }, ctx));
+          return sendJson(res, 201, createWarrantyReturn(db, { ...body, sale_id: Number(returnSaleMatch[1]) }, ctx));
         }
 
         if (pathname === '/api/returns' && method === 'GET') {
@@ -759,8 +760,14 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           } catch (_) {}
           const lanEnabled = !isLoopbackHost(String(process.env.HOST || '127.0.0.1')) && process.env.POS_LAN_REPORT_ACK === '1';
           const portNum = server.address()?.port || Number(process.env.PORT) || 3000;
+          const baseStatus = getSyncStatus(db);
+          const freshRef = baseStatus.last_synced_at || syncLastAttemptAt;
+          const refMs = freshRef ? Date.parse(freshRef) : NaN;
+          const stale = Boolean(baseStatus.url_configured && !syncInFlight && Number.isFinite(refMs) && (Date.now() - refMs) > 120000);
           return sendJson(res, 200, {
-            ...getSyncStatus(db),
+            ...baseStatus,
+            in_flight: Boolean(syncInFlight),
+            stale,
             last_attempt_at: syncLastAttemptAt,
             last_error: syncLastError,
             next_attempt_in_ms: Math.max(0, syncNotBefore - Date.now()),
@@ -948,6 +955,7 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           validateSyncUrl(effectiveSyncUrl);
           const cleanCode = String(code || '').trim().replace(/\s+/g, '');
           if (!/^\d{6}$/.test(cleanCode)) {
+            logLine('pair-cloud refused: pairing code is not 6 digits');
             return sendJson(res, 400, { error: 'Pairing code must be 6 digits' });
           }
 
@@ -979,18 +987,24 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
               // never received. Name that state: retries with a new code will
               // 409 (the shop id is already paired), and recovery is a vendor
               // credential rotation.
+              logLine(`pair-cloud timed out after 15 s (shop ${shopIdentity}); the cloud may have spent the code already`);
               return sendJson(res, 504, { error: `The cloud did not answer within 15 s. The pairing may have completed on the cloud side anyway; if pushes later fail with 401, generate a new code and ask the vendor to rotate this shop's credential (shop ${shopIdentity}).` });
             }
+            logLine(`pair-cloud could not reach ${effectiveSyncUrl}: ${err.message}`);
             return sendJson(res, 502, { error: `Failed to reach cloud service at ${effectiveSyncUrl}: ${err.message}` });
           }
 
           if (!cloudRes.ok) {
             const errData = await cloudRes.json().catch(() => ({}));
+            logLine(`pair-cloud refused ${cloudRes.status}: ${errData.error || 'Pairing failed'}`);
             return sendJson(res, cloudRes.status, { error: errData.error || 'Pairing failed' });
           }
 
           const { shop_id, sync_token } = await cloudRes.json();
-          if (!sync_token) return sendJson(res, 502, { error: 'Cloud service did not return a sync token' });
+          if (!sync_token) {
+            logLine('pair-cloud: cloud returned no sync token');
+            return sendJson(res, 502, { error: 'Cloud service did not return a sync token' });
+          }
 
           txn(db, () => {
             updateSyncSetting(db, 'sync_url', effectiveSyncUrl);
@@ -1006,7 +1020,10 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
           });
           kickSync();
 
-          return sendJson(res, 200, { ok: true, shop_id, sync_url: effectiveSyncUrl, sync_token_configured: true, ...getShopSettings(db) });
+          const envOverride = process.env.SYNC_URL
+            ? { env_override_warning: 'SYNC_URL is set in the environment and wins over the paired target at drain time. Unset it to push to the cloud you just paired with.' }
+            : {};
+          return sendJson(res, 200, { ok: true, shop_id, sync_url: effectiveSyncUrl, sync_token_configured: true, ...envOverride, ...getShopSettings(db) });
         }
 
         // PRINTING (ESC/POS). The browser never lays out a printed slip: the
@@ -1453,9 +1470,19 @@ function createServer({ dbPath = RUNTIME_DB_PATH, backupDir = RUNTIME_BACKUP_DIR
             return sendJson(res, 200, { valid: false });
           }
           const actor = { type: 'manager', id: null, name: 'Manager' };
+          const sessionToken = issueSessionToken(db, actor);
+          // The factory PIN is printed in the manual, so elevation granted
+          // against it proves nothing: refuse it here exactly like
+          // /api/auth/elevate, or a LAN peer logging in with 1234 walks past the
+          // factory gate on every route that only checks elevation. change-pin
+          // stays reachable without elevation for first-run setup.
+          if (isDefaultPin(db)) {
+            audit(db, actor, false, 'security', 'login', {});
+            return sendJson(res, 200, { token: sessionToken, actor, pin_change_required: true });
+          }
           const { token: elevationToken, expiresAt } = issueElevationToken(db);
           audit(db, actor, true, 'security', 'login', {});
-          return sendJson(res, 200, { token: issueSessionToken(db, actor), actor, elevationToken, expiresAt });
+          return sendJson(res, 200, { token: sessionToken, actor, elevationToken, expiresAt });
         }
 
         if (pathname === '/api/auth/elevate' && method === 'POST') {

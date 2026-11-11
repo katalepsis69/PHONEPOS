@@ -21,15 +21,15 @@ const PALETTE_GROUPS = [
   {
     label: 'Parts',
     match: q => (S.posCatalog || S.inventoryItems).filter(p =>
-      `${p.brand} ${p.model_name} ${p.part_type} ${p.sku_barcode || ''}`.toLowerCase().includes(q)).slice(0, 6),
+      `${p.item_name || ''} ${p.brand} ${p.model_name} ${p.part_type} ${p.category || ''} ${p.sku_barcode || ''}`.toLowerCase().includes(q)).slice(0, 6),
     pick: p => {
       switchTab('pos');
       const input = document.getElementById('pos-search-input');
-      if (input) { input.value = `${p.brand} ${p.model_name}`; }
+      if (input) { input.value = p.item_name || `${p.brand} ${p.model_name}`; }
       renderPartsTable();
     },
     render: p => ({
-      main: `${escHtml(p.brand)} ${escHtml(p.model_name)} <span class="palette__sub-note">${escHtml(p.part_type)}</span>`,
+      main: `${escHtml(p.item_name || `${p.brand} ${p.model_name}`)} <span class="palette__sub-note">${escHtml(p.item_name ? (p.category || p.part_type || '') : p.part_type)}</span>`,
       sub: p.stock_quantity > 0 ? `${p.stock_quantity} in stock` : 'out of stock',
     }),
   },

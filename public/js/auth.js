@@ -1,8 +1,9 @@
 import { S } from './state.js';
 import { closeModal, confirmModal, escHtml, fmtMoney, formatDateTime, inputModal, openModal, showGate, showToast, showSkeleton, syncAppInert } from './ui.js';
-import { loadInventoryTable } from './views/inventory.js';
+import { loadInventoryTable, renderInvBrandFilter, renderPartTypeOptions, renderInventoryTable, setAddItemTemplate } from './views/inventory.js';
 import { syncAppearanceModal } from './theme.js';
-import { loadPosCatalog } from './views/pos.js';
+import { loadPosCatalog, renderBrandChips, renderCategoryOptions, renderPartsTable } from './views/pos.js';
+import { applyLanguage, setBusinessProfile } from './i18n.js';
 
 // Session / role state. Token lives in memory + sessionStorage (survives F5,
 // dies on tab close). Elevation rides the same storage with a 15-min TTL
@@ -388,6 +389,7 @@ export async function loadShopSettings() {
       S.shopSettingsUnavailable = false;
       hideSettingsBanner();
       updateGcashUiDisplays();
+      applyBusinessModeUi();
       enforcePinSetup();
       return;
     }
@@ -465,55 +467,203 @@ export function updateShopBrandUi() {
     'settings-settle-threshold': S.shopSettings.settle_elevation_threshold,
     'settings-shift-variance': S.shopSettings.shift_variance_threshold,
     'settings-default-retail-markup': S.shopSettings.default_retail_markup_pct ?? '50',
-    'settings-default-wholesale-markup': S.shopSettings.default_wholesale_markup_pct ?? '20'
+    'settings-default-wholesale-markup': S.shopSettings.default_wholesale_markup_pct ?? '20',
+    'settings-business-type': S.shopSettings.business_type || 'hybrid'
   };
   for (const [id, val] of Object.entries(inputs)) {
     const el = document.getElementById(id);
     if (el && typeof val !== 'undefined') el.value = val || '';
   }
+  const benchCb = document.getElementById('settings-enable-service-bench');
+  if (benchCb) benchCb.checked = S.shopSettings.enable_service_bench !== '0';
+  const fracCb = document.getElementById('settings-enable-fractional-qty');
+  if (fracCb) fracCb.checked = S.shopSettings.enable_fractional_qty === '1';
+  const serCb = document.getElementById('settings-enable-serial-tracking');
+  if (serCb) serCb.checked = S.shopSettings.enable_serial_tracking === '1';
+
   syncQrStatusUi(S.shopSettings.gcash_qr_url);
   syncCloudUi();
 }
 
+export function applyBusinessPreset(preset) {
+  const benchCb = document.getElementById('settings-enable-service-bench');
+  const fracCb = document.getElementById('settings-enable-fractional-qty');
+  const serCb = document.getElementById('settings-enable-serial-tracking');
+  if (!benchCb || !fracCb || !serCb) return;
+  if (preset === 'grocery') {
+    benchCb.checked = false;
+    fracCb.checked = true;
+    serCb.checked = false;
+  } else if (preset === 'pc') {
+    benchCb.checked = true;
+    fracCb.checked = false;
+    serCb.checked = true;
+  } else if (preset === 'phone') {
+    benchCb.checked = true;
+    fracCb.checked = false;
+    serCb.checked = false;
+  } else if (preset === 'retail') {
+    benchCb.checked = false;
+    fracCb.checked = false;
+    serCb.checked = false;
+  } else {
+    // hybrid
+    benchCb.checked = true;
+    fracCb.checked = true;
+    serCb.checked = true;
+  }
+}
+
+export function applyBusinessModeUi() {
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  setBusinessProfile(mode);
+  applyLanguage();
+
+  const isHybrid = mode === 'hybrid';
+  const templateBar = document.getElementById('item-template-bar');
+  if (templateBar) {
+    templateBar.classList.toggle('hidden', !isHybrid);
+  }
+
+  if (typeof setAddItemTemplate === 'function') {
+    setAddItemTemplate(mode === 'grocery' ? 'retail' : (mode === 'hybrid' ? 'retail' : mode));
+  }
+
+  const hasBench = S.shopSettings?.enable_service_bench !== 0 && S.shopSettings?.enable_service_bench !== '0';
+  const unitBox = document.querySelector('.unit.unit--compact');
+  const noteWrap = document.getElementById('repair-note-wrap');
+  const noteBtn = document.querySelector('[data-action="toggle-note"]');
+  const claimStubBtn = document.getElementById('btn-claim-stub') || document.querySelector('[data-action="print-claim-stub"]');
+  if (unitBox) unitBox.classList.toggle('hidden', !hasBench);
+  if (claimStubBtn) claimStubBtn.classList.toggle('hidden', !hasBench);
+  if (!hasBench) {
+    if (noteWrap) noteWrap.classList.add('hidden');
+    if (noteBtn) noteBtn.classList.add('hidden');
+  } else {
+    if (noteBtn) noteBtn.classList.remove('hidden');
+  }
+
+  if (typeof renderInvBrandFilter === 'function') renderInvBrandFilter();
+  if (typeof renderPartTypeOptions === 'function') renderPartTypeOptions();
+  if (typeof renderBrandChips === 'function') renderBrandChips();
+  if (typeof renderCategoryOptions === 'function') renderCategoryOptions();
+  if (typeof renderPartsTable === 'function') renderPartsTable();
+  if (typeof renderInventoryTable === 'function' && S.inventoryItems) {
+    renderInventoryTable(S.inventoryRowsCache || S.inventoryItems);
+  }
+}
+
 export const DEFAULT_CLOUD_URL = 'https://repairsync.bot-keep.xyz';
 
-export function syncCloudUi() {
+export function syncCloudUi(providedStatus) {
   const isConnected = Boolean(S.shopSettings.sync_url && S.shopSettings.sync_token_configured);
   const badge = document.getElementById('settings-sync-status-badge');
-  if (badge) {
-    badge.textContent = isConnected ? 'Connected' : 'Not connected';
-    badge.className = isConnected
-      ? 'px-2 py-0.5 rounded text-xs font-mono badge-emerald'
-      : 'px-2 py-0.5 rounded text-xs font-mono border border-[var(--line)] bg-[var(--surface-2)] text-[var(--txt-3)]';
-  }
   const disconnectBtn = document.getElementById('btn-disconnect-cloud');
   if (disconnectBtn) disconnectBtn.classList.toggle('hidden', !isConnected);
 
   const bannerBadge = document.getElementById('dash-cloud-badge');
-  if (bannerBadge) {
-    bannerBadge.textContent = isConnected ? 'Connected' : 'Remote Access';
-    bannerBadge.className = isConnected
-      ? 'px-1.5 py-0.2 rounded text-[10px] font-mono badge-emerald'
-      : 'px-1.5 py-0.2 rounded text-[10px] font-mono border border-[var(--line)] bg-[var(--surface-3)] text-[var(--txt-3)]';
-  }
   const bannerText = document.getElementById('dash-cloud-text');
-  if (bannerText) {
-    bannerText.innerHTML = isConnected
-      ? 'Real-time telemetry active. Counter sales and register totals stream live to <a href="https://repairsync.bot-keep.xyz/" target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 font-mono text-[var(--txt)]">repairsync.bot-keep.xyz</a>.'
-      : 'View live store sales and cash drawer from your phone anytime at <a href="https://repairsync.bot-keep.xyz/" target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 font-mono text-[var(--txt)]">repairsync.bot-keep.xyz</a>.';
-  }
   const btnLabel = document.getElementById('dash-cloud-btn-label');
   if (btnLabel) {
     btnLabel.textContent = isConnected ? 'Manage' : 'Pair Phone';
   }
-  const localUrlEl = document.getElementById('local-report-url');
-  if (localUrlEl && typeof fetch === 'function') {
-    fetch('/api/sync/status').then(r => r.ok ? r.json() : null).then(d => {
-      if (d && d.lan_report_url) {
-        localUrlEl.textContent = d.lan_report_url.replace(/^https?:\/\//, '');
-        localUrlEl.title = d.lan_report_url;
+
+  if (!isConnected) {
+    if (badge) {
+      badge.textContent = 'Not connected';
+      badge.className = 'px-2 py-0.5 rounded text-xs font-mono border border-[var(--line)] bg-[var(--surface-2)] text-[var(--txt-3)]';
+    }
+    if (bannerBadge) {
+      bannerBadge.textContent = 'Remote Access';
+      bannerBadge.className = 'px-1.5 py-0.2 rounded text-[10px] font-mono border border-[var(--line)] bg-[var(--surface-3)] text-[var(--txt-3)]';
+    }
+    if (bannerText) {
+      bannerText.innerHTML = 'View live store sales and cash drawer from your phone anytime at <a href="https://repairsync.bot-keep.xyz/" target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 font-mono text-[var(--txt)]">repairsync.bot-keep.xyz</a>.';
+    }
+    return;
+  }
+
+  const applyStatus = (d) => {
+    if (!d) return;
+    const localUrlEl = document.getElementById('local-report-url');
+    if (localUrlEl && d.lan_report_url) {
+      localUrlEl.textContent = d.lan_report_url.replace(/^https?:\/\//, '');
+      localUrlEl.title = d.lan_report_url;
+    }
+
+    if (d.offline) {
+      if (badge) {
+        badge.textContent = 'Sync offline';
+        badge.className = 'px-2 py-0.5 rounded text-xs font-mono border border-rose-500/40 bg-rose-500/15 text-rose-400';
       }
-    }).catch(() => {});
+      if (bannerBadge) {
+        bannerBadge.textContent = 'Sync offline';
+        bannerBadge.className = 'px-1.5 py-0.2 rounded text-[10px] font-mono border border-rose-500/40 bg-rose-500/15 text-rose-400';
+      }
+      if (bannerText) {
+        bannerText.innerHTML = 'Unable to reach sync service. Counter transactions held safely locally.';
+      }
+      return;
+    }
+
+    const n = d.pending || 0;
+    let badgeText = 'Connected · Synced';
+    let badgeClass = 'px-2 py-0.5 rounded text-xs font-mono badge-emerald';
+    let bannerTextVal = 'Connected';
+    let bannerClass = 'px-1.5 py-0.2 rounded text-[10px] font-mono badge-emerald';
+    let bannerMsg = 'Real-time telemetry active. Counter sales and register totals stream live to <a href="https://repairsync.bot-keep.xyz/" target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 font-mono text-[var(--txt)]">repairsync.bot-keep.xyz</a>.';
+
+    if (d.in_flight || d.state === 'syncing') {
+      badgeText = n > 0 ? `Syncing (${n})` : 'Syncing...';
+      badgeClass = 'px-2 py-0.5 rounded text-xs font-mono border border-sky-500/40 bg-sky-500/15 text-sky-400';
+      bannerTextVal = n > 0 ? `Syncing (${n})` : 'Syncing';
+      bannerClass = 'px-1.5 py-0.2 rounded text-[10px] font-mono border border-sky-500/40 bg-sky-500/15 text-sky-400';
+      bannerMsg = 'Streaming counter sales and cash drawer activity to cloud...';
+    } else if (d.last_error || d.state === 'attention') {
+      badgeText = n > 0 ? `Unsynced · ${n} queued` : 'Sync error';
+      badgeClass = 'px-2 py-0.5 rounded text-xs font-mono border border-rose-500/40 bg-rose-500/15 text-rose-400';
+      bannerTextVal = n > 0 ? `Unsynced (${n} queued)` : 'Sync error';
+      bannerClass = 'px-1.5 py-0.2 rounded text-[10px] font-mono border border-rose-500/40 bg-rose-500/15 text-rose-400';
+      bannerMsg = `Cloud sync paused (${escHtml(d.last_error || 'queued rows pending')}). All sales held safely locally.`;
+    } else if (d.stale) {
+      badgeText = n > 0 ? `Unsynced · ${n} queued` : 'Stale';
+      badgeClass = 'px-2 py-0.5 rounded text-xs font-mono border border-amber-500/40 bg-amber-500/15 text-amber-400';
+      bannerTextVal = n > 0 ? `Unsynced (${n} queued)` : 'Cloud stale';
+      bannerClass = 'px-1.5 py-0.2 rounded text-[10px] font-mono border border-amber-500/40 bg-amber-500/15 text-amber-400';
+      bannerMsg = n > 0
+        ? `${n} change${n === 1 ? '' : 's'} waiting to push. Telemetry stream has not reported in over 2 minutes.`
+        : 'Telemetry stream has not reported in over 2 minutes. Checking network connection...';
+    } else if (n > 0) {
+      badgeText = `Unsynced · ${n} queued`;
+      badgeClass = 'px-2 py-0.5 rounded text-xs font-mono border border-amber-500/40 bg-amber-500/15 text-amber-400';
+      bannerTextVal = `Unsynced (${n} queued)`;
+      bannerClass = 'px-1.5 py-0.2 rounded text-[10px] font-mono border border-amber-500/40 bg-amber-500/15 text-amber-400';
+      bannerMsg = `${n} sale(s) waiting to sync to the manager portal.`;
+    }
+
+    if (badge) {
+      badge.textContent = badgeText;
+      badge.className = badgeClass;
+    }
+    if (bannerBadge) {
+      bannerBadge.textContent = bannerTextVal;
+      bannerBadge.className = bannerClass;
+    }
+    if (bannerText) {
+      bannerText.innerHTML = bannerMsg;
+    }
+  };
+
+  if (providedStatus) {
+    applyStatus(providedStatus);
+    return;
+  }
+
+  if (typeof fetch === 'function') {
+    fetch('/api/sync/status')
+      .then(r => r.ok ? r.json() : { offline: true })
+      .then(applyStatus)
+      .catch(() => applyStatus({ offline: true }));
   }
 }
 
@@ -567,7 +717,7 @@ export function switchSettingsTab(tab) {
   if (tab === 'staff') renderStaffPanel();
 }
 
-// Read-only license card in the Data tab. Activation stays in its own overlay.
+// Interactive license card in the Data tab (plus full dialog option).
 export async function renderLicenseCard() {
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   try {
@@ -576,6 +726,9 @@ export async function renderLicenseCard() {
     set('license-card-machine-id', data.machine_id || '-');
     set('license-card-status', licenseChipText(data));
     set('license-card-customer', data.activated ? (data.customer_name || 'This workstation') : 'Not activated yet');
+    set('license-card-expires', data.activated
+      ? (data.expires_at ? `Until ${data.expires_at} (${data.days_left}d left)` : 'No expiry (Lifetime)')
+      : (data.trial_active ? `${data.trial_days_left} trial day(s) left` : 'Trial ended'));
   } catch (_) {
     set('license-card-status', 'Could not read the license status');
   }
@@ -817,6 +970,10 @@ export async function saveShopSettings(e) {
   const shift_variance_threshold = document.getElementById('settings-shift-variance')?.value.trim() || '50';
   const default_retail_markup_pct = document.getElementById('settings-default-retail-markup')?.value.trim() || '50';
   const default_wholesale_markup_pct = document.getElementById('settings-default-wholesale-markup')?.value.trim() || '20';
+  const business_type = document.getElementById('settings-business-type')?.value || 'hybrid';
+  const enable_service_bench = document.getElementById('settings-enable-service-bench')?.checked ? '1' : '0';
+  const enable_fractional_qty = document.getElementById('settings-enable-fractional-qty')?.checked ? '1' : '0';
+  const enable_serial_tracking = document.getElementById('settings-enable-serial-tracking')?.checked ? '1' : '0';
   const warranty_policy_text = document.getElementById('settings-warranty-policy').value.trim();
   const shop_footer_note = document.getElementById('settings-footer-note').value.trim();
   const sync_url = document.getElementById('settings-sync-url')?.value.trim() || '';
@@ -840,6 +997,10 @@ export async function saveShopSettings(e) {
         shift_variance_threshold,
         default_retail_markup_pct,
         default_wholesale_markup_pct,
+        business_type,
+        enable_service_bench,
+        enable_fractional_qty,
+        enable_serial_tracking,
         warranty_policy_text,
         shop_footer_note,
         sync_url,
@@ -861,6 +1022,7 @@ export async function saveShopSettings(e) {
 
     S.shopSettings = await res.json();
     updateGcashUiDisplays();
+    applyBusinessModeUi();
     enforcePinSetup();
     closeModal('modal-settings');
     showToast('Settings saved', 'success');
@@ -1017,14 +1179,159 @@ export function dismissLicenseOverlay() {
   syncAppInert();
 }
 
+export function extractLicenseKeyClient(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  const compact = s.replace(/\s+/g, '');
+  if (/^[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{40,}$/.test(compact)) return compact;
+  const chatMatch = s.match(/(ey[A-Za-z0-9_-]{14,}\.[A-Za-z0-9_-]{40,})/) || s.match(/([A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{40,})/);
+  if (chatMatch) return chatMatch[1];
+  return s;
+}
+
+export function inspectLicenseKeyClient(raw, currentMachineId = '') {
+  const cleaned = extractLicenseKeyClient(raw);
+  if (!cleaned) return null;
+  if (cleaned.startsWith('TP-') && !cleaned.includes('.')) {
+    return { ok: false, message: 'You pasted your Machine ID. Paste the signed License Key from the vendor.' };
+  }
+  const parts = cleaned.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return { ok: false, message: 'Incomplete key format (expected payload.signature).' };
+  }
+  try {
+    const b64 = parts[0].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+    const jsonStr = atob(padded);
+    const payload = JSON.parse(jsonStr);
+    const plan = (payload.plan_type || 'lifetime').toUpperCase();
+    const who = payload.customer_name || 'This workstation';
+    const exp = payload.expires_at ? `until ${payload.expires_at}` : 'no expiry';
+    if (currentMachineId && payload.machine_id && payload.machine_id !== currentMachineId) {
+      return {
+        ok: false,
+        message: `Key is bound to ${payload.machine_id} (this PC is ${currentMachineId}).`
+      };
+    }
+    return {
+      ok: true,
+      cleaned,
+      message: `Ready: ${who} · ${plan} (${exp})`
+    };
+  } catch (_) {
+    return { ok: false, message: 'Could not decode license key payload.' };
+  }
+}
+
+export function updateLicensePreview(inputId = 'license-key-input', previewId = 'license-key-preview') {
+  const input = document.getElementById(inputId);
+  const preview = document.getElementById(previewId);
+  if (!input || !preview) return;
+  const currentMid = (
+    document.getElementById('license-machine-id')?.textContent ||
+    document.getElementById('license-card-machine-id')?.textContent ||
+    ''
+  ).trim();
+  const info = inspectLicenseKeyClient(input.value, currentMid.startsWith('TP-') ? currentMid : '');
+  if (!info) {
+    preview.classList.add('hidden');
+    preview.textContent = '';
+    return;
+  }
+  preview.textContent = info.message;
+  preview.style.color = info.ok ? 'var(--pos)' : 'var(--warn)';
+  preview.classList.remove('hidden');
+}
+
+export async function copyMachineId(btnEl) {
+  const mid = (
+    document.getElementById('license-machine-id')?.textContent ||
+    document.getElementById('license-card-machine-id')?.textContent ||
+    document.getElementById('setup-machine-id')?.textContent ||
+    ''
+  ).trim();
+  if (!mid || mid === 'Loading...' || mid === '-') {
+    showToast('Machine ID is still loading', 'warning');
+    return;
+  }
+  let copied = false;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(mid);
+      copied = true;
+    } catch (_) {}
+  }
+  if (!copied) {
+    const ta = document.createElement('textarea');
+    ta.value = mid;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, mid.length);
+    try { copied = document.execCommand('copy'); } catch (_) {}
+    ta.remove();
+  }
+  if (copied) {
+    if (btnEl) {
+      const prev = btnEl.innerHTML;
+      btnEl.textContent = 'Copied!';
+      setTimeout(() => { btnEl.innerHTML = prev; }, 1600);
+    }
+    showToast(`Copied Machine ID: ${mid}`, 'success');
+  } else {
+    showToast(`Machine ID: ${mid}`, 'info');
+  }
+}
+
+export async function pasteLicenseKeyTo(inputId = 'license-key-input', previewId = 'license-key-preview') {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  try {
+    if (navigator.clipboard?.readText) {
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim()) {
+        input.value = extractLicenseKeyClient(text);
+        updateLicensePreview(inputId, previewId);
+        return;
+      }
+    }
+    input.focus();
+    showToast('Press Ctrl+V to paste your license key', 'info');
+  } catch (_) {
+    input.focus();
+    showToast('Press Ctrl+V to paste your license key', 'info');
+  }
+}
+
+export function handleLicenseFileUpload(event, inputId = 'license-key-input', previewId = 'license-key-preview') {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    const raw = String(e.target?.result || '');
+    const input = document.getElementById(inputId);
+    if (input) {
+      input.value = extractLicenseKeyClient(raw);
+      updateLicensePreview(inputId, previewId);
+      showToast(`Loaded key from ${file.name}`, 'info');
+    }
+    event.target.value = '';
+  };
+  reader.readAsText(file);
+}
+
 export async function checkLicenseStatus(forceOverlay = false) {
   try {
     const res = await fetch('/api/license/status');
     const data = await res.json();
     const overlay = document.getElementById('license-overlay');
     const machineIdEl = document.getElementById('license-machine-id');
+    const setupMidEl = document.getElementById('setup-machine-id');
 
     if (machineIdEl) machineIdEl.textContent = data.machine_id || 'Unknown';
+    if (setupMidEl) setupMidEl.textContent = data.machine_id || 'Unknown';
 
     S.licenseRequired = !!data.license_required;
     // A lifetime license has nothing to activate — a chip click confirms the
@@ -1036,7 +1343,7 @@ export async function checkLicenseStatus(forceOverlay = false) {
     } else {
       if (overlay) overlay.classList.add('hidden');
       if (forceOverlay && data.status === 'lifetime') {
-        showToast(`Licensed to ${data.customer_name || 'this workstation'} — no expiry`, 'success');
+        showToast(`Licensed to ${data.customer_name || 'this workstation'} - no expiry`, 'success');
       }
     }
     syncAppInert();
@@ -1074,7 +1381,8 @@ export async function checkLicenseStatus(forceOverlay = false) {
 export async function submitLicenseActivation() {
   const input = document.getElementById('license-key-input');
   const errorEl = document.getElementById('license-error');
-  const key = (input?.value || '').trim();
+  const btn = document.getElementById('btn-activate-license');
+  const key = extractLicenseKeyClient(input?.value || '');
 
   if (!key) {
     if (errorEl) { errorEl.textContent = 'Please paste a license key'; errorEl.classList.remove('hidden'); }
@@ -1089,6 +1397,10 @@ export async function submitLicenseActivation() {
     return;
   }
 
+  const wasLocked = Boolean(S.licenseRequired);
+  const prevBtnText = btn ? btn.textContent : 'Activate License';
+  if (btn) { btn.disabled = true; btn.textContent = 'Activating...'; }
+
   try {
     const res = await fetch('/api/license/activate', {
       method: 'POST',
@@ -1100,10 +1412,16 @@ export async function submitLicenseActivation() {
     if (data.activated) {
       const overlay = document.getElementById('license-overlay');
       if (overlay) overlay.classList.add('hidden');
-      syncAppInert(); // the reload below frees the app; this covers the 1s gap
+      if (input) input.value = '';
+      document.getElementById('license-key-preview')?.classList.add('hidden');
       if (errorEl) errorEl.classList.add('hidden');
       showToast(`License activated for ${data.customer_name || 'Customer'}`, 'success');
-      setTimeout(() => window.location.reload(), 1000);
+      await checkLicenseStatus(false);
+      await renderLicenseCard();
+      syncAppInert();
+      if (wasLocked) {
+        setTimeout(() => window.location.reload(), 600);
+      }
     } else {
       throw new Error(data.error || 'Activation failed');
     }
@@ -1112,6 +1430,53 @@ export async function submitLicenseActivation() {
       errorEl.textContent = err.message || 'Invalid license key';
       errorEl.classList.remove('hidden');
     }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prevBtnText; }
+  }
+}
+
+export async function submitSettingsLicenseActivation() {
+  const input = document.getElementById('settings-license-key-input');
+  const msgEl = document.getElementById('settings-license-msg');
+  const btn = document.getElementById('btn-settings-activate-license');
+  const key = extractLicenseKeyClient(input?.value || '');
+  const showMsg = (text, ok) => {
+    if (!msgEl) return;
+    msgEl.textContent = text;
+    msgEl.style.color = ok ? 'var(--pos)' : 'var(--danger)';
+    msgEl.classList.remove('hidden');
+  };
+
+  if (!key) {
+    showMsg('Please paste or load a license key first.', false);
+    input?.focus();
+    return;
+  }
+  if (key.startsWith('TP-') && !key.includes('.')) {
+    showMsg('You pasted your Machine ID. Please paste the signed License Key from the vendor.', false);
+    return;
+  }
+
+  const prevHtml = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Activating...'; }
+  try {
+    const res = await fetch('/api/license/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ license_key: key })
+    });
+    const data = await res.json();
+    if (!data.activated) throw new Error(data.error || 'Activation failed');
+    if (input) input.value = '';
+    document.getElementById('settings-license-preview')?.classList.add('hidden');
+    showMsg(`Activated for ${data.customer_name || 'this workstation'} (${licenseChipText(data)})`, true);
+    showToast(`License activated for ${data.customer_name || 'Customer'}`, 'success');
+    await checkLicenseStatus(false);
+    await renderLicenseCard();
+  } catch (err) {
+    showMsg(err.message || 'Invalid license key', false);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = prevHtml; }
   }
 }
 
@@ -1267,7 +1632,26 @@ export async function submitPinSetup() {
     // Seeding is convenience, not critical: report it, but don't block setup.
     if (shouldSeedParts) {
       const seedRes = await fetch('/api/inventory/seed-starter', { method: 'POST' });
-      if (!seedRes.ok) showToast('Shop is ready, but starter parts could not be seeded — add parts or import a CSV.', 'warning');
+      if (!seedRes.ok) showToast('Shop is ready, but starter parts could not be seeded - add parts or import a CSV.', 'warning');
+    }
+
+    const setupKey = extractLicenseKeyClient(document.getElementById('setup-license-key')?.value || '');
+    if (setupKey) {
+      try {
+        const licRes = await fetch('/api/license/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ license_key: setupKey })
+        });
+        const licData = await licRes.json().catch(() => ({}));
+        if (licData.activated) {
+          await checkLicenseStatus(false);
+        } else {
+          showToast(`Shop saved, but license key was not activated: ${licData.error || 'invalid key'}`, 'warning');
+        }
+      } catch (licErr) {
+        showToast(`Shop saved, but license key could not be verified: ${licErr.message || 'network error'}`, 'warning');
+      }
     }
 
     await loadShopSettings();

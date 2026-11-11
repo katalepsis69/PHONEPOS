@@ -10,7 +10,7 @@ const generateSaleCode = () => `SALE-${crypto.randomUUID().replace(/-/g, '').sli
 
 // A typo'd method is collected money that no dashboard bucket ever reports, so reject it here.
 const PAYMENT_METHODS = ['cash', 'gcash', 'transfer', 'credit'];
-const CUSTOMER_TYPES = ['retail', 'technician'];
+const CUSTOMER_TYPES = ['retail', 'technician', 'wholesale'];
 const str = v => (v ?? '').toString().trim();
 // Phone, payment reference and labor text have no catalog cap upstream; leave
 // the absurd out the same way inventory.js does for its own columns.
@@ -62,26 +62,36 @@ function createSale(db, {
     for (const row of db.prepare(`SELECT * FROM inventory WHERE id IN (${ph})`).all(...partIds)) invById.set(row.id, row);
   }
   for (const it of items) {
+    const isLabor = it.item_type === 'labor';
+    const inv = isLabor ? null : invById.get(it.inventory_id);
+    if (!isLabor && !inv) throw new Error(`Inventory item ID ${it.inventory_id} not found`);
+
+    const isFractional = Boolean(inv?.allow_fractional);
     const qty = Number(it.quantity);
-    if (!Number.isInteger(qty) || qty <= 0) throw new Error(`Invalid item quantity: ${it.quantity}. Must be a positive integer.`);
-    if (it.item_type === 'labor') {
+    if (!Number.isFinite(qty) || qty <= 0 || (!isFractional && !Number.isInteger(qty))) {
+      throw new Error(`Invalid item quantity: ${it.quantity}. Must be a positive ${isFractional ? 'number' : 'integer'}.`);
+    }
+    const cleanQty = isFractional ? Math.round(qty * 1000) / 1000 : qty;
+    // Rounding a sub-0.0005 fractional qty lands on 0; the raw qty > 0 check
+    // above passed, so re-guard the rounded value (adjustStock has the same rule).
+    if (cleanQty <= 0) throw new Error(`Invalid item quantity: ${it.quantity}. Must be a positive ${isFractional ? 'number' : 'integer'}.`);
+
+    if (isLabor) {
       const unitPrice = money(it.unit_price ?? 0.0);
       if (unitPrice < 0) throw new Error('Labor price cannot be negative');
-      const itemTotal = money(unitPrice * qty);
+      const itemTotal = money(unitPrice * cleanQty);
       subtotal = money(subtotal + itemTotal);
-      processedItems.push({ inventory_id: null, item_type: 'labor', item_name: capped(it.item_name, 200) || 'Repair / Service Labor', unit_cost: 0.0, unit_price: unitPrice, quantity: qty, total_price: itemTotal });
+      processedItems.push({ inventory_id: null, item_type: 'labor', item_name: capped(it.item_name, 200) || 'Service / Labor', unit_cost: 0.0, unit_price: unitPrice, quantity: cleanQty, total_price: itemTotal });
       continue;
     }
-    const inv = invById.get(it.inventory_id);
-    if (!inv) throw new Error(`Inventory item ID ${it.inventory_id} not found`);
-    if (inv.stock_quantity < qty) throw new Error(`Insufficient stock for ${inv.brand} ${inv.model_name} ${inv.part_type}. Available: ${inv.stock_quantity}`);
-    // Physical part prices are authoritative catalog data. Client-provided
-    // unit_price is display state and must not become a cashier price override.
-    const unitPrice = money(customer_type === 'technician' ? inv.price_technician : inv.price_retail);
+
+    if (inv.stock_quantity < cleanQty) throw new Error(`Insufficient stock for ${partLabel(inv)}. Available: ${inv.stock_quantity}`);
+    const isWholesale = customer_type === 'technician' || customer_type === 'wholesale';
+    const unitPrice = money(isWholesale ? inv.price_technician : inv.price_retail);
     if (unitPrice < 0) throw new Error('Part price cannot be negative');
-    const itemTotal = money(unitPrice * qty);
+    const itemTotal = money(unitPrice * cleanQty);
     subtotal = money(subtotal + itemTotal);
-    processedItems.push({ inventory_id: inv.id, item_type: 'part', item_name: partLabel(inv), unit_cost: inv.cost_price, unit_price: unitPrice, quantity: qty, total_price: itemTotal });
+    processedItems.push({ inventory_id: inv.id, item_type: 'part', item_name: partLabel(inv), unit_cost: inv.cost_price, unit_price: unitPrice, quantity: cleanQty, total_price: itemTotal });
   }
 
   const discountNum = money(discount ?? 0.0);

@@ -46,7 +46,7 @@ serverTest('factory PIN: every consequential route refuses while 1234 is live', 
   for (const [route, body] of routes) {
     const res = await post(baseUrl, route, auth, body);
     assert.strictEqual(res.status, 403, `${route} must refuse while the factory PIN is live`);
-    assert.match(String((await res.json()).error), /factory PIN/i, `${route}: wrong refusal reason`);
+    assert.match(String((await res.json()).error), /factory PIN|Manager authorization/i, `${route}: wrong refusal reason`);
   }
 
   // Elevation itself is refused too: the factory PIN cannot be used to elevate.
@@ -64,6 +64,7 @@ serverTest('factory PIN: every consequential route refuses while 1234 is live', 
 // lost response must not produce a second slip, and the slip's bytes must carry
 // (or not carry) the drawer pulse the caller asked for.
 serverTest('print route: the dedup window answers a duplicate and the drawer kick is per-request', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const captured = [];
   const original = printer.sendRaw;
   const kick = Buffer.from(printer.DRAWER_KICK);

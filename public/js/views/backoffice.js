@@ -1,7 +1,7 @@
 import { S } from '../state.js';
 import { t } from '../i18n.js';
 import { closeModal, confirmModal, escHtml, fmtMoney, formatDateOnly, formatDateTime, inputModal, openModal, showSkeleton, showToast, warrantyDays } from '../ui.js';
-import { hasElevation, requireManagerPin } from '../auth.js';
+import { hasElevation, requireManagerPin, syncCloudUi } from '../auth.js';
 import { autoPrintEnabled, loadCustomerSuggestions, loadPosCatalog } from '../views/pos.js';
 import { autoPrintSlip, printPeriodSummary, printSlip, renderReceipt, renderSettlementReceipt, shopIdentityIsPlaceholder } from '../receipts.js';
 import { renderTrendChart } from '../chart.js';
@@ -187,13 +187,13 @@ export function syncReturnDefectAndQuantity() {
   const item = currentReturnSaleItems.find(it => it.id === selectedId);
   if (!item) return;
 
-  const returnable = Math.max(1, item.quantity - (item.returned_quantity || 0));
+  const returnable = Math.max(0, Math.round((item.quantity - (item.returned_quantity || 0)) * 1000) / 1000);
   const qtyInput = document.getElementById('return-quantity');
   const qtyHint = document.getElementById('return-quantity-hint');
   if (qtyInput) {
     qtyInput.max = returnable;
-    if (Number(qtyInput.value) > returnable || Number(qtyInput.value) < 1) {
-      qtyInput.value = 1;
+    if (Number(qtyInput.value) > returnable || Number(qtyInput.value) < 0.001) {
+      qtyInput.value = Math.min(1, returnable) || 0.001;
     }
   }
   if (qtyHint) {
@@ -282,7 +282,7 @@ export async function submitWarrantyReturn(e) {
   const saleItemId = document.getElementById('return-item-select').value;
   const returnType = document.getElementById('return-action').value;
   const returnReason = document.getElementById('return-reason').value;
-  const quantity = Math.max(1, parseInt(document.getElementById('return-quantity')?.value, 10) || 1);
+  const quantity = Math.max(0.001, parseFloat(document.getElementById('return-quantity')?.value) || 1);
   const notes = document.getElementById('return-notes').value;
 
   if (!saleItemId) {
@@ -1135,35 +1135,35 @@ function renderDashboard(s) {
   const c = s.current, st = s.standing || {};
 
   $id('dash-range').textContent = windowLabel(s);
-  $id('dash-trend-hint').textContent = (s.period === '365d' || s.days >= 365) ? 'Per month, hover a bar for detail.' : 'Per day, hover a bar for detail.';
+  $id('dash-trend-hint').textContent = (s.period === '365d' || s.days >= 365) ? t('dash.trend_hint_month', 'Per month, hover a bar for detail.') : t('dash.trend_hint_day', 'Per day, hover a bar for detail.');
 
   // KPI row
   $id('dash-revenue').textContent = fmtMoney(c.revenue);
   deltaTag($id('dash-revenue-delta'), s.deltas.revenue);
-  $id('dash-revenue-split').textContent = `Parts ${fmtMoney(c.parts_revenue)} · Labor ${fmtMoney(c.labor_revenue)}`;
+  $id('dash-revenue-split').textContent = `${t('dash.parts', 'Parts')} ${fmtMoney(c.parts_revenue)} · ${t('dash.labor', 'Labor')} ${fmtMoney(c.labor_revenue)}`;
   $id('dash-sales').textContent = c.sale_count;
   deltaTag($id('dash-sales-delta'), s.deltas.sale_count);
   // Every return type is named, so count and money always agree with each
   // other — a utang erase or a swap is invisible in no other panel.
-  const swapWord = n => `${n} swap${n === 1 ? '' : 's'}`;
+  const swapWord = n => t(n === 1 ? 'dash.swap_count' : 'dash.swaps_count', `{n} swap${n === 1 ? '' : 's'}`).replace('{n}', n);
   $id('dash-sales-meta').textContent = [
-    c.warranty_returns > 0 ? `${c.warranty_returns} return${c.warranty_returns === 1 ? '' : 's'}` : 'no returns',
-    c.return_cash > 0 ? `${fmtMoney(c.return_cash)} cash refunded` : '',
-    c.return_credit > 0 ? `${fmtMoney(c.return_credit)} off utang` : '',
+    c.warranty_returns > 0 ? t(c.warranty_returns === 1 ? 'dash.return_count' : 'dash.returns_count', `{n} return${c.warranty_returns === 1 ? '' : 's'}`).replace('{n}', c.warranty_returns) : t('dash.no_returns', 'no returns'),
+    c.return_cash > 0 ? `${fmtMoney(c.return_cash)} ${t('dash.cash_refunded', 'cash refunded')}` : '',
+    c.return_credit > 0 ? `${fmtMoney(c.return_credit)} ${t('dash.off_utang', 'off utang')}` : '',
     c.return_replacements > 0 ? swapWord(c.return_replacements) : ''
   ].filter(Boolean).join(' · ');
   $id('dash-avg-ticket').textContent = fmtMoney(c.avg_ticket);
   deltaTag($id('dash-avg-delta'), s.deltas.avg_ticket);
-  $id('dash-avg-meta').textContent = `Collected ${fmtMoney(c.collected_total)}`;
+  $id('dash-avg-meta').textContent = `${t('dash.collected', 'Collected')} ${fmtMoney(c.collected_total)}`;
   $id('dash-profit').textContent = fmtMoney(c.gross_profit);
   deltaTag($id('dash-profit-delta'), s.deltas.gross_profit);
   let profitMeta = c.replacement_cost > 0
-    ? `Net ${fmtMoney(c.net_profit)} after refunds & replacements`
-    : `Net ${fmtMoney(c.net_profit)} after refunds`;
+    ? `${t('dash.net', 'Net')} ${fmtMoney(c.net_profit)} ${t('dash.after_refunds_replacements', 'after refunds & replacements')}`
+    : `${t('dash.net', 'Net')} ${fmtMoney(c.net_profit)} ${t('dash.after_refunds', 'after refunds')}`;
   if (typeof s.drawer_variance === 'number' && Math.abs(s.drawer_variance) >= 0.01) {
     const adjNet = c.net_profit + s.drawer_variance;
-    const varText = s.drawer_variance < 0 ? `shortage -${fmtMoney(Math.abs(s.drawer_variance))}` : `overage +${fmtMoney(s.drawer_variance)}`;
-    profitMeta += ` · Drawer ${varText} (Adj ${fmtMoney(adjNet)})`;
+    const varText = s.drawer_variance < 0 ? `${t('dash.shortage', 'shortage')} -${fmtMoney(Math.abs(s.drawer_variance))}` : `${t('dash.overage', 'overage')} +${fmtMoney(s.drawer_variance)}`;
+    profitMeta += ` · ${t('dash.drawer', 'Drawer')} ${varText} (${t('dash.adj', 'Adj')} ${fmtMoney(adjNet)})`;
   }
   $id('dash-profit-meta').textContent = profitMeta;
 
@@ -1426,6 +1426,7 @@ export async function loadDashboardData(opts = {}) {
   const request = ++dashboardRequest;
   wireDashboardControls();
   if (!silent) syncPeriodUi();
+  if (typeof syncCloudUi === 'function') syncCloudUi();
   try {
     const qs = new URLSearchParams({ period: dashState.period });
     if (dashState.date) qs.set('date', dashState.date);
@@ -1976,7 +1977,7 @@ export async function checkForAppUpdates(silent = false) {
       const banner = document.getElementById('update-notification-banner');
       const bannerText = document.getElementById('update-banner-text');
       const bannerNotes = document.getElementById('update-banner-notes');
-      if (banner && !_bannerDismissed) {
+      if (banner && !_bannerDismissed && !silent) {
         if (bannerText) bannerText.textContent = `A new version (${data.latestVersion}) is available!`;
         if (bannerNotes) bannerNotes.href = data.htmlUrl || 'https://github.com/katalepsis69/PHONEPOS/releases';
         banner.classList.remove('hidden');
@@ -1986,7 +1987,7 @@ export async function checkForAppUpdates(silent = false) {
       const chip = document.getElementById('update-status-chip');
       const chipText = document.getElementById('update-chip-text');
       const chipIcon = chip?.querySelector('i');
-      if (chip) {
+      if (chip && !silent) {
         if (chipIcon) chipIcon.className = 'ph ph-arrow-circle-up w-3.5 h-3.5 text-emerald-400';
         if (chipText) chipText.textContent = `Update ${data.latestVersion}`;
         chip.classList.remove('hidden');
@@ -2007,7 +2008,10 @@ export async function checkForAppUpdates(silent = false) {
           applyAppUpdate();
         });
       }
-      openModal('modal-update');
+      // The boot check is silent: the update shows in Settings (status line and
+      // Apply button above), not as a modal over the counter. A manual check
+      // (silent=false) still pops the full notification.
+      if (!silent) openModal('modal-update');
 
       if (!silent) showToast(`Update ${data.latestVersion} is available!`, 'info');
     } else {
@@ -2145,6 +2149,7 @@ function showUpdateHandoffStalled(releaseUrl, waitedS) {
         </div>
         <h2 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 8px;">The register has not come back</h2>
         <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 12px;">Nothing answered here for ${waitedS} seconds. Start TechParts POS again and press Update Now to retry the swap.</p>
+        <p style="color: #64748b; font-size: 0.75rem; margin-bottom: 12px;">If it stays stuck, the swap log is at %LOCALAPPDATA%\\TechPartsPOS\\TechPartsPOS_update.handoff.log.</p>
         <p id="update-handoff-clock" style="color: #94a3b8; font-size: 0.8125rem; margin-bottom: 20px;">Waiting for the register to answer. 0s elapsed.</p>
         <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
           <button type="button" id="update-handoff-wait" style="${btn} background: #06b6d4; color: #0b1120;">Keep waiting</button>

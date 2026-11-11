@@ -6,6 +6,13 @@ const os = require('os');
 const { ensureSyncTables, enqueueRow } = require('./sync');
 const { hashRow } = require('./audit');
 
+// Boot notices (the SKU-collision rename) must reach pos-server.log in the
+// packaged exe, which discards console.log. The server wires this to logLine,
+// same pattern as the updater's setUpdateLogSink.
+let dbLogSink = null;
+function setDbLogSink(fn) { dbLogSink = typeof fn === 'function' ? fn : null; }
+const dbLog = (msg) => { if (dbLogSink) { try { dbLogSink(msg); return; } catch (_) {} } console.log(msg); };
+
 let cachedBaseDir = null;
 
 // A write probe beats accessSync: Windows ACLs make directory permission
@@ -331,7 +338,12 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
     for (const [col, ddl] of [
       ['supplier', "ALTER TABLE inventory ADD COLUMN supplier TEXT NOT NULL DEFAULT ''"],
       ['location', "ALTER TABLE inventory ADD COLUMN location TEXT NOT NULL DEFAULT ''"],
-      ['archived', 'ALTER TABLE inventory ADD COLUMN archived INTEGER NOT NULL DEFAULT 0']
+      ['archived', 'ALTER TABLE inventory ADD COLUMN archived INTEGER NOT NULL DEFAULT 0'],
+      ['item_name', 'ALTER TABLE inventory ADD COLUMN item_name TEXT DEFAULT NULL'],
+      ['category', "ALTER TABLE inventory ADD COLUMN category TEXT NOT NULL DEFAULT ''"],
+      ['uom', "ALTER TABLE inventory ADD COLUMN uom TEXT NOT NULL DEFAULT 'pcs'"],
+      ['allow_fractional', 'ALTER TABLE inventory ADD COLUMN allow_fractional INTEGER NOT NULL DEFAULT 0'],
+      ['track_serial', 'ALTER TABLE inventory ADD COLUMN track_serial INTEGER NOT NULL DEFAULT 0']
     ]) {
       if (!invCols.includes(col)) db.exec(ddl);
     }
@@ -373,7 +385,7 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
           seenSku.add(row.sku);
         }
       }
-      if (renamedSkus) console.log(`[init] renamed ${renamedSkus} part(s) whose SKU collided case-insensitively; each loser carries its row id as a suffix`);
+      if (renamedSkus) dbLog(`[init] renamed ${renamedSkus} part(s) whose SKU collided case-insensitively; each loser carries its row id as a suffix`);
       db.prepare("UPDATE inventory SET sku_barcode = UPPER(TRIM(sku_barcode)) WHERE sku_barcode IS NOT NULL").run();
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_sku_nocase ON inventory(sku_barcode COLLATE NOCASE) WHERE sku_barcode IS NOT NULL');
       db.exec('COMMIT');
@@ -407,6 +419,11 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
 
     // Seed default shop settings if missing
     const insertSetting = db.prepare('INSERT OR IGNORE INTO shop_settings (key, value) VALUES (?, ?)');
+    insertSetting.run('business_type', 'hybrid');
+    insertSetting.run('enable_service_bench', '1');
+    insertSetting.run('enable_fractional_qty', '1');
+    insertSetting.run('enable_serial_tracking', '1');
+    insertSetting.run('wholesale_tier_label', 'Wholesale');
     insertSetting.run('gcash_name', 'TechParts Repair & POS');
     insertSetting.run('gcash_number', '0917-123-4567');
     insertSetting.run('gcash_qr_url', '');
@@ -438,4 +455,4 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
   }
 }
 
-module.exports = { initDb, DEFAULT_DB_PATH, getBaseDir, isReleaseShaped };
+module.exports = { initDb, DEFAULT_DB_PATH, getBaseDir, isReleaseShaped, setDbLogSink };

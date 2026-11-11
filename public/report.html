@@ -237,7 +237,7 @@
     }
     .rpt-input:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
     .rpt-btn {
-      width: 100%; border: none; border-radius: 11px; cursor: pointer;
+      width: 100%; min-height: 44px; border: none; border-radius: 11px; cursor: pointer;
       background: var(--accent); color: var(--accent-ink);
       font: inherit; font-weight: 650; font-size: 14.5px; padding: 12px;
       box-shadow: var(--shadow-accent);
@@ -466,7 +466,14 @@
       <h1 class="rpt-gate__title">Workstation locked</h1>
       <p class="rpt-gate__hint" id="license-msg">Trial ended. Activate this workstation to continue.</p>
       <p class="rpt-gate__mono" id="license-mid" hidden></p>
-      <button type="button" class="rpt-btn rpt-btn--quiet" id="btn-license-back">Back to login</button>
+      <div class="rpt-gate__form">
+        <button type="button" class="rpt-btn rpt-btn--quiet" id="btn-rpt-copy-mid" style="padding:10px 12px;font-size:13px">Copy Machine ID</button>
+        <label class="sr-only" for="rpt-license-key">License key</label>
+        <textarea id="rpt-license-key" rows="3" class="rpt-input" style="font-size:12px;letter-spacing:normal;text-align:left;padding:10px" placeholder="Paste license key or vendor message here to unlock counter..."></textarea>
+        <p id="rpt-license-err" class="rpt-err" hidden></p>
+        <button type="button" class="rpt-btn" id="btn-rpt-activate">Activate Workstation</button>
+        <button type="button" class="rpt-btn rpt-btn--quiet" id="btn-license-back">Back to login</button>
+      </div>
     </div>
   </main>
 

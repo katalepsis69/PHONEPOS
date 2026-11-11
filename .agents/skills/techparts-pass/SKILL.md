@@ -21,7 +21,7 @@ item lists, file scopes) pass through to the pass verbatim.
 | clean, delete dead code, remove debris, scrub | Cleaning | `docs/code-cleaning-prompt.md` |
 | add tests, harden, close coverage gaps | Test hardening | `docs/test-hardening-prompt.md` |
 | batch, implement these items (+ item list) | Feature batch | `docs/feature-batch-prompt.md` |
-| full, pipeline, everything, the whole order | Standing order below | all six, in order |
+| full, pipeline, everything, the whole order | Standing order below | five passes; six with items |
 
 Ambiguous words get ONE question with the two candidate passes before
 anything starts ("clean up the code" could be cleaning or refactoring).
@@ -35,6 +35,9 @@ when the user supplies items to build. Hard boundaries between passes:
   specific numbered findings. (This project's audit prompt records a standing
   blanket-approval workflow; the audit prompt itself governs, not this line.)
 - Remediation fixes only the approved numbers, one at a time, gates after each.
+  In a full-pipeline run the audit's standing blanket approval IS the approved
+  list: the audit run fixes every finding itself, so remediation verifies those
+  fixes and closes any remainder instead of asking for numbers.
 - Refactoring and cleaning each WAIT for approval of their PHASE 1 proposal
   lists before touching anything.
 - Test hardening adds tests only; source stays read-only in that pass.
@@ -47,7 +50,7 @@ when the user supplies items to build. Hard boundaries between passes:
 - Gates before any change: `npm run build:css` exits 0 (regenerates
   public/tailwind.build.css after any Tailwind class change), and `npm test`
   (node --test tests/*.test.js) passes at the recorded baseline with exit 0
-  (536/536 measured 2026-11-09, about 22 s; a hang is a rerun, not a
+  (568/568 measured 2026-11-11 across 49 test files, about 25 s; a hang is a rerun, not a
   regression). Each pass's baseline ritual re-measures and records the count.
 - Never commit unless the user asks.
 - Zero em dashes in any report.

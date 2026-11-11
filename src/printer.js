@@ -334,6 +334,15 @@ function saleFooterRows(settings, cols) {
     .map((line) => ({ text: line, centered: true }));
 }
 
+function defaultShopSubtitle(settings = {}) {
+  const type = settings.business_type || 'hybrid';
+  if (type === 'grocery') return 'Grocery & General Merchandise';
+  if (type === 'pc') return 'PC & Electronics Sales & Services';
+  if (type === 'retail') return 'Retail & General Merchandise';
+  if (type === 'hybrid') return 'Sales & Repair Services';
+  return 'Phone Parts, LCDs & Repair Service';
+}
+
 function saleShopNameRows(settings, cols) {
   return nameLines(settings.gcash_name, Math.floor(cols / 2)).map((line) => ({ text: line, wide: true, centered: true }));
 }
@@ -375,7 +384,7 @@ function saleSlipStandard(sale, settings, cols) {
   const push = (text, opts) => slip.push({ text, ...opts });
   const lines = (v, wide) => wrap(v, wide ? Math.floor(cols / 2) : cols).forEach((t) => push(t, wide ? { wide: true, centered: true } : {}));
   for (const line of nameLines(settings.gcash_name, Math.floor(cols / 2))) push(line, { wide: true, centered: true });
-  lines(settings.shop_address || 'Phone Parts, LCDs & Repair Service');
+  lines(settings.shop_address || defaultShopSubtitle(settings));
   lines(`Tel/GCash: ${settings.gcash_number || ''}`);
   push(rule(cols));
   push('OFFICIAL RECEIPT', { centered: true });
@@ -446,7 +455,7 @@ function saleSlipBoxed(sale, settings, cols) {
   const push = (text, opts) => slip.push({ text, ...opts });
   const lines = (v, wide) => wrap(v, wide ? Math.floor(cols / 2) : cols).forEach((t) => push(t, wide ? { wide: true, centered: true } : {}));
   for (const line of nameLines(settings.gcash_name, Math.floor(cols / 2))) push(line, { wide: true, centered: true });
-  lines(settings.shop_address || 'Phone Parts, LCDs & Repair Service');
+  lines(settings.shop_address || defaultShopSubtitle(settings));
   lines(`Tel/GCash: ${settings.gcash_number || ''}`);
   push(hr);
   push('OFFICIAL RECEIPT', { centered: true });
@@ -613,7 +622,7 @@ function renderClaimStubSlip(job, settings) {
   const push = (text, opts) => slip.push({ text, ...opts });
   const lines = (v, wide) => wrap(v, wide ? Math.floor(cols / 2) : cols).forEach((t) => push(t, wide ? { wide: true, centered: true } : {}));
   for (const line of nameLines(settings.gcash_name, Math.floor(cols / 2))) push(line, { wide: true, centered: true });
-  lines(settings.shop_address || 'Phone Parts, LCDs & Repair Service');
+  lines(settings.shop_address || defaultShopSubtitle(settings));
   lines('Tel/GCash: ' + (settings.gcash_number || ''));
   push(rule(cols));
   push('REPAIR CLAIM STUB', { centered: true });
@@ -665,7 +674,7 @@ function renderSettlementSlip(payment, customer, settings) {
   // same order, off the same helper. This is payment proof for a debt reduction:
   // the roll has to name who took the money and how to reach them, and for a GCash
   // collection the printed number frequently IS the receiving account.
-  lines(settings.shop_address || 'Phone Parts, LCDs & Repair Service');
+  lines(settings.shop_address || defaultShopSubtitle(settings));
   lines(`Tel/GCash: ${settings.gcash_number || ''}`);
   push(rule(cols));
   push('SETTLEMENT RECEIPT', { centered: true });

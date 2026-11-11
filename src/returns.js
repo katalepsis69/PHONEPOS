@@ -64,7 +64,17 @@ function createWarrantyReturn(db, {
   const item = db.prepare('SELECT * FROM sale_items WHERE id = ? AND sale_id = ?').get(sale_item_id, sale_id);
   if (!item) throw new Error(`Sale item ID ${sale_item_id} not found on this sale`);
 
-  const qty = Math.max(1, parseInt(quantity, 10) || 1);
+  const invMeta = item.inventory_id ? getInventoryItem(db, item.inventory_id) : null;
+  const allowFrac = Boolean(invMeta?.allow_fractional) || !Number.isInteger(Number(item.quantity));
+  const roundQty = q => Math.round(Number(q) * 1000) / 1000;
+  let qty;
+  if (allowFrac) {
+    const rawQty = quantity === undefined || quantity === null || quantity === '' ? 1 : Number(quantity);
+    qty = Number.isFinite(rawQty) && rawQty > 0 ? roundQty(rawQty) : 0;
+    if (!(qty > 0)) qty = Math.min(1, roundQty(item.quantity));
+  } else {
+    qty = Math.max(1, parseInt(quantity, 10) || 1);
+  }
 
   const alreadyReturned = db.prepare(`
     SELECT COALESCE(SUM(quantity), 0) as total_returned
@@ -72,7 +82,7 @@ function createWarrantyReturn(db, {
     WHERE sale_item_id = ?
   `).get(sale_item_id)?.total_returned || 0;
 
-  if (alreadyReturned + qty > item.quantity) {
+  if (alreadyReturned + qty > item.quantity + 1e-6) {
     throw new Error(`Cannot return item: already returned ${alreadyReturned} of ${item.quantity} purchased unit(s)`);
   }
 
@@ -101,7 +111,7 @@ function createWarrantyReturn(db, {
           throw new Error(`Cross-part-type replacement rejected: returned ${returned.part_type}, offered ${inv.part_type}`);
         }
       }
-      if (!inv || inv.stock_quantity < qty) {
+      if (!inv || inv.stock_quantity + 1e-6 < qty) {
         throw new Error(`Insufficient stock for replacement part: ${inv ? inv.model_name : 'unknown'} (needed: ${qty}, available: ${inv ? inv.stock_quantity : 0})`);
       }
       adjustStock(db, repTargetId, -qty, { reason: 'rma_replacement', ref: returnCode });
@@ -118,10 +128,9 @@ function createWarrantyReturn(db, {
       // scaled by the sale's discount exactly like the cash path below, or a
       // discounted utang sale forgives the discount share twice: the credit
       // ceiling used to be the undiscounted unit_price * qty.
-      const discountedUnit = sale.subtotal > 0
-        ? money((item.total_price / item.quantity) * sale.total_amount / sale.subtotal)
+      const discountedTotal = sale.subtotal > 0
+        ? money((item.total_price / item.quantity) * qty * sale.total_amount / sale.subtotal)
         : 0;
-      const discountedTotal = money(discountedUnit * qty);
       finalRefundAmount = money(Math.min(
         finalRefundAmount > 0 ? finalRefundAmount : discountedTotal,
         discountedTotal,
@@ -131,10 +140,9 @@ function createWarrantyReturn(db, {
       db.prepare('UPDATE sales SET credit_balance = ? WHERE id = ?').run(newCreditBal, sale.id);
       enqueueRow(db, 'sales', sale.id);
     } else if (return_type === 'cash_refund') {
-      const discountedUnit = sale.subtotal > 0
-        ? money((item.total_price / item.quantity) * sale.total_amount / sale.subtotal)
+      const discountedTotal = sale.subtotal > 0
+        ? money((item.total_price / item.quantity) * qty * sale.total_amount / sale.subtotal)
         : 0;
-      const discountedTotal = money(discountedUnit * qty);
       const refunds = db.prepare(`
         SELECT
           COALESCE(SUM(CASE WHEN return_type = 'cash_refund' THEN refund_amount ELSE 0 END), 0) AS cash_refunded,

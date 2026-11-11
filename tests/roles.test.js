@@ -15,8 +15,8 @@ const post = (url, body, headers = {}) => fetch(url, {
   body: JSON.stringify(body)
 });
 
-async function managerLogin(baseUrl) {
-  const res = await post(`${baseUrl}/api/auth/login`, { pin: '1234' });
+async function managerLogin(baseUrl, pin = '1234') {
+  const res = await post(`${baseUrl}/api/auth/login`, { pin });
   return { res, data: await j(res) };
 }
 
@@ -176,7 +176,21 @@ dbTest('audit_log is append-only: UPDATE and DELETE both throw', (db) => {
   assert.strictEqual(db.prepare('SELECT COUNT(*) AS c FROM audit_log').get().c, 1);
 });
 
+serverTest('F20: the factory PIN grants a session but no elevation until it is replaced', async (baseUrl, db, auth) => {
+  const login = async (pin) => (await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin })
+  })).json();
+  const factory = await login('1234');
+  assert.ok(factory.token, 'factory login still issues a session');
+  assert.strictEqual(factory.elevationToken, undefined, 'the factory PIN must not grant elevation');
+  assert.strictEqual(factory.pin_change_required, true);
+  await ensurePinChanged(baseUrl, auth);
+  const changed = await login('4321');
+  assert.ok(changed.elevationToken, 'a non-factory PIN grants elevation on login');
+});
+
 serverTest('Permission matrix: 401 without session, 403 for staff without elevation, 200 with elevation', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   // Create a part to mutate later.
   const mk = await post(`${baseUrl}/api/inventory`, { brand: 'Apple', model_name: 'X', part_type: 'LCD', cost_price: 1, price_retail: 2, stock_quantity: 5 }, auth);
   const part = await j(mk);
@@ -247,8 +261,9 @@ serverTest('Permission matrix: 401 without session, 403 for staff without elevat
   assert.strictEqual((await post(`${baseUrl}/api/sales/${sale2.id}/returns`, { sale_item_id: sale2.items[0].id, return_type: 'cash_refund', return_reason: 'other' }, { ...auth, ...jBody })).status, 201);
 
   // 4. Manager session WITHOUT elevation: 403, and a staff session is not enough.
-  const mLogin = await managerLogin(baseUrl);
-  const mNoElev = { Authorization: `Bearer ${mLogin.data.token}` };
+  // Strip the elevation header from the manager session (a non-factory login
+  // always grants elevation, so the factory PIN can no longer produce this state).
+  const mNoElev = { Authorization: auth.Authorization };
   assert.strictEqual((await fetch(`${baseUrl}/api/dashboard`, { headers: mNoElev })).status, 403);
 });
 
@@ -288,6 +303,7 @@ serverTest('Elevate endpoint: refused on the factory PIN, then correct PIN issue
 });
 
 serverTest('Login audits success and failure; audit rows carry the server-derived actor', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   createStaff(db, 'Jun', '4321');
   const staffList = await j(await fetch(`${baseUrl}/api/auth/staff`, { headers: auth }));
 
@@ -306,8 +322,9 @@ serverTest('Login audits success and failure; audit rows carry the server-derive
   const mgrBad = await post(`${baseUrl}/api/auth/login`, { pin: '0000' });
   assert.strictEqual((await j(mgrBad)).valid, false);
 
-  // Manager login succeeds and auto-elevates.
-  const mgr = await managerLogin(baseUrl);
+  // Manager login succeeds and auto-elevates (with a non-factory PIN: the
+  // factory PIN no longer grants elevation).
+  const mgr = await managerLogin(baseUrl, '4321');
   assert.ok(mgr.data.elevationToken, 'manager login counts as a fresh PIN entry');
   assert.ok(mgr.data.token);
 
@@ -342,6 +359,7 @@ serverTest('Login audits success and failure; audit rows carry the server-derive
 });
 
 serverTest('Audit filters: category and days narrow the view', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   await post(`${baseUrl}/api/inventory`, { brand: 'A', model_name: 'B', part_type: 'C', stock_quantity: 1 }, auth);
   await fetch(`${baseUrl}/api/backup`, { method: 'POST', headers: auth });
 
@@ -421,6 +439,7 @@ serverTest('Elevation attempts land in the audit log', async (baseUrl, db, auth)
 
 // M2: cost prices stripped from sale details for non-elevated staff.
 serverTest('Sale details hide unit_cost from staff, show it to elevated sessions', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const part = await j(await post(`${baseUrl}/api/inventory`, { brand: 'A', model_name: 'B', part_type: 'C', cost_price: 12.5, price_retail: 30, stock_quantity: 2 }, auth));
   const sale = await j(await post(`${baseUrl}/api/sales`, {
     customer_name: 'Cost Strip', items: [{ inventory_id: part.id, quantity: 1, unit_price: 30 }], amount_paid: 30
@@ -442,6 +461,7 @@ serverTest('Sale details hide unit_cost from staff, show it to elevated sessions
 // M2b: the same strip must cover the OTHER routes that carry sale items —
 // the POST /api/sales response and the customer ledger's embedded sales.
 serverTest('Sale creation response and customer ledger also hide unit_cost from staff', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const part = await j(await post(`${baseUrl}/api/inventory`, { brand: 'A', model_name: 'B', part_type: 'C', cost_price: 12.5, price_retail: 30, stock_quantity: 2 }, auth));
 
   createStaff(db, 'Jun', '4321');
@@ -459,6 +479,7 @@ serverTest('Sale creation response and customer ledger also hide unit_cost from 
 });
 
 serverTest('Staff inventory reads hide cost and checkout cannot forge a part price', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const part = await j(await post(`${baseUrl}/api/inventory`, {
     brand: 'Server', model_name: 'Priced', part_type: 'LCD', sku_barcode: 'SAFE-PRICE-1',
     cost_price: 12.5, price_retail: 30, price_technician: 24, stock_quantity: 3

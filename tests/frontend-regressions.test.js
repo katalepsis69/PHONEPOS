@@ -138,7 +138,10 @@ test('cart math mirrors the server cent rule and cart lines re-price from the ca
     [[1.1, 3], [2.2, 7]],
     [[19.99, 1], [0.07, 13], [3.33, 5]],
     [[999.99, 2], [0.01, 1]],
-    [[49.95, 3], [0.05, 9]]
+    [[49.95, 3], [0.05, 9]],
+    // Fractional quantities: the client must round the unit*qty product the
+    // way src/money.js does, not cents(unit)*qty (a centavo off on halves).
+    [[0.25, 0.58], [0.05, 0.7], [0.2, 0.575], [0.33, 0.333]]
   ];
   for (const c of cases) {
     S.cart = c.map(([price, qty], i) => ({ id: i + 1, is_labor: false, price_retail: price, qty }));
@@ -185,6 +188,12 @@ test('cart math mirrors the server cent rule and cart lines re-price from the ca
   assert.equal(S.cart[0].price_retail, 120.5);
   assert.equal(S.cart[0].price_technician, 95.25);
   assert.equal(S.cart[0].stock, 3);
+  // F2: the stale wholesale snapshot must refresh too, or unitPriceOf quotes
+  // a price the register will not charge.
+  S.cart = [{ id: 7, is_labor: false, price_retail: 100, price_technician: 90, price_wholesale: 90, stock: 9, qty: 2 }];
+  S.posCatalog = [{ id: 7, price_retail: 120.5, price_technician: 95.25, price_wholesale: 95.25, stock_quantity: 3 }];
+  vm.runInContext('repriceCartLines()', ctx);
+  assert.equal(S.cart[0].price_wholesale, 95.25);
   // A part gone from the catalog keeps its snapshot; the server rejects with
   // its own error rather than the screen inventing a price.
   S.cart = [{ id: 99, is_labor: false, price_retail: 42, price_technician: 40, stock: 1, qty: 1 }];

@@ -223,6 +223,8 @@ export async function loadInventoryTable() {
     if (request !== inventoryRequest) return;
     renderInventoryTable(items);
     renderInventoryMetrics(items);
+    const reorderPanel = document.getElementById('inv-reorder-panel');
+    if (reorderPanel && !reorderPanel.classList.contains('hidden')) loadReorderPanel();
   } catch (err) {
     if (request !== inventoryRequest) return;
     console.error('Failed to load inventory table:', err);
@@ -250,8 +252,12 @@ export async function loadInventoryTable() {
 // initialized in state.js: S.inventoryRowsCache
 
 export function renderInventoryMetrics(items) {
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const visible = (mode !== 'hybrid')
+    ? items.filter(item => itemMatchesProfile(item, mode))
+    : items;
   let inStock = 0, low = 0, out = 0, units = 0;
-  items.forEach(i => {
+  visible.forEach(i => {
     const q = Number(i.stock_quantity) || 0;
     units += q;
     if (q <= 0) out++;
@@ -259,7 +265,7 @@ export function renderInventoryMetrics(items) {
     else inStock++;
   });
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  set('inv-metric-total', items.length);
+  set('inv-metric-total', visible.length);
   set('inv-metric-stock', `${units.toLocaleString()} ${t('inv.stat_units', 'units on hand')}`);
   set('inv-metric-in', inStock);
   set('inv-metric-low', low);
@@ -309,16 +315,19 @@ function reorderGroups(report) {
   return groups;
 }
 
-const reorderItemName = r => `${r.brand} ${r.model_name} - ${r.part_type}`;
+const reorderItemName = r => r.item_name || `${r.brand} ${r.model_name} - ${r.part_type}`;
 
 const round2 = v => Math.round((Number(v) || 0) * 100) / 100;
+const roundQty = v => Math.round((Number(v) || 0) * 1000) / 1000;
 
 // The edited order quantity lives in the DOM input — single source of truth,
 // no edit-state to keep in sync. Falls back to the server suggestion.
 function domQty(id, fallback) {
   const input = document.querySelector(`input[data-qty-id="${id}"]`);
   if (!input) return fallback;
-  return Math.max(0, Math.floor(Number(input.value) || 0));
+  const row = reorderReport?.rows?.find(r => r.id === id);
+  const raw = Math.max(0, Number(input.value) || 0);
+  return row?.allow_fractional ? roundQty(raw) : Math.floor(raw);
 }
 
 // One cell renderer for the est-cost column, used at render time and on live
@@ -350,7 +359,8 @@ function updateReorderSummary() {
       }
     }
   }
-  const base = `${parts} ${parts === 1 ? 'part' : 'parts'} · ${units} ${units === 1 ? 'unit' : 'units'}`;
+  const cleanUnits = roundQty(units);
+  const base = `${parts} ${parts === 1 ? 'part' : 'parts'} · ${cleanUnits} ${cleanUnits === 1 ? 'unit' : 'units'}`;
   sumEl.textContent = hasCost ? `${base} · ${fmtMoney(round2(cost))}` : base;
 }
 
@@ -361,7 +371,8 @@ function updateReorderMoney(inputEl) {
   updateReorderSummary();
   const row = reorderReport.rows.find(r => r.id === Number(inputEl.dataset.qtyId));
   if (!row || row.cost_price == null) return;
-  const qty = Math.max(0, Math.floor(Number(inputEl.value) || 0));
+  const raw = Math.max(0, Number(inputEl.value) || 0);
+  const qty = row.allow_fractional ? roundQty(raw) : Math.floor(raw);
   const estCell = document.querySelector(`[data-est-id="${row.id}"]`);
   if (estCell) estCell.innerHTML = estCellHtml(row, qty);
   const group = inputEl.closest('[data-reorder-group]');
@@ -493,7 +504,7 @@ function renderReorderPanel(report) {
             <td class="is-num font-mono tabular-nums">${r.qty_sold}</td>
             <td class="is-num font-mono tabular-nums">${r.stock_quantity}</td>
             <td class="is-num">
-              <input type="number" inputmode="numeric" min="0" step="1" value="${r.suggested_qty}" data-qty-id="${r.id}"
+              <input type="number" inputmode="${r.allow_fractional ? 'decimal' : 'numeric'}" min="0" step="${r.allow_fractional ? 'any' : '1'}" value="${r.suggested_qty}" data-qty-id="${r.id}"
                 class="reorder-qty"
                 aria-label="${escHtml(t('inv.reorder_col_order', 'Order quantity'))} - ${escHtml(reorderItemName(r))}">
             </td>
@@ -509,15 +520,31 @@ function renderReorderPanel(report) {
   updateReorderSummary();
 }
 
+export const TEMPLATE_CATEGORIES = {
+  grocery: ['Beverages', 'Canned Goods', 'Snacks & Chips', 'Dairy & Eggs', 'Instant Noodles', 'Rice & Grains', 'Condiments & Sauces', 'Personal Care', 'Household & Cleaning', 'Other'],
+  retail: ['Apparel & Clothing', 'Accessories', 'Electronics', 'Footwear', 'Health & Beauty', 'Home & Living', 'Stationery & Office', 'Toys & Hobbies', 'Other'],
+  pc: ['Processors (CPU)', 'Motherboards', 'Graphics Cards (GPU)', 'Memory (RAM)', 'Storage (SSD/HDD)', 'Power Supplies (PSU)', 'Cases & Chassis', 'Cooling', 'Peripherals', 'Other'],
+  phone: ['LCD Screens', 'Batteries', 'Charging Ports & Flex', 'Back Glass & Housing', 'Cameras & Lenses', 'Speakers & Audio', 'Buttons & Switches', 'Accessories', 'Other'],
+  service: ['Hardware Repair', 'Software & Flashing', 'Diagnostics & Cleaning', 'Installation', 'Other']
+};
+
 export function renderPartTypeOptions() {
   const sel = document.getElementById('inv-type-filter');
   if (!sel) return;
   const current = sel.value;
-  const types = [...new Set(S.inventoryItems.map(i => (i.part_type || '').trim()).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b));
-  sel.innerHTML = `<option value="" data-i18n="inv.all_types">${escHtml(t('inv.all_types', 'All Part Types'))}</option>` +
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const profileItems = (mode !== 'hybrid')
+    ? S.inventoryItems.filter(i => itemMatchesProfile(i, mode))
+    : S.inventoryItems;
+
+  const catalogTypes = [...new Set(profileItems.map(i => (i.part_type || i.category || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const templateTypes = (TEMPLATE_CATEGORIES[mode] || TEMPLATE_CATEGORIES.retail || []).filter(c => c !== 'Other');
+  const types = catalogTypes.length > 0 ? catalogTypes : templateTypes;
+
+  sel.innerHTML = `<option value="" data-i18n="inv.all_types">${escHtml(t('inv.all_types', 'All Categories'))}</option>` +
     types.map(tp => `<option value="${escHtml(tp)}">${escHtml(tp)}</option>`).join('');
   if (types.includes(current)) sel.value = current;
+  else sel.value = '';
 }
 
 // The inventory tab's brand filter mirrors the POS one: options from the live
@@ -527,8 +554,16 @@ export function renderInvBrandFilter() {
   const sel = document.getElementById('inv-brand-filter');
   if (!sel) return;
   const current = sel.value;
-  const brands = [...new Set(S.inventoryItems.map(i => i.brand))].sort();
-  sel.innerHTML = '<option value="">All Brands</option>' +
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const profileItems = (mode !== 'hybrid')
+    ? S.inventoryItems.filter(i => itemMatchesProfile(i, mode))
+    : S.inventoryItems;
+
+  const catalogBrands = [...new Set(profileItems.map(i => (i.brand || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const templateBrands = (TEMPLATE_BRANDS[mode] || TEMPLATE_BRANDS.retail || []).filter(b => b !== 'Other');
+  const brands = catalogBrands.length > 0 ? catalogBrands : templateBrands;
+
+  sel.innerHTML = `<option value="" data-i18n="inv.all_brands">${escHtml(t('inv.all_brands', 'All Brands'))}</option>` +
     brands.map(b => `<option value="${escHtml(b)}">${escHtml(b)}</option>`).join('');
   if (brands.includes(current)) sel.value = current;
   else sel.value = '';
@@ -546,12 +581,14 @@ export function attachPartCombos({ brandId, modelId, typeId }) {
       getOptions: q => {
         const brand = document.getElementById(brandId)?.value || '';
         const ql = q.toLowerCase();
-        return [...new Set(S.inventoryItems.filter(i => i.brand === brand).map(i => i.model_name))]
+        const mode = S.shopSettings?.business_type || 'hybrid';
+        const profileItems = mode === 'hybrid' ? S.inventoryItems : S.inventoryItems.filter(i => itemMatchesProfile(i, mode));
+        return [...new Set(profileItems.filter(i => !brand || i.brand === brand).map(i => i.model_name || i.item_name).filter(Boolean))]
           .sort()
           .filter(m => m.toLowerCase().includes(ql));
       },
       renderOption: m => `<span class="combo__name">${escHtml(m)}</span>`,
-      renderEmpty: q => `<div class="combo__empty">No saved model${q ? ' matching “' + escHtml(q) + '”' : ' for this brand'} — your text will be saved as new.</div>`
+      renderEmpty: q => `<div class="combo__empty">No saved model${q ? ' matching "' + escHtml(q) + '"' : ' for this brand'} - your text will be saved as new.</div>`
     });
   }
   const typeInput = document.getElementById(typeId);
@@ -559,12 +596,16 @@ export function attachPartCombos({ brandId, modelId, typeId }) {
     attachCombo(typeInput, {
       getOptions: q => {
         const ql = q.toLowerCase();
-        return [...new Set(S.inventoryItems.map(i => (i.part_type || '').trim()).filter(Boolean))]
+        const mode = S.shopSettings?.business_type || 'hybrid';
+        const profileItems = mode === 'hybrid' ? S.inventoryItems : S.inventoryItems.filter(i => itemMatchesProfile(i, mode));
+        const catalogTypes = profileItems.map(i => (i.part_type || i.category || '').trim()).filter(Boolean);
+        const templateTypes = TEMPLATE_CATEGORIES[mode] || TEMPLATE_CATEGORIES.retail || [];
+        return [...new Set([...catalogTypes, ...templateTypes])]
           .sort((a, b) => a.localeCompare(b))
           .filter(t => t.toLowerCase().includes(ql));
       },
       renderOption: t => `<span class="combo__name">${escHtml(t)}</span>`,
-      renderEmpty: q => `<div class="combo__empty">No saved part type${q ? ' matching “' + escHtml(q) + '”' : ''} - your text will be saved as new.</div>`
+      renderEmpty: q => `<div class="combo__empty">No saved category / type${q ? ' matching "' + escHtml(q) + '"' : ''} - your text will be saved as new.</div>`
     });
   }
 }
@@ -581,26 +622,77 @@ export function attachSkuWarning(inputId, warnId, excludeIdFn) {
   });
 }
 
+export function itemMatchesProfile(item, profile) {
+  if (!profile || profile === 'hybrid') return true;
+
+  const b = String(item.brand || '').trim().toLowerCase();
+  const m = String(item.model_name || '').trim().toLowerCase();
+  const pt = String(item.part_type || '').trim().toLowerCase();
+  const cat = String(item.category || '').trim().toLowerCase();
+  const name = String(item.item_name || '').trim().toLowerCase();
+  const combined = `${b} ${m} ${pt} ${cat} ${name}`;
+
+  const isPhonePart = (
+    /\b(lcd|oled|amoled|incell|screen|touchscreen|flex cable|charging port|camera glass|housing|back cover)\b/i.test(combined) ||
+    ((/\bbattery\b/i.test(combined)) && (/\b(iphone|galaxy|redmi|note|poco|infinix|tecno|realme|oppo|vivo|huawei|samsung|apple|pixel)\b/i.test(combined))) ||
+    (/^(apple|xiaomi|infinix|tecno|realme|oppo|vivo|huawei)$/i.test(b) && !name && !item.allow_fractional)
+  );
+
+  const isPcPart = (
+    /\b(gpu|cpu|motherboard|mobo|ram|ddr4|ddr5|ddr3|nvme|ssd|hdd|power supply|psu|pc case|cooler|thermal paste|graphics card|processor|geforce|radeon|ryzen|intel core)\b/i.test(combined) ||
+    /^(asus|gigabyte|msi|kingston|corsair|amd|intel|deepcool|fantech|western digital|seagate|nvidia|asrock|zotac|palit)$/i.test(b)
+  );
+
+  if (profile === 'phone') {
+    return isPhonePart;
+  }
+  if (profile === 'pc') {
+    if (isPhonePart) return false;
+    return isPcPart;
+  }
+  if (profile === 'grocery') {
+    if (isPhonePart) return false;
+    if (isPcPart && !/\b(peripherals|mouse|keyboard|cable|usb)\b/i.test(combined)) return false;
+    return true;
+  }
+  if (profile === 'retail') {
+    if (isPhonePart) return false;
+    return true;
+  }
+  if (profile === 'service') {
+    if (isPhonePart || isPcPart) return false;
+    return true;
+  }
+
+  return true;
+}
+
 export function renderInventoryTable(items) {
   S.inventoryRowsCache = items;
   const tbody = document.getElementById('inventory-tbody');
   if (!tbody) return;
 
-  if (items.length === 0) {
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const visibleItems = (mode !== 'hybrid')
+    ? items.filter(item => itemMatchesProfile(item, mode))
+    : items;
+
+  if (visibleItems.length === 0) {
+    const hint = escHtml(t('inv.empty_catalog_hint', 'Adjust the filter, or add a new item to the catalog.'));
     tbody.innerHTML = `
       <tr><td colspan="9">
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-package w-5 h-5"></i></div>
-          <div class="empty__title">No parts in this view</div>
-          <p class="empty__body">Adjust the brand or low-stock filter, or add a new phone part to the catalog.</p>
+          <div class="empty__title">${escHtml(t('inv.empty_title', 'No items in catalog yet'))}</div>
+          <p class="empty__body">${hint}</p>
+          <button type="button" class="chip" data-action="open-add-part" data-manager-only>+ ${escHtml(t('inv.add_part', 'Add Item'))}</button>
         </div>
-      </td></tr>
-    `;
+      </td></tr>`;
     updateBulkBar();
     return;
   }
 
-  tbody.innerHTML = items.map(item => {
+  tbody.innerHTML = visibleItems.map(item => {
     const isOut = item.stock_quantity <= 0;
     const isLow = item.stock_quantity > 0 && item.stock_quantity <= item.min_stock_alert;
     const statusBadge = item.archived
@@ -657,11 +749,130 @@ export function renderInventoryTable(items) {
   updateBulkBar();
 }
 
+export const TEMPLATE_BRANDS = {
+  grocery: ['Generic', 'Nestle', 'Unilever', 'Coca-Cola', 'Monde Nissin', 'Universal Robina', 'San Miguel', 'Procter & Gamble', 'Other'],
+  retail: ['Generic', 'Bench', 'Penshoppe', 'Uniqlo', 'Miniso', 'Nike', 'Adidas', 'Other'],
+  pc: ['Generic', 'ASUS', 'Gigabyte', 'MSI', 'Kingston', 'Corsair', 'AMD', 'Intel', 'Western Digital', 'Seagate', 'Deepcool', 'Fantech', 'Logitech', 'Other'],
+  phone: ['Apple', 'Samsung', 'Xiaomi', 'Infinix', 'Tecno', 'Realme', 'Oppo', 'Vivo', 'Huawei', 'Other'],
+  service: ['Service', 'Other']
+};
+
+let currentAddTemplate = 'retail';
+
+export function setAddItemTemplate(tpl) {
+  currentAddTemplate = tpl || 'retail';
+
+  ['retail', 'pc', 'phone', 'service'].forEach(k => {
+    const btn = document.getElementById(`tpl-btn-${k}`);
+    if (btn) btn.classList.toggle('is-active', k === currentAddTemplate);
+  });
+
+  const brandSel = document.getElementById('part-brand');
+  const brands = TEMPLATE_BRANDS[tpl] || TEMPLATE_BRANDS.retail;
+  if (brandSel) {
+    brandSel.innerHTML = brands.map(b => `<option value="${escHtml(b)}">${escHtml(b)}</option>`).join('');
+    brandSel.value = brands[0];
+  }
+
+  const nameInput = document.getElementById('part-name');
+  const nameLabel = document.getElementById('label-part-name');
+  const modelInput = document.getElementById('part-model');
+  const modelLabel = document.querySelector('label[for="part-model"]');
+  const typeInput = document.getElementById('part-type');
+  const typeLabel = document.querySelector('label[for="part-type"]');
+  const costInput = document.getElementById('part-cost');
+  const retailInput = document.getElementById('part-retail');
+  const techInput = document.getElementById('part-tech');
+  const stockInput = document.getElementById('part-stock');
+  const skuInput = document.getElementById('part-sku');
+  const uomSel = document.getElementById('part-uom');
+  const fracCb = document.getElementById('part-allow-fractional');
+  const serialCb = document.getElementById('part-track-serial');
+
+  if (tpl === 'retail') {
+    if (nameLabel) nameLabel.innerHTML = 'Product / Item Name *';
+    if (nameInput) { nameInput.placeholder = 'e.g. San Miguel Pale Pilsen 330ml, Alaska Evaporated Milk'; nameInput.required = true; }
+    if (modelLabel) modelLabel.textContent = 'Variant / Size';
+    if (modelInput) { modelInput.placeholder = 'e.g. 1.5L, 330ml, Pack of 6'; modelInput.required = false; }
+    if (typeLabel) typeLabel.textContent = 'Category / Department *';
+    if (typeInput) typeInput.placeholder = 'e.g. Beverages, Canned Goods, Snacks, Condiments';
+    if (skuInput) skuInput.placeholder = 'e.g. 4800016644408 (Scan Barcode)';
+    if (uomSel) uomSel.value = 'pcs';
+    if (fracCb) fracCb.checked = S.shopSettings?.enable_fractional_qty === '1';
+    if (serialCb) serialCb.checked = false;
+    nameInput?.focus();
+  } else if (tpl === 'pc') {
+    if (nameLabel) nameLabel.innerHTML = 'Component / Hardware Name *';
+    if (nameInput) { nameInput.placeholder = 'e.g. GeForce RTX 4060 Ventus 2X 8GB OC, Fury 16GB DDR5'; nameInput.required = true; }
+    if (modelLabel) modelLabel.textContent = 'Model / Spec *';
+    if (modelInput) { modelInput.placeholder = 'e.g. RTX 4060, B650M-A, 1TB NVMe'; modelInput.required = true; }
+    if (typeLabel) typeLabel.textContent = 'Component Category *';
+    if (typeInput) typeInput.placeholder = 'e.g. GPU, CPU, Motherboard, RAM, SSD, Power Supply, Case';
+    if (skuInput) skuInput.placeholder = 'e.g. Serial / Barcode';
+    if (uomSel) uomSel.value = 'pcs';
+    if (fracCb) fracCb.checked = false;
+    if (serialCb) serialCb.checked = S.shopSettings?.enable_serial_tracking !== '0';
+    nameInput?.focus();
+  } else if (tpl === 'phone') {
+    if (nameLabel) nameLabel.innerHTML = 'Part Name <span class="field__opt">optional alias</span>';
+    if (nameInput) { nameInput.placeholder = 'e.g. iPhone 11 Incell Screen Replacement'; nameInput.required = false; }
+    if (modelLabel) modelLabel.textContent = 'Phone Model *';
+    if (modelInput) { modelInput.placeholder = 'e.g. iPhone 11, Redmi Note 12, Galaxy A14'; modelInput.required = true; }
+    if (typeLabel) typeLabel.textContent = 'Part Type / Screen Spec *';
+    if (typeInput) typeInput.placeholder = 'e.g. LCD (OLED), LCD (Incell), Battery 5000mAh, Port Flex';
+    if (skuInput) skuInput.placeholder = 'e.g. AP-LCD-11';
+    if (uomSel) uomSel.value = 'pcs';
+    if (fracCb) fracCb.checked = false;
+    if (serialCb) serialCb.checked = false;
+    modelInput?.focus();
+  } else if (tpl === 'service') {
+    if (nameLabel) nameLabel.innerHTML = 'Service / Job Description *';
+    if (nameInput) { nameInput.placeholder = 'e.g. Windows 11 Format + Basic Apps, Screen Replacement Labor, Deep Cleaning'; nameInput.required = true; }
+    if (modelLabel) modelLabel.textContent = 'Type / Detail';
+    if (modelInput) { modelInput.value = 'Labor'; modelInput.required = false; }
+    if (typeLabel) typeLabel.textContent = 'Service Category *';
+    if (typeInput) { typeInput.value = 'Service'; typeInput.placeholder = 'e.g. Software, Hardware Labor, Cleaning, Diagnostics'; }
+    if (costInput && (!costInput.value || costInput.value === '450')) costInput.value = '0';
+    if (retailInput && (!retailInput.value || retailInput.value === '1100')) retailInput.value = '350';
+    if (techInput && (!techInput.value || techInput.value === '850')) techInput.value = '300';
+    if (stockInput) stockInput.value = '999';
+    if (uomSel) uomSel.value = 'pcs';
+    if (fracCb) fracCb.checked = false;
+    if (serialCb) serialCb.checked = false;
+    nameInput?.focus();
+  }
+
+  const titleSpan = document.querySelector('#add-part-title [data-i18n="part.add_title"]');
+  if (titleSpan) {
+    const titles = {
+      retail: 'Add Product',
+      pc: 'Add PC Component',
+      phone: 'Add Phone Part',
+      service: 'Add Service / Labor'
+    };
+    titleSpan.textContent = titles[tpl] || t('part.add_title', 'Add Item');
+  }
+}
+
 export function openAddPartModal() {
   if (!hasElevation()) {
     requireManagerPin('Enter manager PIN to add parts to the catalog', () => openAddPartModal());
     return;
   }
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const isHybrid = mode === 'hybrid';
+  const templateBar = document.getElementById('item-template-bar');
+  if (templateBar) {
+    templateBar.classList.toggle('hidden', !isHybrid);
+  }
+
+  let initialTemplate = 'retail';
+  if (mode === 'phone') initialTemplate = 'phone';
+  else if (mode === 'pc') initialTemplate = 'pc';
+  else if (mode === 'grocery' || mode === 'retail') initialTemplate = 'retail';
+  else if (mode === 'hybrid') initialTemplate = currentAddTemplate || 'retail';
+  setAddItemTemplate(initialTemplate);
+
   const costEl = document.getElementById('part-cost');
   const retailEl = document.getElementById('part-retail');
   const techEl = document.getElementById('part-tech');
@@ -693,9 +904,16 @@ export function openAddPartModal() {
 let addPartInFlight = false;
 export async function submitAddPart(e) {
   e.preventDefault();
-  const brand = document.getElementById('part-brand').value;
-  const model_name = document.getElementById('part-model').value.trim();
-  const part_type = document.getElementById('part-type').value.trim();
+  const rawName = document.getElementById('part-name')?.value.trim();
+  const rawModel = document.getElementById('part-model')?.value.trim();
+  const item_name = rawName || null;
+  const brand = document.getElementById('part-brand').value || (item_name ? 'General' : '');
+  const model_name = rawModel || (item_name ? item_name : '');
+  const part_type = document.getElementById('part-type').value.trim() || (item_name ? 'General' : '');
+  const category = part_type;
+  const uom = document.getElementById('part-uom')?.value || 'pcs';
+  const allow_fractional = document.getElementById('part-allow-fractional')?.checked ? 1 : 0;
+  const track_serial = document.getElementById('part-track-serial')?.checked ? 1 : 0;
   const cost_price = Number(document.getElementById('part-cost').value);
   const price_retail = Number(document.getElementById('part-retail').value);
   const price_technician = Number(document.getElementById('part-tech').value);
@@ -710,7 +928,7 @@ export async function submitAddPart(e) {
   const dup = findPartDuplicate(brand, model_name, part_type);
   if (dup) {
     const ok = await confirmModal(
-      `${brand} ${model_name} — ${part_type} already exists with ${dup.stock_quantity} in stock. Create anyway?`,
+      `${brand} ${model_name} - ${part_type} already exists with ${dup.stock_quantity} in stock. Create anyway?`,
       { title: 'Duplicate part?', yes: 'Create anyway' });
     if (!ok) return;
   }
@@ -723,6 +941,11 @@ export async function submitAddPart(e) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         op_id: crypto.randomUUID(),
+        item_name,
+        category,
+        uom,
+        allow_fractional,
+        track_serial,
         brand, model_name, part_type, sku_barcode, supplier, location,
         cost_price, price_retail, price_technician, stock_quantity, min_stock_alert
       })
@@ -737,7 +960,7 @@ export async function submitAddPart(e) {
     document.getElementById('part-sku-warn')?.classList.add('hidden');
     loadInventoryTable();
     loadPosCatalog();
-    showToast('Part added to inventory catalog', 'success');
+    showToast(t('inv.part_added_toast', 'Item added to catalog'), 'success');
   } catch (err) {
     showToast(`Error: ${err.message}`, 'error');
   } finally {
@@ -760,9 +983,13 @@ export function openAdjustStockModal(id) {
   const item = S.inventoryRowsCache.find(i => i.id === id);
   if (!item) return;
   document.getElementById('adjust-part-id').value = id;
+  const label = item.item_name || `${item.brand} ${item.model_name} - ${item.part_type}`;
   document.getElementById('adjust-part-name').textContent =
-    `${item.brand} ${item.model_name} — ${item.part_type} (current stock: ${item.stock_quantity})`;
-  document.getElementById('adjust-delta').value = '';
+    `${label} (current stock: ${item.stock_quantity}${item.uom ? ' ' + item.uom : ''})`;
+  const deltaInput = document.getElementById('adjust-delta');
+  deltaInput.value = '';
+  deltaInput.step = item.allow_fractional ? 'any' : '1';
+  deltaInput.inputMode = item.allow_fractional ? 'decimal' : 'numeric';
   document.getElementById('adjust-reason').value = 'receive';
   document.getElementById('adjust-note').value = '';
   openModal('modal-adjust-stock');
@@ -802,8 +1029,9 @@ export async function submitAdjustStock(e) {
 export async function openMovementHistory(id) {
   const item = S.inventoryRowsCache.find(i => i.id === id);
   if (!item) return;
+  const label = item.item_name || `${item.brand} ${item.model_name} - ${item.part_type}`;
   document.getElementById('history-part-name').textContent =
-    `${item.brand} ${item.model_name} — ${item.part_type} (current stock: ${item.stock_quantity})`;
+    `${label} (current stock: ${item.stock_quantity}${item.uom ? ' ' + item.uom : ''})`;
   const body = document.getElementById('history-body');
   body.innerHTML = '<p class="foot-note">Loading…</p>';
   openModal('modal-movement-history');
@@ -1162,8 +1390,6 @@ export function downloadImportTemplate() {
 }
 
 // ---- Edit part (modal is in index.html) ----
-const PART_BRANDS = ['Apple', 'Samsung', 'Xiaomi', 'Infinix', 'Tecno', 'Realme', 'Oppo', 'Vivo', 'Huawei', 'Other'];
-
 export function openEditPartModal(id) {
   if (!hasElevation()) {
     requireManagerPin('Enter manager PIN to edit parts and prices', () => openEditPartModal(id));
@@ -1172,12 +1398,37 @@ export function openEditPartModal(id) {
   const item = S.inventoryRowsCache.find(i => i.id === id);
   if (!item) return;
 
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const isServiceItem = /^(service|labor)$/i.test(String(item.brand || '').trim())
+    || /^(service|labor)$/i.test(String(item.part_type || '').trim())
+    || /^(service|labor)$/i.test(String(item.category || '').trim());
+  let tpl = 'retail';
+  if (itemMatchesProfile(item, 'phone')) tpl = 'phone';
+  else if (itemMatchesProfile(item, 'pc')) tpl = 'pc';
+  else if (isServiceItem) tpl = 'service';
+  else tpl = (mode === 'phone' || mode === 'pc' || mode === 'service') ? mode : 'retail';
+
+  const baseBrands = TEMPLATE_BRANDS[tpl] || TEMPLATE_BRANDS.retail;
   const brandSel = document.getElementById('edit-part-brand');
-  const brands = PART_BRANDS.includes(item.brand) ? PART_BRANDS : [item.brand, ...PART_BRANDS];
+  const brands = baseBrands.includes(item.brand) ? baseBrands : [item.brand, ...baseBrands];
   brandSel.innerHTML = brands.map(b => `<option value="${escHtml(b)}">${escHtml(b)}</option>`).join('');
   brandSel.value = item.brand;
 
+  const titleSpan = document.querySelector('#edit-part-title [data-i18n="part.edit_title"]');
+  if (titleSpan) {
+    const editTitles = {
+      retail: 'Edit Product',
+      pc: 'Edit PC Component',
+      phone: 'Edit Phone Part',
+      service: 'Edit Service / Labor'
+    };
+    titleSpan.textContent = editTitles[tpl] || t('part.edit_title', 'Edit Item');
+  }
+
   document.getElementById('edit-part-id').value = item.id;
+  if (document.getElementById('edit-part-name')) {
+    document.getElementById('edit-part-name').value = item.item_name || '';
+  }
   document.getElementById('edit-part-model').value = item.model_name || '';
   document.getElementById('edit-part-type').value = item.part_type || '';
   document.getElementById('edit-part-sku').value = item.sku_barcode || '';
@@ -1188,6 +1439,15 @@ export function openEditPartModal(id) {
   document.getElementById('edit-part-tech').value = item.price_technician ?? 0;
   document.getElementById('edit-part-stock').value = item.stock_quantity ?? 0;
   document.getElementById('edit-part-min-alert').value = item.min_stock_alert ?? 2;
+  if (document.getElementById('edit-part-uom')) {
+    document.getElementById('edit-part-uom').value = item.uom || 'pcs';
+  }
+  if (document.getElementById('edit-part-allow-fractional')) {
+    document.getElementById('edit-part-allow-fractional').checked = Number(item.allow_fractional) === 1;
+  }
+  if (document.getElementById('edit-part-track-serial')) {
+    document.getElementById('edit-part-track-serial').checked = Number(item.track_serial) === 1;
+  }
   document.getElementById('edit-part-sku-warn')?.classList.add('hidden');
   // Stamped at open: the PUT sends it back and the server refuses the save if
   // a sale moved the shelf since this form was filled (stale-form overwrite).
@@ -1205,15 +1465,20 @@ let editPartOpId = null;
 export async function submitEditPart(e) {
   e.preventDefault();
   const id = Number(document.getElementById('edit-part-id').value);
-  const brand = document.getElementById('edit-part-brand').value;
-  const model_name = document.getElementById('edit-part-model').value.trim();
-  const part_type = document.getElementById('edit-part-type').value.trim();
+  const item_name = document.getElementById('edit-part-name')?.value.trim() || null;
+  const brand = document.getElementById('edit-part-brand').value || (item_name ? 'General' : '');
+  const model_name = document.getElementById('edit-part-model').value.trim() || (item_name ? item_name : '');
+  const part_type = document.getElementById('edit-part-type').value.trim() || (item_name ? 'General' : '');
+  const category = part_type;
+  const uom = document.getElementById('edit-part-uom')?.value || 'pcs';
+  const allow_fractional = document.getElementById('edit-part-allow-fractional')?.checked ? 1 : 0;
+  const track_serial = document.getElementById('edit-part-track-serial')?.checked ? 1 : 0;
 
   // Identity moved onto another existing row? Ask before saving the merge.
   const dup = findPartDuplicate(brand, model_name, part_type, id);
   if (dup) {
     const ok = await confirmModal(
-      `${brand} ${model_name} — ${part_type} already exists (ID ${dup.id}, ${dup.stock_quantity} in stock). Merge-looking edit — save anyway?`,
+      `${brand} ${model_name} - ${part_type} already exists (ID ${dup.id}, ${dup.stock_quantity} in stock). Merge-looking edit - save anyway?`,
       { title: 'Duplicate part?', yes: 'Save anyway' });
     if (!ok) return;
   }
@@ -1225,6 +1490,11 @@ export async function submitEditPart(e) {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        item_name,
+        category,
+        uom,
+        allow_fractional,
+        track_serial,
         brand,
         model_name,
         part_type,

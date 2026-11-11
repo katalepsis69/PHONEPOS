@@ -4,12 +4,12 @@ All notable changes to TechParts POS and Phone Repair Management System are docu
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
-## [v2.8] - 2026-11-10
+## [v2.8] - 2026-11-11
 
 ### Highlights & Changes
-- Verified: Reorder UI: single copy button, editable quantities, i18n keys consistent
-- Verified: Reorder footer: subtotal cells align with the column edges above
-- Verified: Reorder UI: Export CSV button, custom days input, and actions wired
+- Verified: license CLI rejects unknown arguments and invalid durations without a key
+- Verified: set-pin requires an explicit target and updates only that database transactionally
+- Verified: packaging scripts use staged outputs, pinned local postject, and scoped process cleanup
 
 
 ## [v2.7] - 2026-11-10

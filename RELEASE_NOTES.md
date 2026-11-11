@@ -1,11 +1,11 @@
-﻿# What is New in TechParts POS (v2.8)
+# What is New in TechParts POS (v2.8)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- Verified: Reorder UI: single copy button, editable quantities, i18n keys consistent
-- Verified: Reorder footer: subtotal cells align with the column edges above
-- Verified: Reorder UI: Export CSV button, custom days input, and actions wired
+- Verified: license CLI rejects unknown arguments and invalid durations without a key
+- Verified: set-pin requires an explicit target and updates only that database transactionally
+- Verified: packaging scripts use staged outputs, pinned local postject, and scoped process cleanup
 
 ---
 

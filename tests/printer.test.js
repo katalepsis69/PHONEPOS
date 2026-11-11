@@ -1925,6 +1925,7 @@ test('boxed frames the total; grid sets qty/name/amount columns', () => {
 });
 
 serverTest('the paper preview renders the chosen template from the sample sale', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const preview = async (body, headers = auth) => {
     const res = await fetch(`${baseUrl}/api/receipt/preview`, {
       method: 'POST',

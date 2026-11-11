@@ -194,7 +194,7 @@ async function downloadReleaseWithResume(targetUrl, targetBytes, stagingDir) {
     } catch (_) {}
   }
 
-  const maxAttempts = testHooks && testHooks.fetchImpl ? 2 : 5;
+  const maxAttempts = (testHooks && testHooks.maxAttempts) || (testHooks && testHooks.fetchImpl ? 2 : 5);
   let lastErr = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {

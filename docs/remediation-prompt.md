@@ -15,8 +15,8 @@ BASELINE RITUAL (first, no exceptions)
    differ from observed), refresh the block to today's observed state and say so in
    one line. Re-measure, do not copy a number you did not see.
 2. Run the gates and record exact results BEFORE the first change:
-   - npm test (node --test tests/*.test.js): all pass, exit 0 (536/536 on 2026-11-09,
-     about 22 s; today's count becomes the run baseline).
+   - npm test (node --test tests/*.test.js): all pass, exit 0 (568/568 on 2026-11-11,
+     about 25 s; today's count becomes the run baseline).
    - npm run build:css: exit 0.
    A hung run is a rerun, not a regression; rerun once before concluding anything.
 3. git status is the interference detector: files edited mid-session have been found
@@ -70,12 +70,12 @@ A gate goes red and stays red on rerun; a fix would change behavior the finding 
 not cover; the approved list is exhausted; or the tree shows signs of concurrent
 interference (see baseline step 3). Report and stop.
 
-TREE STATE (measured 2026-11-09; refresh to observed state on every run)
-- HEAD: 8103023 (main). Full source is tracked in git (since 2026-11-07); the release
+TREE STATE (measured 2026-11-11; refresh to observed state on every run)
+- HEAD: 94d1206 (v2.8 release). Full source is tracked in git (since 2026-11-07); the release
   pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 536/536 pass, 0 fail, exit 0.
+- Gates: npm run build:css exit 0; npm test 571/571 pass, 0 fail, exit 0 (49 test files:
+  48 tracked plus untracked tests/universal-pos.test.js).
 - Dirty at measurement (in-flight operator work; leave as-is, not findings):
-  CHANGELOG.md, RELEASE_NOTES.md, public/index.html, public/js/auth.js,
-  public/js/i18n.js, public/js/views/inventory.js, public/styles.css,
-  tests/frontend-regressions.test.js, tests/pos-repair-counter-ergonomics.test.js,
-  tests/reorder.test.js.
+  .agents/skills/techparts-pass/, CHANGELOG.md, RELEASE_NOTES.md, cloud-deploy/, cloud/,
+  docs/, public/, publish.bat, publish-release.bat, scripts/publish-release.ps1, src/,
+  tests/ (including untracked tests/universal-pos.test.js).

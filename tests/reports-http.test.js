@@ -1,10 +1,11 @@
 const assert = require('node:assert/strict');
-const { serverTest } = require('./helper');
+const { serverTest, ensurePinChanged } = require('./helper');
 const { createInventoryItem } = require('../src/inventory');
 const { createSale, voidSale } = require('../src/sales');
 const { createWarrantyReturn } = require('../src/returns');
 
 serverTest('Historical report HTTP routes reconcile losses and exceptions', async (base, db, auth) => {
+  auth = await ensurePinChanged(base, auth);
   const part = createInventoryItem(db, { brand:'Probe', model_name:'Isolated', part_type:'LCD', cost_price:20, price_retail:100, stock_quantity:5 });
   const sale = createSale(db, { payment_method:'cash', items:[{ inventory_id:part.id, quantity:1, unit_price:100 }], amount_paid:100 });
   const ret = createWarrantyReturn(db, { sale_id:sale.id, sale_item_id:sale.items[0].id, return_type:'cash_refund', refund_amount:50 });

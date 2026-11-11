@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const crypto = require('node:crypto');
 const { dbTest } = require('./helper');
 const {
-  getMachineId, getLegacyMachineId, verifyLicenseKey, verifyLicenseKeyWithVendorKeys,
+  getMachineId, getLegacyMachineId, extractLicenseKey, verifyLicenseKey, verifyLicenseKeyWithVendorKeys,
   getLicenseStatus, activateLicense,
   classifyLicenseStatus, publicKey, VENDOR_PUBLIC_KEY_B64, VENDOR_PUBLIC_KEY_PREVIOUS_B64
 } = require('../src/license');
@@ -413,4 +413,83 @@ dbTest('trial_seal detects direct SQLite edits to first_run_ts or trial_compromi
   assert.strictEqual(afterDropSeal.trial_active, false);
   assert.strictEqual(afterDropSeal.license_required, true);
   assert.strictEqual(db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_compromised'").get().value, '1');
+});
+
+dbTest('trial_seal floor catches a recomputed seal over an edited first_run_ts (F18)', (db) => {
+  const crypto = require('node:crypto');
+  getLicenseStatus(db, vendor.publicKey); // seed the seal over the honest first_run
+  const machineId = db.prepare("SELECT value FROM shop_settings WHERE key = 'workstation_machine_id'").get().value;
+  // The F18 bypass: push first_run past the install's birth time AND recompute a
+  // matching seal with the shipped salt, so the missing-seal floor never runs.
+  // The birth-time anchor in the seal-matches branch must still catch it.
+  const future = new Date(Date.now() + 86400000).toISOString();
+  const set = (k, v) => db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES (?, ?)").run(k, v);
+  set('first_run_ts', future);
+  set('trial_compromised', '0');
+  set('trial_seal', crypto.createHmac('sha256', 'tp-pos-offline-anti-tamper-v1').update(`${machineId}|${future}|0`).digest('hex'));
+  const after = getLicenseStatus(db, vendor.publicKey);
+  assert.strictEqual(after.trial_active, false, 'a recomputed seal over an edited first_run must not extend the trial');
+  assert.strictEqual(db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_compromised'").get().value, '1');
+});
+
+test('extractLicenseKey extracts signed token from Messenger chat text and line-wrapped pastes', () => {
+  const key = sign({ machine_id: getMachineId(), plan_type: 'lifetime', customer_name: 'Chat Paste Shop' });
+  const chatMessage = `Hi boss! Here is your TechParts POS license key for Chat Paste Shop:\n\n${key}\n\nThank you for your purchase!`;
+  assert.strictEqual(extractLicenseKey(chatMessage), key);
+
+  const wrapped = key.slice(0, 30) + '\r\n  ' + key.slice(30);
+  assert.strictEqual(extractLicenseKey(wrapped), key);
+});
+
+dbTest('activateLicense accepts a Messenger chat paste and drop-in license.txt auto-activates on status check', (db) => {
+  const key = sign({ machine_id: getMachineId(), plan_type: 'lifetime', customer_name: 'USB Drop Shop' });
+
+  // 1. Drop-in license.txt alongside shop.db auto-activates on getLicenseStatus
+  const licenseTxtPath = path.join(path.dirname(db.shopDbPath), 'license.txt');
+  fs.writeFileSync(licenseTxtPath, `License for USB Drop Shop:\n${key}\n`, 'utf8');
+  try {
+    const status = getLicenseStatus(db, vendor.publicKey);
+    assert.strictEqual(status.activated, true);
+    assert.strictEqual(status.customer_name, 'USB Drop Shop');
+    assert.strictEqual(status.status, 'lifetime');
+  } finally {
+    try { fs.unlinkSync(licenseTxtPath); } catch (_) {}
+  }
+});
+
+test('License activation UI surfaces: Settings inline card, Left Rail tool, First-Run Setup, Overlay helpers, and Phone Report unlock', () => {
+  const root = path.join(__dirname, '..');
+  const indexHtml = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
+  const authJs = fs.readFileSync(path.join(root, 'public', 'js', 'auth.js'), 'utf8');
+  const mainJs = fs.readFileSync(path.join(root, 'public', 'js', 'main.js'), 'utf8');
+  const reportHtml = fs.readFileSync(path.join(root, 'public', 'report.html'), 'utf8');
+  const reportJs = fs.readFileSync(path.join(root, 'public', 'js', 'report.js'), 'utf8');
+
+  // 1. Left Rail shortcut
+  assert.match(indexHtml, /data-action="open-license-settings"/);
+  assert.match(mainJs, /'open-license-settings':\s*\(\)\s*=>\s*openSettingsModal\('data'\)/);
+
+  // 2. Settings -> Data inline activation card (no longer read-only)
+  assert.match(indexHtml, /id="settings-license-key-input"/);
+  assert.match(indexHtml, /id="btn-settings-activate-license"/);
+  assert.match(indexHtml, /id="btn-copy-settings-machine-id"/);
+  assert.match(indexHtml, /id="settings-license-file"/);
+  assert.match(authJs, /export async function submitSettingsLicenseActivation/);
+
+  // 3. License overlay helpers (Copy ID, Paste, Load .txt/.key, live preview)
+  assert.match(indexHtml, /id="btn-copy-machine-id"/);
+  assert.match(indexHtml, /id="btn-paste-license-key"/);
+  assert.match(indexHtml, /id="license-file-input"/);
+  assert.match(indexHtml, /id="license-key-preview"/);
+  assert.match(authJs, /export function inspectLicenseKeyClient/);
+
+  // 4. First-Run Shop Setup optional license activation
+  assert.match(indexHtml, /id="setup-license-details"/);
+  assert.match(indexHtml, /id="setup-license-key"/);
+
+  // 5. Phone Wi-Fi (/report.html) remote unlock form
+  assert.match(reportHtml, /id="rpt-license-key"/);
+  assert.match(reportHtml, /id="btn-rpt-activate"/);
+  assert.match(reportHtml, /id="btn-rpt-copy-mid"/);
+  assert.match(reportJs, /\/api\/license\/activate/);
 });

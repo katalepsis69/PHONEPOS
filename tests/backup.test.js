@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { initDb } = require('../src/db');
-const { serverTest } = require('./helper');
+const { serverTest, ensurePinChanged } = require('./helper');
 const { createDbBackup, runDailyBackup, runBackupTick, verifyBackupFile, getBackupStatus } = require('../src/server');
 
 const scrub = p => [p, `${p}-shm`, `${p}-wal`].forEach(f => { try { fs.rmSync(f, { force: true }); } catch {} });
@@ -115,6 +115,7 @@ test('getBackupStatus falls back to the recorded date when the folder is gone', 
 });
 
 serverTest('dashboard carries the backup age so the browser can warn', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const data = await (await fetch(`${baseUrl}/api/dashboard?period=7d`, { headers: auth })).json();
   assert.ok(data.backup, 'backup status is part of the dashboard payload');
   // Not just "a boolean": the badge's whole job is to flip on age, so a backup

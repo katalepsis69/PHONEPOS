@@ -21,7 +21,7 @@ In-scope code: src/ (except db.js), cloud/ (server.js and its manager app), and
 tests/ (the *.test.js files and helper.js; the gate is node --test). cloud/ is in
 scope because behavioral tests exist for it (tests/cloud-hardening.test.js spawns a real
 cloud process and tests/remediation-final.test.js runs live server tests).
-src/updater.js is in scope (698 lines now, still cohesive); expect few candidates, but
+src/updater.js is in scope (719 lines now, still cohesive); expect few candidates, but
 note the hard constraint in MUST-PRESERVE: the release script rewrites its version line
 by regex.
 OUT of scope: public/ (its tests are worse than static greps: seven files, including
@@ -43,20 +43,21 @@ pass.
 
 BASELINE RITUAL (first, no exceptions)
 1. The gates are fixed for this project; do not re-detect them:
-   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-09: 536 tests,
-     536 pass, 0 fail, about 22 seconds (505/505 on 2026-11-05, 423/423 on
-     2026-10-14). There is no compile step in dev; the suite is the only automated
-     gate. node --check on touched files is a fair extra, nothing more. npm run
-     verify:exe is the only other read-only gate, and a PowerShell parse check
-     ([System.Management.Automation.Language.Parser]::ParseFile) is the only cheap check
-     available for scripts/publish-release.ps1, which nothing in tests/ covers.
+   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-11: 568 tests,
+     568 pass, 0 fail, about 25 seconds (560/560 on 2026-11-10, 536/536 on 2026-11-09,
+     505/505 on 2026-11-05, 423/423 on 2026-10-14). There is no JS compile step in dev;
+     npm run build:css rebuilds public/tailwind.build.css after Tailwind changes, and
+     the suite is the main automated gate. node --check on touched files is a fair
+     extra, nothing more. npm run verify:exe is the read-only gate, and
+     tests/packaging-workflows.test.js directly tests scripts/publish-release.ps1
+     and the batch publishing entry points.
 2. Run the gate. Record the exact result INCLUDING failures. IDENTICAL before and
    after means the same set of pass and fail, not all-green. Pre-existing reds:
-   none known (536/536 on 2026-11-09, 505/505 on 2026-11-05, 423/423 on
-   2026-10-14). A new red is a stop condition, not a baseline entry. A hung run is
+   none known (568/568 on 2026-11-11, 560/560 on 2026-11-10, 536/536 on 2026-11-09,
+   505/505 on 2026-11-05, 423/423 on 2026-10-14). A new red is a stop condition, not a baseline entry. A hung run is
    a rerun, not a regression. One standing rule the suite re-learned on 2026-10-14: never hand-roll
    createServer() in a test, always take helper.js's serverTest, because the default
-   dbPath resolves to the real data/shop.db (src/server.js:211) and sendRaw is only
+   dbPath resolves to the real data/shop.db (src/server.js:279) and sendRaw is only
    patched by the harness. If you find a test doing it, report it, do not quietly
    rewrite it in a refactor pass.
 3. SNAPSHOT FIRST, with git doing the work now: the full source tree is tracked since
@@ -68,7 +69,7 @@ BASELINE RITUAL (first, no exceptions)
    backups/code-pre-refactor-YYYY-MM-DD/ convention as belt-and-braces for
    multi-file steps, preserving relative paths (the established code-pre-* pattern).
    To find what is new and therefore where the structure is still soft: git log
-   --stat and git diff v2.6 HEAD (v2.6 = 8103023) instead of guessing.
+   --stat and git diff v2.8 (v2.8 = 94d1206) instead of guessing.
 4. The suite must never print paper: tests/helper.js enforces the sentinel printer
    queue and a sendRaw patch that refuses every other queue. A refactor step that
    makes any test open a real queue is a stop condition.
@@ -77,9 +78,9 @@ automation): proofs for UI-facing seams are code inspection plus layout math,
 stated as such. Never claim a click-through that did not happen.
 
 RULES OF ENGAGEMENT
-- One refactoring at a time. Run the gate. Only then continue. Do not commit: the .git
-  here tracks only README.md and .gitignore, so the snapshot in backups/ is the only
-  undo path.
+- One refactoring at a time. Run the gate. Only then continue. Do not commit unless
+  asked (full source is tracked since 6834474, and never git --amend because the
+  release pipeline commits mid-session).
 - If a step has to touch a banner comment or a terminating function that one of the
   vm-slice tests extracts (the BARCODE SCANNING region of public/js/views/pos.js is the
   clearest case), update the extractor in tests/ in the SAME step and re-run the gate; a
@@ -185,18 +186,18 @@ MUST-PRESERVE INVARIANTS
   survives; when in doubt, report instead of restructure.
 
 PRIORITY INSPECTION ORDER
-1. God files: src/server.js (2098 lines: about 70 routes, lifecycle, print wiring,
+1. God files: src/server.js (2113 lines: about 70 routes, lifecycle, print wiring,
    static serving, the instance lock and the update routes in one file) and
-   cloud-deploy/server.js (1244 lines, byte-identical to cloud/server.js at
+   cloud-deploy/server.js (1887 lines, byte-identical to cloud/server.js at
    measurement). Assess honestly; extract cohesive route groups or lifecycle seams
    only when it does not create parallel structures. The largest single block inside
    src/server.js is the route chain itself: split by resource (inventory, sales, auth,
    system), never by arbitrary line number, and remember that the session and license
    exempt lists must travel with their routes. In public/, the four biggest files are
-   backoffice.js (2167), auth.js (1961), pos.js (1543) and views/inventory.js (1315):
+   auth.js (2349), backoffice.js (2168), views/inventory.js (1700) and pos.js (1616):
    out of scope, but report them as the honest candidates they are. src/printer.js
-   (961, grown from 631 by the receipt-template line layer that the new paper-preview
-   route shares) and src/updater.js (698) are newer and cohesive; expect few
+   (970, grown from 631 by the receipt-template line layer that the new paper-preview
+   route shares) and src/updater.js (719) are newer and cohesive; expect few
    candidates there.
 2. Long functions (>40 lines, deep nesting), exempting mechanical blocks as above.
 3. Duplicated blocks NOT in the protected list. One known REPORT-only case: slip

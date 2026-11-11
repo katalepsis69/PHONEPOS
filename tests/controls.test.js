@@ -70,6 +70,7 @@ dbTest('closeShift rejects null/empty counted_cash and comma strings', (db) => {
 
 // 2d. adjust-stock on a missing part answers 404, never 200-with-null
 serverTest('adjust-stock on a deleted part is 404', async (base, db, auth) => {
+  auth = await ensurePinChanged(base, auth);
   const res = await fetch(`${base}/api/inventory/999999/adjust-stock`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...auth },
@@ -165,6 +166,7 @@ dbTest('tampered audit row breaks chain', async (db) => {
 // Regression: /api/audit used `Number(days) || 30`, so the UI's "All time"
 // (days=0) silently showed only the last 30 days.
 serverTest('/api/audit days=0 means all time, not 30 days', async (base, db, auth) => {
+  auth = await ensurePinChanged(base, auth);
   // INSERT is allowed; the append-only trigger only blocks UPDATE/DELETE.
   db.prepare("INSERT INTO audit_log (created_at, actor_type, actor_name, category, action, elevated) VALUES (datetime('now','-60 days'), 'manager', 'Manager', 'system', 'old_backup', 1)").run();
   const all = await (await fetch(`${base}/api/audit?days=0`, { headers: auth })).json();
@@ -219,6 +221,7 @@ serverTest('D4: a collection above the shop threshold needs a manager', async (b
 });
 
 serverTest('D3: the name-variants report lists spellings without merging anything', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   const { createSale } = require('../src/sales');
   createSale(db, { customer_name: 'Ana Lim', payment_method: 'credit', items: [{ item_type: 'labor', item_name: 'LCD', unit_price: 300, quantity: 1 }], amount_paid: 0 });
   createSale(db, { customer_name: 'ANA LIM', payment_method: 'credit', items: [{ item_type: 'labor', item_name: 'Labor', unit_price: 100, quantity: 1 }], amount_paid: 0 });

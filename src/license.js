@@ -93,9 +93,22 @@ function getActiveMachineId(db = null) {
   }
 }
 
+function extractLicenseKey(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  // 1. Wrapped across lines by email/notepad with spaces or newlines inside base64url
+  const compact = s.replace(/\s+/g, '');
+  if (/^[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{40,}$/.test(compact)) return compact;
+  // 2. Embedded inside surrounding chat copy (e.g. Messenger/Viber paste; base64 JSON starts with "ey")
+  const chatMatch = s.match(/(ey[A-Za-z0-9_-]{14,}\.[A-Za-z0-9_-]{40,})/) || s.match(/([A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{40,})/);
+  if (chatMatch) return chatMatch[1];
+  return s;
+}
+
 function verifyLicenseKey(licenseKey, currentMachineId, verifyKey = publicKey(), nowMs = Date.now()) {
   try {
-    const [payloadB64, signature] = String(licenseKey).split('.');
+    const cleaned = extractLicenseKey(licenseKey);
+    const [payloadB64, signature] = String(cleaned).split('.');
     if (!payloadB64 || !signature) return { valid: false, error: 'Malformed key' };
 
     const signatureOk = crypto.verify(null, Buffer.from(payloadB64), verifyKey, Buffer.from(signature, 'base64url'));
@@ -227,6 +240,26 @@ function getTrialState(db) {
     compromised = true;
     set('trial_compromised', '1');
     set('trial_seal', computeTrialSeal(machineId, firstRunStr, '1'));
+  } else {
+    // Seal matches. The salt ships in source, so a determined user can recompute
+    // a matching seal over an edited first_run_ts and skip the missing-seal
+    // floor above. The db file's birth time is an anchor a settings-row edit
+    // cannot move: a first_run newer than the install itself is the edit. Birth
+    // time only (not the audit log) so an honest restore (recent file, old
+    // first_run) or a fresh trial DB holding old audit rows is not flagged.
+    // Residual: copying/moving the db file resets the birth time; that is beyond
+    // the casual bypass this closes (accepted, offline).
+    const dbFile = db.shopDbPath || null;
+    let birth = null;
+    if (dbFile) { try { birth = fs.statSync(dbFile).birthtimeMs; } catch (_) {} }
+    if (Number.isFinite(birth) && firstRun > birth + 60 * 1000) {
+      compromised = true;
+      set('trial_compromised', '1');
+      firstRun = birth;
+      firstRunStr = new Date(firstRun).toISOString();
+      set('first_run_ts', firstRunStr);
+      set('trial_seal', computeTrialSeal(machineId, firstRunStr, '1'));
+    }
   }
 
   // Rollback: clock moved back >24h. Flag is permanent -- only activation
@@ -341,8 +374,36 @@ function verifyStoredKey(db, licenseKey) {
 
 function getLicenseStatus(db, verifyKey = null) {
   const trial = getTrialState(db);
-  const row = db.prepare("SELECT value FROM shop_settings WHERE key = 'license_key'").get();
-  const licenseKey = row?.value || '';
+  let row = db.prepare("SELECT value FROM shop_settings WHERE key = 'license_key'").get();
+  let licenseKey = row?.value || '';
+
+  if (!licenseKey && db && db.shopDbPath) {
+    const dir = path.dirname(db.shopDbPath);
+    for (const fname of ['license.txt', 'license.key']) {
+      const fpath = path.join(dir, fname);
+      try {
+        if (fs.existsSync(fpath)) {
+          const rawFile = fs.readFileSync(fpath, 'utf8');
+          const extracted = extractLicenseKey(rawFile);
+          if (extracted) {
+            const key = verifyKey || verifyKeyOverride || null;
+            const check = key
+              ? verifyWithKey(extracted, key, licenseNow(db))
+              : matchVendorKey(extracted, licenseNow(db)).result;
+            if (check && check.valid) {
+              db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('license_key', ?)").run(extracted);
+              if (check.machine_id) {
+                db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('workstation_machine_id', ?)").run(check.machine_id);
+              }
+              matchedLicenseKey = null;
+              licenseKey = extracted;
+              break;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+  }
 
   const activeId = getActiveMachineId(db);
   const result = licenseKey
@@ -386,16 +447,17 @@ function getLicenseStatus(db, verifyKey = null) {
 }
 
 function activateLicense(db, licenseKey, verifyKey = null) {
+  const cleanedKey = extractLicenseKey(licenseKey);
   const key = verifyKey || verifyKeyOverride || null;
   const result = key
-    ? verifyWithKey(licenseKey, key, licenseNow(db))
-    : matchVendorKey(licenseKey, licenseNow(db)).result;
+    ? verifyWithKey(cleanedKey, key, licenseNow(db))
+    : matchVendorKey(cleanedKey, licenseNow(db)).result;
 
   if (!result.valid) {
     throw new Error(result.error || 'Invalid license key');
   }
 
-  db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('license_key', ?)").run(licenseKey);
+  db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('license_key', ?)").run(cleanedKey);
   if (result.machine_id) {
     db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('workstation_machine_id', ?)").run(result.machine_id);
   }
@@ -408,6 +470,7 @@ module.exports = {
   getActiveMachineId,
   getLegacyMachineId,
   getMachineIds,
+  extractLicenseKey,
   verifyLicenseKey,
   verifyLicenseKeyWithVendorKeys,
   getLicenseStatus,

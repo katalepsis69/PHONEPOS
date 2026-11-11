@@ -347,3 +347,48 @@ test('cloud period analytics equal the workstation, including the previous windo
     try { fs.rmSync(cloudDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+test('cloud top_products equals the workstation for FRACTIONAL quantities (F13)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-frac-shop-'));
+  const cloudDir = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-frac-cloud-'));
+  fs.writeFileSync(path.join(cloudDir, 'manager-pin.txt'), '2468\n');
+  const db = initDb(path.join(dir, 'shop.db'));
+  let child;
+  try {
+    // A fractional part: cost 100, price 30. Selling 0.5 yields revenue 15,
+    // cost 50, profit -35. The cloud used to CAST quantity AS INTEGER (0.5 -> 0),
+    // reporting units 0 and profit 15 against the workstation's -35.
+    db.prepare(`INSERT INTO inventory (id, brand, model_name, part_type, cost_price, price_retail, price_technician, stock_quantity, min_stock_alert, allow_fractional)
+      VALUES (1, 'Bulk', 'Solder Wire', 'Consumable', 100, 30, 25, 50, 2, 1)`).run();
+    createSale(db, {
+      customer_name: 'Fractional Buyer', payment_method: 'cash',
+      items: [{ inventory_id: 1, item_type: 'part', quantity: 0.5, unit_price: 30 }],
+      amount_paid: 15,
+    });
+    const local = getProductPerformance(db, '30d');
+    const expected = local.products.find(p => p.id === 1);
+    assert.ok(expected, 'the workstation computed the fractional part');
+    assert.ok(Math.abs(expected.units - 0.5) < 1e-9, 'workstation units are fractional');
+
+    const running = await startCloud(cloudDir, { SHOP_SYNC_CREDENTIALS: JSON.stringify({ north: TOKEN_A }) });
+    child = running.child;
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(running.base);
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_token', ?)").run(TOKEN_A);
+    let guard = 0;
+    while ((await drainOutbox(db)).synced > 0) { if (++guard > 2000) throw new Error('the mirror never drained'); }
+
+    const { cookie } = await login(running.base);
+    const data = await (await fetch(`${running.base}/api/analytics?period=30d`, { headers: { cookie } })).json();
+    const cloudPart = (data.top_products || []).find(p => String(p.item_name).includes('Solder Wire'));
+    assert.ok(cloudPart, 'the cloud computed the fractional part');
+    const near = (a, b, what) => assert.ok(Math.abs(Number(a) - Number(b)) < 0.011, `${what}: workstation ${a} vs cloud ${b}`);
+    near(expected.units, cloudPart.units, 'fractional units');
+    near(expected.revenue, cloudPart.revenue, 'fractional revenue');
+    near(expected.profit, cloudPart.profit, 'fractional profit (cost scales with the fraction)');
+  } finally {
+    if (child) await stopCloud(child);
+    try { db.close(); } catch (_) {}
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(cloudDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});

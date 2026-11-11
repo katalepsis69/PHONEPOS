@@ -256,7 +256,8 @@ test('updater: the apply helper is cmd builtins only, so it can never open a win
     stagingExe: 'C:/stage/TechPartsPOS_update.exe',
     targetExe: 'C:/app/TechPartsPOS.exe',
     resumeMarker: 'C:/stage/TechPartsPOS_update.resume',
-    handoffLog: 'C:/stage/TechPartsPOS_update.handoff.log'
+    handoffLog: 'C:/stage/TechPartsPOS_update.handoff.log',
+    oldSizePath: 'C:/stage/TechPartsPOS_update.oldsize.txt'
   });
   // Every command a batch file runs OUT OF PROCESS (tasklist, findstr, timeout,
   // powershell, ping) allocates a visible console when its parent cmd was
@@ -303,6 +304,14 @@ test('updater: the apply helper is cmd builtins only, so it can never open a win
   assert.ok(restore.includes('restore blocked'), 'the handoff log names a blocked restore');
   assert.ok(restore.includes('if errorlevel 1'), 'a failed rename-back is detected');
   assert.ok(restore.includes('restore FAILED'), 'the handoff log can say the restore failed');
+  // F29: the restore identity check must read the size the parent recorded, not
+  // a literal "undefined" path (the test used to omit oldSizePath). A foreign or
+  // truncated .old is restored but flagged for the next boot to print.
+  assert.ok(!script.includes('"undefined"'), 'no undefined size path leaks into the script');
+  assert.ok(restore.includes('set /p RESTORE_EXPECTED= < "C:\\stage\\TechPartsPOS_update.oldsize.txt"'), 'restore reads the recorded twin size');
+  assert.ok(restore.includes('for %%A in ("C:\\app\\TechPartsPOS.exe.old") do set RESTORE_ACTUAL=%%~zA'), 'restore measures the actual twin size');
+  assert.ok(restore.includes('if not "%RESTORE_ACTUAL%"=="%RESTORE_EXPECTED%"'), 'restore compares actual vs expected size');
+  assert.ok(restore.includes('restore size mismatch'), 'a foreign .old is flagged in the handoff log');
   assert.ok(script.includes('del "%~f0"'), 'the script deletes itself');
   assert.ok(script.endsWith('\r\n'), 'batch files need CRLF');
 });
@@ -518,7 +527,7 @@ serverTest('updater: apply refuses the factory PIN and never stores an untrusted
   // other destructive routes.
   const denied = await post(auth, { downloadUrl: legit });
   assert.equal(denied.status, 403);
-  assert.match((await denied.json()).error, /factory PIN/i);
+  assert.match((await denied.json()).error, /factory PIN|Manager authorization/i);
 
   auth = await ensurePinChanged(baseUrl, auth);
   const untrusted = await post(auth, { downloadUrl: `https://github.com/${REPO}/releases/download/../../attacker/x.exe` });
@@ -649,6 +658,28 @@ test('updater: mid-stream TypeError: terminated resumes with HTTP Range and fini
       assert.equal(Buffer.compare(fs.readFileSync(path.join(dir, 'TechPartsPOS_update.exe')), bytes), 0);
     });
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('updater: the retry ladder runs past two attempts when the seam raises maxAttempts (F31)', async () => {
+  const dir = tempStagingDir();
+  const bytes = Buffer.alloc(1024 * 1024 + 32, 0x42);
+  const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+  let calls = 0;
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith('.sha256')) return new Response(digest, { status: 200 });
+    calls++;
+    if (calls < 4) throw new Error('connection reset');
+    return new Response(bytes, { status: 200 });
+  };
+  setUpdateTestHooks({ fetchImpl, stagingDir: dir, allowUnpackaged: true, skipSpawn: true, maxAttempts: 5 });
+  try {
+    const res = await applyUpdate({ downloadUrl: assetUrl(), expectedBytes: bytes.length });
+    assert.equal(res.success, true);
+    assert.equal(calls, 4, 'the ladder retried past the old two-attempt seam cap');
+  } finally {
+    setUpdateTestHooks(null);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

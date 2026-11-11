@@ -45,10 +45,10 @@ test('collections mix shows its share of collected money', () => {
 });
 
 test('KPI meta splits every return type; count and money agree', () => {
-  assert.match(backoffice, /c\.return_cash > 0 \? `\$\{fmtMoney\(c\.return_cash\)\} cash refunded`/);
-  assert.match(backoffice, /c\.return_credit > 0 \? `\$\{fmtMoney\(c\.return_credit\)\} off utang`/);
+  assert.match(backoffice, /c\.return_cash > 0 \? `\$\{fmtMoney\(c\.return_cash\)\} \$\{t\('dash\.cash_refunded'/);
+  assert.match(backoffice, /c\.return_credit > 0 \? `\$\{fmtMoney\(c\.return_credit\)\} \$\{t\('dash\.off_utang'/);
   assert.match(backoffice, /return_replacements > 0 \? swapWord\(c\.return_replacements\)/);
-  assert.match(backoffice, /: 'no returns'/);
+  assert.match(backoffice, /: t\('dash\.no_returns'/);
 });
 
 test('exceptions itemize every return type over any window', () => {

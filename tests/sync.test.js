@@ -386,3 +386,47 @@ test('backfill never enqueues the secret-bearing tables', async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('cloud commands audit the actor and replay idempotently (F3/F4)', async () => {
+  const { db, dir } = tmpDb();
+  db.prepare(`INSERT INTO inventory (brand, model_name, part_type, cost_price, price_retail, price_technician, stock_quantity, min_stock_alert)
+    VALUES ('Apple', 'iPhone 11', 'LCD', 100, 200, 150, 5, 2)`).run();
+  const commands = [
+    { id: 11, kind: 'adjust_stock', payload: { id: 1, delta: 4, reason: 'receive' } },
+    { id: 12, kind: 'import_inventory', payload: { rows: [
+      { brand: 'Cloud', model_name: 'Coil', part_type: 'Filter', sku_barcode: 'CLD-1', stock_quantity: 7, cost_price: 10, price_retail: 20 }
+    ] } },
+  ];
+  const server = require('node:http').createServer((req, res) => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      const { events } = JSON.parse(body);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, ok_ids: (events || []).map(e => e.outbox_id), commands }));
+    });
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(`http://127.0.0.1:${server.address().port}`);
+    // Empty outbox: the heartbeat path applies the cloud's commands.
+    await drainOutbox(db);
+    // F4: the adjustment must write an audit row attributed to the cloud manager.
+    const adjAudit = db.prepare("SELECT actor_name FROM audit_log WHERE action = 'adjust_stock' ORDER BY id DESC LIMIT 1").get();
+    assert.ok(adjAudit, 'cloud adjust_stock writes an audit row');
+    assert.strictEqual(adjAudit.actor_name, 'Cloud Manager');
+    assert.strictEqual(db.prepare('SELECT stock_quantity FROM inventory WHERE id = 1').get().stock_quantity, 9);
+    const imported = db.prepare("SELECT id, stock_quantity FROM inventory WHERE sku_barcode = 'CLD-1'").get();
+    assert.ok(imported, 'cloud import created the part');
+    assert.strictEqual(imported.stock_quantity, 7);
+    // F3: redelivery of the same command ids must replay, not double stock.
+    await drainOutbox(db);
+    assert.strictEqual(db.prepare('SELECT stock_quantity FROM inventory WHERE id = 1').get().stock_quantity, 9, 'adjust_stock replays');
+    assert.strictEqual(db.prepare('SELECT stock_quantity FROM inventory WHERE id = ?').get(imported.id).stock_quantity, 7, 'import replays without doubling stock');
+    assert.strictEqual(db.prepare("SELECT COUNT(*) c FROM inventory WHERE sku_barcode = 'CLD-1'").get().c, 1, 'no duplicate part');
+  } finally {
+    server.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

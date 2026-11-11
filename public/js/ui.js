@@ -481,7 +481,7 @@ export function initInputModal() {
   });
 }
 
-export function inputModal(title, { placeholder = '', inputType = 'text', yes = 'OK', defaultValue = '' } = {}) {
+export function inputModal(title, { placeholder = '', inputType = 'text', step = '', yes = 'OK', defaultValue = '' } = {}) {
   initInputModal();
   const wrap = document.getElementById('modal-input');
   wrap.querySelector('#input-title').textContent = title;
@@ -489,6 +489,10 @@ export function inputModal(title, { placeholder = '', inputType = 'text', yes = 
   if (valueLabel) valueLabel.textContent = title;
   const input = wrap.querySelector('#input-value');
   input.type = inputType;
+  if (step) input.step = step;
+  else input.removeAttribute('step');
+  if (inputType === 'number') input.inputMode = step === 'any' ? 'decimal' : 'numeric';
+  else input.removeAttribute('inputmode');
   input.value = String(defaultValue ?? '');
   input.placeholder = placeholder;
   wrap.querySelector('#input-ok').textContent = yes;

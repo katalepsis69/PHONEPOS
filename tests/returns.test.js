@@ -520,3 +520,28 @@ dbTest('credit refund on a discounted utang sale relieves the discounted share, 
   const after = Number(db.prepare('SELECT credit_balance FROM sales WHERE id = ?').get(sale.id).credit_balance);
   assert.strictEqual(after, 400, 'the remaining utang keeps its discounted share');
 });
+
+dbTest('fractional warranty return splits partial decimal quantities accurately', (db) => {
+  const cable = createInventoryItem(db, {
+    item_name: 'AWG18 Speaker Wire', category: 'Cables', uom: 'm', allow_fractional: 1,
+    price_retail: 40, stock_quantity: 5
+  });
+  const sale = createSale(db, {
+    customer_name: 'Walk-in', payment_method: 'cash',
+    items: [{ inventory_id: cable.id, quantity: 0.5 }], amount_paid: 20
+  });
+  const rma1 = createWarrantyReturn(db, {
+    sale_id: sale.id, sale_item_id: sale.items[0].id,
+    quantity: 0.25, return_type: 'cash_refund', refund_amount: 10
+  });
+  const rma2 = createWarrantyReturn(db, {
+    sale_id: sale.id, sale_item_id: sale.items[0].id,
+    quantity: 0.25, return_type: 'cash_refund', refund_amount: 10
+  });
+  assert.strictEqual(rma1.quantity, 0.25);
+  assert.strictEqual(rma2.quantity, 0.25);
+  assert.throws(() => createWarrantyReturn(db, {
+    sale_id: sale.id, sale_item_id: sale.items[0].id,
+    quantity: 0.05, return_type: 'cash_refund'
+  }), /already returned 0\.5 of 0\.5/);
+});

@@ -22,18 +22,20 @@ const EDITABLE_SETTINGS = new Set([
   'receipt_template', 'receipt_item_rows',
   'warranty_days', 'warranty_policy_text', 'shop_footer_note',
   'owner_name', 'shop_address', 'settle_elevation_threshold', 'shift_variance_threshold',
-  'default_retail_markup_pct', 'default_wholesale_markup_pct'
+  'default_retail_markup_pct', 'default_wholesale_markup_pct',
+  'business_type', 'enable_service_bench', 'enable_fractional_qty', 'enable_serial_tracking',
+  'wholesale_tier_label'
 ]);
 
 function getDefaultRetailMarkup(db) {
   const raw = db.prepare("SELECT value FROM shop_settings WHERE key = 'default_retail_markup_pct'").get()?.value;
-  const n = Number(raw);
+  const n = raw == null || String(raw).trim() === '' ? NaN : Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : 50;
 }
 
 function getDefaultWholesaleMarkup(db) {
   const raw = db.prepare("SELECT value FROM shop_settings WHERE key = 'default_wholesale_markup_pct'").get()?.value;
-  const n = Number(raw);
+  const n = raw == null || String(raw).trim() === '' ? NaN : Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : 20;
 }
 
@@ -41,7 +43,7 @@ function getDefaultWholesaleMarkup(db) {
 // the payment. Read with a guard so a hand-edited row cannot disable the gate.
 function getSettleElevationThreshold(db) {
   const raw = db.prepare("SELECT value FROM shop_settings WHERE key = 'settle_elevation_threshold'").get()?.value;
-  const n = Number(raw);
+  const n = raw == null || String(raw).trim() === '' ? NaN : Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : 500;
 }
 
@@ -49,7 +51,7 @@ function getSettleElevationThreshold(db) {
 // report flags at; 50 was hardcoded in the query before this existed.
 function getShiftVarianceThreshold(db) {
   const raw = db.prepare("SELECT value FROM shop_settings WHERE key = 'shift_variance_threshold'").get()?.value;
-  const n = Number(raw);
+  const n = raw == null || String(raw).trim() === '' ? NaN : Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : 50;
 }
 

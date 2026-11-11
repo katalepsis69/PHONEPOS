@@ -117,8 +117,10 @@ Stores the phone repair parts catalog, barcode mapping, dual-tier pricing, and s
 | `cost_price` | `REAL` | `NOT NULL` | `0.0` | Acquisition/supplier cost in PHP |
 | `price_retail` | `REAL` | `NOT NULL` | `0.0` | Standard walk-in customer price in PHP |
 | `price_technician` | `REAL` | `NOT NULL` | `0.0` | Discounted wholesale/technician price in PHP |
-| `stock_quantity` | `INTEGER` | `NOT NULL` | `0` | Current available on-hand stock |
+| `stock_quantity` | `INTEGER` (NUMERIC affinity) | `NOT NULL` | `0` | Current available on-hand stock. Fractional parts (`allow_fractional = 1`) store 3-decimal REAL values here; SQLite INTEGER affinity is NUMERIC, so non-integral values persist as REAL |
 | `min_stock_alert` | `INTEGER` | `NOT NULL` | `3` | Threshold to trigger low-stock warning |
+| `allow_fractional` | `INTEGER` | `NOT NULL` | `0` | `1` when the part sells in fractional quantities (e.g. by length/weight); the quantity columns then carry 3-decimal REAL values (sale_items.quantity, warranty_returns.quantity, stock_movements.delta share the same NUMERIC affinity) |
+| `track_serial` | `INTEGER` | `NOT NULL` | `0` | `1` when the part tracks serial numbers |
 | `supplier` | `TEXT` | `NOT NULL` | `''` | Supplier name (free text) |
 | `location` | `TEXT` | `NOT NULL` | `''` | Physical location (shelf or bin label) |
 | `archived` | `INTEGER` | `NOT NULL` | `0` | `1` when archived: hidden from the shelf, kept for history |

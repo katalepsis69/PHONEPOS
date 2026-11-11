@@ -4,6 +4,13 @@ const { enqueueRow, enqueueDelete } = require('./sync');
 const { money } = require('./money');
 const { getDefaultRetailMarkup, getDefaultWholesaleMarkup } = require('./settings');
 
+function decorateItem(row) {
+  if (!row) return row;
+  row.price_wholesale = row.price_technician;
+  row.display_name = row.item_name || partLabel(row);
+  return row;
+}
+
 function listInventory(db, { search = '', brand = '', part_type = '', lowStockOnly = false, include_archived = false, limit, offset } = {}) {
   let query = 'SELECT * FROM inventory WHERE 1=1';
   const params = [];
@@ -16,8 +23,8 @@ function listInventory(db, { search = '', brand = '', part_type = '', lowStockOn
     // ponytail: escape LIKE wildcards in user input
     const esc = s => s.replace(/[\\%_]/g, m => '\\' + m);
     const term = `%${esc(search)}%`;
-    query += ' AND (model_name LIKE ? ESCAPE \'\\\' OR brand LIKE ? ESCAPE \'\\\' OR part_type LIKE ? ESCAPE \'\\\' OR sku_barcode LIKE ? ESCAPE \'\\\')';
-    params.push(term, term, term, term);
+    query += ' AND (model_name LIKE ? ESCAPE \'\\\' OR brand LIKE ? ESCAPE \'\\\' OR part_type LIKE ? ESCAPE \'\\\' OR sku_barcode LIKE ? ESCAPE \'\\\' OR item_name LIKE ? ESCAPE \'\\\' OR category LIKE ? ESCAPE \'\\\')';
+    params.push(term, term, term, term, term, term);
   }
 
   if (brand) {
@@ -26,8 +33,8 @@ function listInventory(db, { search = '', brand = '', part_type = '', lowStockOn
   }
 
   if (part_type) {
-    query += ' AND part_type = ?';
-    params.push(part_type);
+    query += ' AND (part_type = ? OR category = ?)';
+    params.push(part_type, part_type);
   }
 
   if (lowStockOnly) {
@@ -44,18 +51,20 @@ function listInventory(db, { search = '', brand = '', part_type = '', lowStockOn
     query += ' LIMIT ? OFFSET ?';
     params.push(cap, off);
   }
-  return db.prepare(query).all(...params);
+  return db.prepare(query).all(...params).map(decorateItem);
 }
 
 function getInventoryItem(db, id) {
-  return db.prepare('SELECT * FROM inventory WHERE id = ?').get(id) || null;
+  const row = db.prepare('SELECT * FROM inventory WHERE id = ?').get(id);
+  return row ? decorateItem(row) : null;
 }
 
 function getInventoryByBarcode(db, barcode) {
   if (!barcode || typeof barcode !== 'string') return null;
   const clean = barcode.trim();
   if (!clean) return null;
-  return db.prepare('SELECT * FROM inventory WHERE sku_barcode = ? COLLATE NOCASE').get(clean) || null;
+  const row = db.prepare('SELECT * FROM inventory WHERE sku_barcode = ? COLLATE NOCASE').get(clean);
+  return row ? decorateItem(row) : null;
 }
 
 // Trust boundary for text fields: control characters never enter a stored
@@ -65,6 +74,8 @@ const str = v => (v ?? '').toString().replace(/[\u0000-\u001F\u007F]/g, '').trim
 // The catalog columns have no reason to hold an absurd string; movement notes
 // and refs stay unbounded because a manager's explanation is not a defect.
 const cap = s => s.slice(0, 200);
+const roundQty = q => Math.round((Number(q) || 0) * 1000) / 1000;
+const parseBoolFlag = v => (v === true || /^(1|true|yes)$/i.test(String(v ?? '').trim())) ? 1 : 0;
 
 // Client op_id dedup for the stock-moving writes that have no per-table op_id
 // column (adjustments, imports, part creation). Both helpers must run inside
@@ -86,13 +97,14 @@ function opRecord(db, opId, entityId = null) {
 }
 
 function validateInventory(data) {
-  const brand = cap(str(data.brand));
+  const rawItemName = cap(str(data.item_name || data.name));
+  const brand = cap(str(data.brand)) || (rawItemName ? 'General' : '');
   if (!brand) throw new Error('Brand is required');
 
-  const model_name = cap(str(data.model_name));
+  const model_name = cap(str(data.model_name)) || (rawItemName ? rawItemName : '');
   if (!model_name) throw new Error('Model name is required');
 
-  const part_type = cap(str(data.part_type));
+  const part_type = cap(str(data.part_type || data.category)) || (rawItemName ? 'General' : '');
   if (!part_type) throw new Error('Part type is required');
 
   const cost_price = money(data.cost_price ?? 0);
@@ -101,28 +113,47 @@ function validateInventory(data) {
   const price_retail = money(data.price_retail ?? 0);
   if (price_retail < 0) throw new Error('Retail price cannot be negative');
 
-  const price_technician = money(data.price_technician ?? 0);
-  if (price_technician < 0) throw new Error('Technician price cannot be negative');
+  const price_technician = money(data.price_wholesale ?? data.price_technician ?? 0);
+  if (price_technician < 0) throw new Error('Wholesale price cannot be negative');
 
+  const allow_fractional = Number(data.allow_fractional) ? 1 : 0;
   const stock_quantity = Number(data.stock_quantity ?? 0);
-  if (!Number.isInteger(stock_quantity) || stock_quantity < 0) {
-    throw new Error('Stock quantity must be a non-negative integer');
+  if (allow_fractional) {
+    if (!Number.isFinite(stock_quantity) || stock_quantity < 0) {
+      throw new Error('Stock quantity must be a non-negative number');
+    }
+  } else {
+    if (!Number.isInteger(stock_quantity) || stock_quantity < 0) {
+      throw new Error('Stock quantity must be a non-negative integer');
+    }
+  }
+  const clean_stock_quantity = allow_fractional ? Math.round(stock_quantity * 1000) / 1000 : stock_quantity;
+
+  const rawMinAlert = data.min_stock_alert;
+  const min_stock_alert = rawMinAlert == null || String(rawMinAlert).trim() === '' ? 3 : Number(rawMinAlert);
+  if (!Number.isFinite(min_stock_alert) || min_stock_alert < 0) {
+    throw new Error('Minimum stock alert must be a non-negative number');
   }
 
-  const min_stock_alert = Number(data.min_stock_alert ?? 3);
-  if (!Number.isInteger(min_stock_alert) || min_stock_alert < 0) {
-    throw new Error('Minimum stock alert must be a non-negative integer');
-  }
+  const item_name = rawItemName || null;
+  const category = cap(str(data.category || data.part_type || ''));
+  const uom = cap(str(data.uom || 'pcs')) || 'pcs';
+  const track_serial = Number(data.track_serial) ? 1 : 0;
 
   return {
     brand,
     model_name,
     part_type,
+    item_name,
+    category,
+    uom,
+    allow_fractional,
+    track_serial,
     sku_barcode: cap(str(data.sku_barcode)).toUpperCase() || null,
     cost_price,
     price_retail,
     price_technician,
-    stock_quantity,
+    stock_quantity: clean_stock_quantity,
     min_stock_alert,
     supplier: cap(str(data.supplier)),
     location: cap(str(data.location))
@@ -139,10 +170,8 @@ function recordStockMovement(db, { inventory_id, delta, reason, note = '', ref =
   enqueueRow(db, 'stock_movements', Number(res.lastInsertRowid));
 }
 
-// One label shape everywhere: receipts, audit rows and analytics all read the
-// same string, and a plain hyphen survives Windows thermal printer drivers
-// where an em dash can print as a box glyph.
-const partLabel = item => `${item.brand} ${item.model_name} - ${item.part_type}`;
+// Universal label: uses specific product name if defined, else brand + model - part type
+const partLabel = item => item.item_name || `${item.brand} ${item.model_name} - ${item.part_type}`;
 
 function createInventoryItem(db, data, meta = {}, ctx = {}) {
   const v = validateInventory(data);
@@ -151,10 +180,10 @@ function createInventoryItem(db, data, meta = {}, ctx = {}) {
     const replay = opReplayed(db, opId);
     if (replay) return getInventoryItem(db, replay.entity_id);
     const item = db.prepare(`
-      INSERT INTO inventory (brand, model_name, part_type, sku_barcode, cost_price, price_retail, price_technician, stock_quantity, min_stock_alert, supplier, location)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO inventory (brand, model_name, part_type, sku_barcode, cost_price, price_retail, price_technician, stock_quantity, min_stock_alert, supplier, location, item_name, category, uom, allow_fractional, track_serial)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING *
-    `).get(v.brand, v.model_name, v.part_type, v.sku_barcode, v.cost_price, v.price_retail, v.price_technician, v.stock_quantity, v.min_stock_alert, v.supplier, v.location);
+    `).get(v.brand, v.model_name, v.part_type, v.sku_barcode, v.cost_price, v.price_retail, v.price_technician, v.stock_quantity, v.min_stock_alert, v.supplier, v.location, v.item_name, v.category, v.uom, v.allow_fractional, v.track_serial);
     if (opId) opRecord(db, opId, item.id);
     enqueueRow(db, 'inventory', item.id);
     if (v.stock_quantity !== 0) {
@@ -164,7 +193,7 @@ function createInventoryItem(db, data, meta = {}, ctx = {}) {
       id: item.id, part: partLabel(v), cost_price: v.cost_price, price_retail: v.price_retail,
       price_technician: v.price_technician, stock: v.stock_quantity
     });
-    return item;
+    return decorateItem(item);
   });
 }
 
@@ -188,21 +217,28 @@ function updateInventoryItem(db, id, data, meta = {}, ctx = {}) {
     if (replay) return getInventoryItem(db, id);
   }
 
-  const v = validateInventory({ ...existing, ...data });
+  const v = validateInventory({
+    ...existing,
+    price_wholesale: data.price_wholesale !== undefined ? data.price_wholesale : (data.price_technician !== undefined ? data.price_technician : existing.price_wholesale),
+    ...data
+  });
   return txn(db, () => {
     const item = db.prepare(`
       UPDATE inventory SET
         brand = ?, model_name = ?, part_type = ?, sku_barcode = ?, cost_price = ?,
         price_retail = ?, price_technician = ?, stock_quantity = ?, min_stock_alert = ?,
-        supplier = ?, location = ?, updated_at = CURRENT_TIMESTAMP
+        supplier = ?, location = ?, item_name = ?, category = ?, uom = ?,
+        allow_fractional = ?, track_serial = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
       RETURNING *
-    `).get(v.brand, v.model_name, v.part_type, v.sku_barcode, v.cost_price, v.price_retail, v.price_technician, v.stock_quantity, v.min_stock_alert, v.supplier, v.location, id);
+    `).get(v.brand, v.model_name, v.part_type, v.sku_barcode, v.cost_price, v.price_retail, v.price_technician, v.stock_quantity, v.min_stock_alert, v.supplier, v.location, v.item_name, v.category, v.uom, v.allow_fractional, v.track_serial, id);
     enqueueRow(db, 'inventory', id);
 
     // "Set stock to" in the edit modal lands here; log the diff so the ledger
     // invariant and the history modal stay honest.
-    const delta = v.stock_quantity - existing.stock_quantity;
+    const delta = v.allow_fractional
+      ? roundQty(v.stock_quantity - existing.stock_quantity)
+      : (v.stock_quantity - existing.stock_quantity);
     if (delta !== 0) {
       recordStockMovement(db, { inventory_id: id, delta, reason: meta.reason || 'correction', note: meta.note });
     }
@@ -217,10 +253,20 @@ function updateInventoryItem(db, id, data, meta = {}, ctx = {}) {
 }
 
 function adjustStock(db, id, deltaQty, meta = {}, ctx = {}) {
-  const delta = Number(deltaQty);
-  if (isNaN(delta) || !Number.isInteger(delta)) throw new Error('Stock adjustment delta must be an integer');
+  const rawDelta = Number(deltaQty);
+  if (isNaN(rawDelta) || !Number.isFinite(rawDelta)) {
+    throw new Error('Stock adjustment delta must be a finite number');
+  }
   const before = getInventoryItem(db, id);
   if (!before) return null;
+  const allowFrac = Boolean(before.allow_fractional);
+  if (!allowFrac && !Number.isInteger(rawDelta)) {
+    throw new Error('Stock adjustment delta must be an integer');
+  }
+  const delta = allowFrac ? roundQty(rawDelta) : rawDelta;
+  if (allowFrac && rawDelta !== 0 && delta === 0) {
+    throw new Error('Stock adjustment delta is too small');
+  }
   return txn(db, () => {
     const opId = opIdOf(meta.op_id);
     const replay = opReplayed(db, opId);
@@ -228,10 +274,11 @@ function adjustStock(db, id, deltaQty, meta = {}, ctx = {}) {
     // ponytail: WHERE stock_quantity+? >=0 makes check+update atomic — fixes TOCTOU oversell
     const updated = db.prepare(`
       UPDATE inventory
-      SET stock_quantity = stock_quantity + ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND stock_quantity + ? >= 0
+      SET stock_quantity = CASE WHEN COALESCE(allow_fractional, 0) = 1 THEN ROUND(stock_quantity + ?, 3) ELSE stock_quantity + ? END,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND ROUND(stock_quantity + ?, 6) >= 0
       RETURNING *
-    `).get(delta, id, delta) || null;
+    `).get(delta, delta, id, delta) || null;
     if (!updated) {
       const cur = getInventoryItem(db, id);
       if (!cur) return null;
@@ -296,6 +343,18 @@ function normalizeRow(r) {
   if (res.min_stock_alert == null && res['Min Stock Alert'] != null) res.min_stock_alert = res['Min Stock Alert'];
   if (res.supplier == null && res['Supplier'] != null) res.supplier = res['Supplier'];
   if (res.location == null && res['Location'] != null) res.location = res['Location'];
+  if (res.item_name == null) {
+    if (res['Item Name'] != null) res.item_name = res['Item Name'];
+    else if (res['Product Name'] != null) res.item_name = res['Product Name'];
+    else if (res['Name'] != null) res.item_name = res['Name'];
+  }
+  if (res.category == null && res['Category'] != null) res.category = res['Category'];
+  if (res.uom == null) {
+    if (res['UOM'] != null) res.uom = res['UOM'];
+    else if (res['Unit'] != null) res.uom = res['Unit'];
+  }
+  if (res.allow_fractional == null && res['Allow Fractional'] != null) res.allow_fractional = res['Allow Fractional'];
+  if (res.track_serial == null && res['Track Serial'] != null) res.track_serial = res['Track Serial'];
   return res;
 }
 
@@ -317,19 +376,27 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
       const brand = str(r.brand), model = str(r.model_name), part_type = str(r.part_type);
       let match = sku ? bySku.get(sku) : null;
       if (!match && brand && model && part_type) match = byTriple.get(brand, model, part_type);
-      const qty = Number(r.stock_quantity ?? 0);
-      if (!Number.isInteger(qty)) throw new Error('stock_quantity must be an integer');
+      const hasFracFlag = r.allow_fractional != null && str(r.allow_fractional) !== '';
+      const allowFrac = hasFracFlag ? parseBoolFlag(r.allow_fractional) === 1 : Boolean(match?.allow_fractional);
+      const rawQty = Number(r.stock_quantity ?? 0);
+      if (allowFrac) {
+        if (!Number.isFinite(rawQty)) throw new Error('stock_quantity must be a number');
+      } else {
+        if (!Number.isInteger(rawQty)) throw new Error('stock_quantity must be an integer');
+      }
+      const qty = allowFrac ? roundQty(rawQty) : rawQty;
       if (match) {
         const fields = {};
         for (const k of ['cost_price', 'price_retail', 'price_technician', 'min_stock_alert']) if (str(r[k]) !== '') fields[k] = Number(r[k]);
-        for (const k of ['sku_barcode', 'supplier', 'location']) if (str(r[k]) !== '') fields[k] = str(r[k]);
+        for (const k of ['sku_barcode', 'supplier', 'location', 'item_name', 'category', 'uom']) if (str(r[k]) !== '') fields[k] = str(r[k]);
+        for (const k of ['allow_fractional', 'track_serial']) if (r[k] != null && str(r[k]) !== '') fields[k] = parseBoolFlag(r[k]);
         if (meta.auto_price && fields.cost_price != null && fields.cost_price > 0) {
           const costChanged = match.cost_price == null || Number(match.cost_price) !== fields.cost_price;
           if (fields.price_retail == null && (costChanged || !match.price_retail)) {
-            fields.price_retail = Math.round(fields.cost_price * (1 + defaultRet / 100));
+            fields.price_retail = money(fields.cost_price * (1 + defaultRet / 100));
           }
           if (fields.price_technician == null && (costChanged || !match.price_technician)) {
-            fields.price_technician = Math.round(fields.cost_price * (1 + defaultWho / 100));
+            fields.price_technician = money(fields.cost_price * (1 + defaultWho / 100));
           }
         }
         const hasFields = Object.keys(fields).length > 0;
@@ -339,14 +406,18 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
           return 'updated';
         });
       } else {
-        const rowData = { ...r };
+        const rowData = {
+          ...r,
+          allow_fractional: allowFrac ? 1 : 0,
+          track_serial: r.track_serial != null && str(r.track_serial) !== '' ? parseBoolFlag(r.track_serial) : (r.track_serial ?? 0)
+        };
         const costVal = Number(rowData.cost_price ?? 0);
         if (meta.auto_price && costVal > 0) {
           if (rowData.price_retail == null || str(rowData.price_retail) === '' || Number(rowData.price_retail) === 0) {
-            rowData.price_retail = Math.round(costVal * (1 + defaultRet / 100));
+            rowData.price_retail = money(costVal * (1 + defaultRet / 100));
           }
           if (rowData.price_technician == null || str(rowData.price_technician) === '' || Number(rowData.price_technician) === 0) {
-            rowData.price_technician = Math.round(costVal * (1 + defaultWho / 100));
+            rowData.price_technician = money(costVal * (1 + defaultWho / 100));
           }
         }
         validateInventory({ ...rowData, stock_quantity: qty });
@@ -424,12 +495,12 @@ function bulkEditInventory(db, { ids, action, params = {} }, ctx = {}, meta = {}
         const updates = {};
         if (target === 'retail' || target === 'both') {
           const curr = Number(item.price_retail) || 0;
-          const next = mode === 'pct' ? Math.round(curr * (1 + value / 100)) : Math.round(curr + value);
+          const next = mode === 'pct' ? money(curr * (1 + value / 100)) : money(curr + value);
           updates.price_retail = Math.max(0, next);
         }
         if (target === 'wholesale' || target === 'both') {
           const curr = Number(item.price_technician) || 0;
-          const next = mode === 'pct' ? Math.round(curr * (1 + value / 100)) : Math.round(curr + value);
+          const next = mode === 'pct' ? money(curr * (1 + value / 100)) : money(curr + value);
           updates.price_technician = Math.max(0, next);
         }
         updateInventoryItem(db, id, updates, { reason: 'adjust', note: 'Bulk price adjust' }, ctx);
@@ -449,8 +520,8 @@ function bulkEditInventory(db, { ids, action, params = {} }, ctx = {}, meta = {}
         const cost = Number(item.cost_price) || 0;
         if (cost <= 0) continue;
         const updates = {
-          price_retail: Math.round(cost * (1 + retailMarkup / 100)),
-          price_technician: Math.round(cost * (1 + wholesaleMarkup / 100))
+          price_retail: money(cost * (1 + retailMarkup / 100)),
+          price_technician: money(cost * (1 + wholesaleMarkup / 100))
         };
         updateInventoryItem(db, id, updates, { reason: 'adjust', note: 'Bulk markup recalculate' }, ctx);
         updated++;
@@ -495,20 +566,21 @@ function listReorderSuggestions(db, { days = 3 } = {}) {
   const n = Number(days);
   const windowDays = Number.isInteger(n) && n >= 1 && n <= 90 ? n : 3;
   const rows = db.prepare(`
-    SELECT i.id, i.brand, i.model_name, i.part_type, i.sku_barcode,
-           i.supplier, i.stock_quantity, i.cost_price,
+    SELECT i.id, i.brand, i.model_name, i.part_type, i.item_name, i.uom, i.allow_fractional,
+           i.sku_barcode, i.supplier, i.stock_quantity, i.cost_price,
            i.price_retail, i.price_technician, i.min_stock_alert, i.location,
            COALESCE(SUM(si.quantity), 0) AS qty_sold
     FROM sale_items si
     JOIN sales s ON s.id = si.sale_id AND s.voided = 0
     JOIN inventory i ON i.id = si.inventory_id AND i.archived = 0
     WHERE si.item_type = 'part'
-      AND s.created_at >= datetime('now', ?)
+      AND datetime(s.created_at) >= datetime('now', ?)
     GROUP BY si.inventory_id
     ORDER BY i.supplier COLLATE NOCASE ASC, qty_sold DESC, i.brand ASC, i.model_name ASC
   `).all(`-${windowDays} days`);
   for (const r of rows) {
-    r.suggested_qty = Math.max(r.qty_sold - r.stock_quantity, 0);
+    r.qty_sold = roundQty(r.qty_sold);
+    r.suggested_qty = Math.max(roundQty(r.qty_sold - r.stock_quantity), 0);
     r.est_cost = money(r.suggested_qty * (r.cost_price || 0));
   }
   return { days: windowDays, rows };

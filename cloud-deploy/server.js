@@ -93,6 +93,17 @@ db.exec(`
     ON shop_rows(table_name, updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_shop_rows_shop_table_updated
     ON shop_rows(shop_id, table_name, updated_at DESC);
+  CREATE TABLE IF NOT EXISTS cloud_commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id TEXT NOT NULL REFERENCES shops(shop_id),
+    op_id TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    acked_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_cloud_commands_pending
+    ON cloud_commands(shop_id, id) WHERE acked_at IS NULL;
 `);
 try { db.exec('ALTER TABLE shops ADD COLUMN store_id TEXT REFERENCES stores(store_id)'); } catch (_) {}
 try { db.exec('ALTER TABLE shops ADD COLUMN shop_name TEXT'); } catch (_) {}
@@ -371,8 +382,16 @@ function loginBudgetExceeded(req) {
 // combinations over a 10-minute life. A real pairing is one attempt, so 20/min
 // per client leaves it room and leaves brute force none.
 const PAIR_BUDGET_LIMIT = 20;
+const PAIR_GLOBAL_BUDGET_LIMIT = 120;
 const pairBudget = new Map();
+const pairGlobalBudget = { start: 0, count: 0 };
 function pairBudgetExceeded(req) {
+  // The per-client key is spoofable (last X-Forwarded-For), so a global cap
+  // backs it: rotating claimed addresses cannot crawl the 900k code space.
+  const now = Date.now();
+  if (now - pairGlobalBudget.start > 60000) { pairGlobalBudget.start = now; pairGlobalBudget.count = 0; }
+  pairGlobalBudget.count++;
+  if (pairGlobalBudget.count > PAIR_GLOBAL_BUDGET_LIMIT) return true;
   return fixedWindowBudget(pairBudget, PAIR_BUDGET_LIMIT, req);
 }
 
@@ -459,7 +478,7 @@ const server = http.createServer(async (req, res) => {
       // it carries the claimed shop id.
       let auth = authenticateShop(req, null);
       if (!auth && !ALLOW_LEGACY_SYNC_TOKEN) return json(res, 401, { error: 'bad sync credential' });
-      const { shop_id: claimedShopId, events } = JSON.parse(await readBody(req));
+      const { shop_id: claimedShopId, events = [], ack_command_ids } = JSON.parse(await readBody(req) || '{}');
       if (!auth) auth = authenticateShop(req, claimedShopId);
       if (!auth) return json(res, 401, { error: 'bad sync credential' });
       // Per-event validation: one invalid row must not freeze every newer
@@ -492,10 +511,20 @@ const server = http.createServer(async (req, res) => {
         DO UPDATE SET row_json = excluded.row_json, updated_at = excluded.updated_at
       `);
       const remove = db.prepare('DELETE FROM shop_rows WHERE shop_id = ? AND table_name = ? AND local_id = ?');
+      const ackCmd = db.prepare('UPDATE cloud_commands SET acked_at = ? WHERE shop_id = ? AND id = ? AND acked_at IS NULL');
       const okIds = [];
+      let ackedCmdCount = 0;
       db.exec('BEGIN');
       try {
         heartbeat.run(shopId, targetStoreId, now, now);
+        if (Array.isArray(ack_command_ids)) {
+          for (const cid of ack_command_ids) {
+            if (positiveId(cid)) {
+              const info = ackCmd.run(now, shopId, cid);
+              if (info && info.changes > 0) ackedCmdCount += info.changes;
+            }
+          }
+        }
         for (const ev of validated) {
           if (ev.deleting) remove.run(shopId, ev.table, ev.local_id);
           else upsert.run(shopId, ev.table, ev.local_id, ev.encoded, now);
@@ -511,14 +540,24 @@ const server = http.createServer(async (req, res) => {
         return json(res, 400, { error: 'the batch could not be stored; retry later' });
       }
 
+      const pendingCommands = db.prepare(
+        'SELECT id, op_id, kind, payload_json, created_at FROM cloud_commands WHERE shop_id = ? AND acked_at IS NULL ORDER BY id ASC LIMIT 50'
+      ).all(shopId).map(c => ({
+        id: c.id,
+        op_id: c.op_id,
+        kind: c.kind,
+        payload: JSON.parse(c.payload_json),
+        created_at: c.created_at,
+      }));
+
       const shopOwner = db.prepare('SELECT store_id FROM shops WHERE shop_id = ?').get(shopId);
       const storeId = shopOwner ? shopOwner.store_id : null;
       // An empty batch is the shop's 60s heartbeat, not news: broadcasting it
       // made every manager phone run a full refetch once a minute per shop.
-      if (validated.length > 0) {
-        broadcast('change', { shop_id: shopId, count: validated.length, tables: [...new Set(validated.map(e => e.table))] }, storeId);
+      if (validated.length > 0 || ackedCmdCount > 0) {
+        broadcast('change', { shop_id: shopId, count: validated.length || ackedCmdCount, tables: [...new Set(validated.map(e => e.table))] }, storeId);
       }
-      return json(res, 200, { ok: true, protocol: 2, shop_id: shopId, legacy_credential: auth.legacy, ok_ids: okIds, rejected });
+      return json(res, 200, { ok: true, protocol: 2, shop_id: shopId, legacy_credential: auth.legacy, ok_ids: okIds, rejected, commands: pendingCommands });
     }
 
     // --- manager auth & pairing ---
@@ -564,8 +603,10 @@ const server = http.createServer(async (req, res) => {
       const now = new Date().toISOString();
       const pinHash = hashPin(cleanPin);
       db.prepare('INSERT INTO stores (store_id, store_name, pin_hash, created_at) VALUES (?, ?, ?, ?)').run(storeId, cleanName, pinHash, now);
-      db.prepare(`UPDATE shops SET store_id = ? WHERE store_id IS NULL OR store_id = ''
-        OR (store_id = 'default' AND NOT EXISTS (SELECT 1 FROM stores WHERE store_id = 'default' AND pin_hash != ''))`).run(storeId);
+      // Adopt only truly unassigned shops. The old clause also stole every
+      // 'default' shop while default had no PIN, so an internet client could
+      // claim another operator's paired registers before setup-pin ran.
+      db.prepare(`UPDATE shops SET store_id = ? WHERE store_id IS NULL OR store_id = ''`).run(storeId);
 
       const token = crypto.randomUUID();
       managerSessions.set(token, { storeId, storeName: cleanName, issuedAt: Date.now() });
@@ -800,6 +841,27 @@ const server = http.createServer(async (req, res) => {
         for (const s of shops) {
           rows[s.shop_id] = db.prepare('SELECT table_name, COUNT(*) n FROM shop_rows WHERE shop_id = ? GROUP BY table_name').all(s.shop_id);
         }
+        const pendingCmdRows = db.prepare(`
+          SELECT c.id, c.shop_id, c.kind, c.payload_json, c.created_at
+          FROM cloud_commands c
+          JOIN shops s ON s.shop_id = c.shop_id
+          WHERE c.acked_at IS NULL
+            AND (s.store_id = ? OR (? = 'default' AND (s.store_id IS NULL OR s.store_id = '')))
+          ORDER BY c.id ASC LIMIT 100
+        `).all(session.storeId, session.storeId);
+        const pendingCommandItems = pendingCmdRows.map(c => {
+          let payload = {};
+          try { payload = JSON.parse(c.payload_json); } catch (_) {}
+          return {
+            id: c.id,
+            shop_id: c.shop_id,
+            kind: c.kind,
+            inventory_id: payload.id || null,
+            delta: payload.delta || null,
+            row_count: Array.isArray(payload.rows) ? payload.rows.length : null,
+            created_at: c.created_at,
+          };
+        });
         // The mirror is the only copy of history older than the shop's 30-day
         // outbox prune, so the backup age belongs on the same screen.
         let backup = { last_at: null, age_hours: null, stale: true };
@@ -818,7 +880,15 @@ const server = http.createServer(async (req, res) => {
             };
           }
         } catch (_) {}
-        return json(res, 200, { store_id: session.storeId, store_name: session.storeName, shops, rowCounts: rows, backup });
+        return json(res, 200, {
+          store_id: session.storeId,
+          store_name: session.storeName,
+          shops,
+          rowCounts: rows,
+          pending_commands: pendingCmdRows.length,
+          pending_command_items: pendingCommandItems,
+          backup
+        });
       }
 
       if (p.startsWith('/api/shops/') && req.method === 'DELETE') {
@@ -848,6 +918,7 @@ const server = http.createServer(async (req, res) => {
 
         db.exec('BEGIN');
         try {
+          db.prepare('DELETE FROM cloud_commands WHERE shop_id = ?').run(targetShopId);
           db.prepare('DELETE FROM shop_rows WHERE shop_id = ?').run(targetShopId);
           db.prepare('DELETE FROM shops WHERE shop_id = ?').run(targetShopId);
           db.exec('COMMIT');
@@ -879,11 +950,7 @@ const server = http.createServer(async (req, res) => {
           SELECT MAX(json_extract(r.row_json,'$.customer_name')) AS name,
                  SUM(CAST(json_extract(r.row_json,'$.credit_balance') AS REAL)) AS balance,
                  MAX(json_extract(r.row_json,'$.created_at')) AS last_at,
-                 MAX((SELECT json_extract(pf.row_json,'$.phone')
-                   FROM shop_rows pf
-                   WHERE pf.table_name = 'customer_profiles' AND pf.shop_id = r.shop_id
-                     AND ${NAMEFOLD}(json_extract(pf.row_json,'$.customer_name')) = ${NAMEFOLD}(json_extract(r.row_json,'$.customer_name'))
-                   LIMIT 1)) AS phone
+                 MAX(json_extract(r.row_json,'$.customer_phone')) AS phone
           FROM shop_rows r
           WHERE r.table_name = 'sales'${filter.clause}
             AND COALESCE(CAST(json_extract(r.row_json,'$.voided') AS INTEGER), 0) = 0
@@ -907,7 +974,7 @@ const server = http.createServer(async (req, res) => {
         // /api/reorder serves the same population with buy quantities.
         const invCounts = db.prepare(`
           SELECT COUNT(*) AS types,
-                 COALESCE(SUM(CAST(json_extract(r.row_json,'$.stock_quantity') AS INTEGER)), 0) AS parts_stock,
+                 COALESCE(SUM(CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)), 0) AS parts_stock,
                  COALESCE(SUM(CASE WHEN COALESCE(CAST(json_extract(r.row_json,'$.archived') AS INTEGER), 0) = 0
                    AND CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)
                      <= CAST(json_extract(r.row_json,'$.min_stock_alert') AS REAL)
@@ -935,9 +1002,12 @@ const server = http.createServer(async (req, res) => {
         const table = url.searchParams.get('table');
         const shop = url.searchParams.get('shop');
         if (!MANAGER_ROW_TABLES.has(table)) return json(res, 400, { error: 'bad table' });
+        const limit = url.searchParams.has('limit')
+          ? Math.max(1, Math.min(5000, Math.trunc(Number(url.searchParams.get('limit')) || 500)))
+          : 500;
         const filter = getStoreShopFilter(session.storeId, shop, 'r');
-        const stmt = db.prepare(`SELECT r.shop_id, r.row_json, r.updated_at FROM shop_rows r WHERE r.table_name = ?${filter.clause} ORDER BY r.updated_at DESC LIMIT 500`);
-        const out = stmt.all(table, ...filter.params)
+        const stmt = db.prepare(`SELECT r.shop_id, r.row_json, r.updated_at FROM shop_rows r WHERE r.table_name = ?${filter.clause} ORDER BY r.updated_at DESC LIMIT ?`);
+        const out = stmt.all(table, ...filter.params, limit)
           .map(r => ({ ...JSON.parse(r.row_json), ...(shop ? {} : { shop_id: r.shop_id }), updated_at: r.updated_at }));
         return json(res, 200, out);
       }
@@ -995,7 +1065,15 @@ const server = http.createServer(async (req, res) => {
         const shop = url.searchParams.get('shop');
         const filterR = getStoreShopFilter(session.storeId, shop, 'r');
         const filterI = getStoreShopFilter(session.storeId, shop, 'i');
-        const r2 = v => Math.round((Number(v) || 0) * 100) / 100;
+        const r2 = v => {
+          // Same half-away-from-zero tie rule as src/money.js (Math.round ties
+          // toward +Infinity, a centavo off on negative half-centavos); keep the
+          // non-finite-to-0 coercion analytics aggregates need.
+          const value = Number(v) || 0;
+          const [coefficient, exponent = '0'] = String(Math.abs(value)).split('e');
+          const cents = Math.round(Number(`${coefficient}e${Number(exponent) + 2}`));
+          return Math.sign(value) * cents / 100;
+        };
         const num = (r, k) => `CAST(json_extract(${r}.row_json,'$.${k}') AS REAL)`;
         const inWindow = (col, wFrom, wTo) =>
           `date(json_extract(${col}.row_json,'$.created_at'),${TZ_MODIFIER}) >= '${wFrom}' AND date(json_extract(${col}.row_json,'$.created_at'),${TZ_MODIFIER}) <= '${wTo}'`;
@@ -1043,7 +1121,7 @@ const server = http.createServer(async (req, res) => {
                    COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.return_type') = 'replacement' THEN 1 ELSE 0 END), 0) AS replacements,
                    COALESCE(SUM(CASE WHEN json_extract(r.row_json,'$.return_type') = 'replacement'
                      AND COALESCE(CAST(json_extract(sv.row_json,'$.voided') AS INTEGER), 0) = 0
-                     THEN CAST(json_extract(r.row_json,'$.quantity') AS INTEGER) * COALESCE(CAST(json_extract(inv.row_json,'$.cost_price') AS REAL), 0.0)
+                     THEN CAST(json_extract(r.row_json,'$.quantity') AS REAL) * COALESCE(CAST(json_extract(inv.row_json,'$.cost_price') AS REAL), 0.0)
                      ELSE 0.0 END), 0.0) AS replacement_cost
             FROM shop_rows r
             LEFT JOIN shop_rows inv ON inv.table_name = 'inventory' AND inv.shop_id = r.shop_id
@@ -1057,7 +1135,7 @@ const server = http.createServer(async (req, res) => {
           const items = db.prepare(`
             SELECT
               COALESCE(SUM(CASE WHEN json_extract(i.row_json,'$.item_type') = 'part'
-                THEN CAST(json_extract(i.row_json,'$.quantity') AS INTEGER) * ${num('i','unit_cost')} ELSE 0 END), 0) AS cost,
+                THEN CAST(json_extract(i.row_json,'$.quantity') AS REAL) * ${num('i','unit_cost')} ELSE 0 END), 0) AS cost,
               COALESCE(SUM(CASE WHEN json_extract(i.row_json,'$.item_type') = 'part'
                 THEN ${num('i','total_price')} ELSE 0 END), 0) AS parts_revenue,
               COALESCE(SUM(CASE WHEN json_extract(i.row_json,'$.item_type') = 'labor'
@@ -1071,7 +1149,7 @@ const server = http.createServer(async (req, res) => {
           `).get(...filterI.params);
 
           const movements = db.prepare(`
-            SELECT COALESCE(SUM(CAST(json_extract(r.row_json,'$.delta') AS INTEGER)), 0) AS units_received
+            SELECT COALESCE(SUM(CAST(json_extract(r.row_json,'$.delta') AS REAL)), 0) AS units_received
             FROM shop_rows r
             WHERE r.table_name = 'stock_movements'${filterR.clause}
               AND json_extract(r.row_json,'$.reason') = 'receive'
@@ -1148,7 +1226,7 @@ const server = http.createServer(async (req, res) => {
         `).all(...filterR.params);
         const costs = new Map(db.prepare(`
           SELECT date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER}) AS bucket,
-                 COALESCE(SUM(CAST(json_extract(i.row_json,'$.quantity') AS INTEGER) * ${num('i','unit_cost')}), 0) AS cost
+                 COALESCE(SUM(CAST(json_extract(i.row_json,'$.quantity') AS REAL) * ${num('i','unit_cost')}), 0) AS cost
           FROM shop_rows i
           JOIN shop_rows s ON s.table_name = 'sales' AND s.shop_id = i.shop_id
             AND s.local_id = CAST(json_extract(i.row_json,'$.sale_id') AS INTEGER)
@@ -1161,7 +1239,7 @@ const server = http.createServer(async (req, res) => {
           SELECT date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) AS bucket,
                  COALESCE(SUM(${num('r','refund_amount')} + CASE WHEN json_extract(r.row_json,'$.return_type') = 'replacement'
                    AND COALESCE(CAST(json_extract(sv.row_json,'$.voided') AS INTEGER), 0) = 0
-                   THEN CAST(json_extract(r.row_json,'$.quantity') AS INTEGER) * COALESCE(CAST(json_extract(inv.row_json,'$.cost_price') AS REAL), 0.0)
+                   THEN CAST(json_extract(r.row_json,'$.quantity') AS REAL) * COALESCE(CAST(json_extract(inv.row_json,'$.cost_price') AS REAL), 0.0)
                    ELSE 0.0 END), 0) AS refunded
           FROM shop_rows r
           LEFT JOIN shop_rows inv ON inv.table_name = 'inventory' AND inv.shop_id = r.shop_id
@@ -1194,9 +1272,9 @@ const server = http.createServer(async (req, res) => {
                  -- all-time per sale_item (no window), zero subtotal allocates
                  -- zero, and profit subtracts the NET units' cost plus the
                  -- replacement part's cost.
-                 SUM(MAX(0, CAST(json_extract(i.row_json,'$.quantity') AS INTEGER) - COALESCE((
+                 SUM(MAX(0, CAST(json_extract(i.row_json,'$.quantity') AS REAL) - COALESCE((
                    SELECT SUM(CASE WHEN json_extract(wr.row_json,'$.return_type') != 'replacement'
-                     THEN CAST(json_extract(wr.row_json,'$.quantity') AS INTEGER) ELSE 0 END)
+                     THEN CAST(json_extract(wr.row_json,'$.quantity') AS REAL) ELSE 0 END)
                    FROM shop_rows wr
                    WHERE wr.table_name = 'warranty_returns' AND wr.shop_id = i.shop_id
                      AND CAST(json_extract(wr.row_json,'$.sale_item_id') AS INTEGER) = i.local_id
@@ -1217,9 +1295,9 @@ const server = http.createServer(async (req, res) => {
                    WHERE wr.table_name = 'warranty_returns' AND wr.shop_id = i.shop_id
                      AND CAST(json_extract(wr.row_json,'$.sale_item_id') AS INTEGER) = i.local_id
                  ), 0.0))
-                   - (MAX(0, CAST(json_extract(i.row_json,'$.quantity') AS INTEGER) - COALESCE((
+                   - (MAX(0, CAST(json_extract(i.row_json,'$.quantity') AS REAL) - COALESCE((
                    SELECT SUM(CASE WHEN json_extract(wr.row_json,'$.return_type') != 'replacement'
-                     THEN CAST(json_extract(wr.row_json,'$.quantity') AS INTEGER) ELSE 0 END)
+                     THEN CAST(json_extract(wr.row_json,'$.quantity') AS REAL) ELSE 0 END)
                    FROM shop_rows wr
                    WHERE wr.table_name = 'warranty_returns' AND wr.shop_id = i.shop_id
                      AND CAST(json_extract(wr.row_json,'$.sale_item_id') AS INTEGER) = i.local_id
@@ -1227,7 +1305,7 @@ const server = http.createServer(async (req, res) => {
                    - COALESCE((
                      -- Per-line, inside the SUM: a subquery outside an aggregate
                      -- correlates with an arbitrary row of the group.
-                     SELECT SUM(CAST(json_extract(wr.row_json,'$.quantity') AS INTEGER) * COALESCE(CAST(json_extract(inv.row_json,'$.cost_price') AS REAL), 0.0))
+                     SELECT SUM(CAST(json_extract(wr.row_json,'$.quantity') AS REAL) * COALESCE(CAST(json_extract(inv.row_json,'$.cost_price') AS REAL), 0.0))
                      FROM shop_rows wr
                      LEFT JOIN shop_rows inv ON inv.table_name = 'inventory' AND inv.shop_id = wr.shop_id
                        AND inv.local_id = CAST(json_extract(wr.row_json,'$.replacement_inventory_id') AS INTEGER)
@@ -1279,23 +1357,32 @@ const server = http.createServer(async (req, res) => {
       // and dropped older breaches once the catalog outgrew the window.
       if (p === '/api/reorder') {
         const period = url.searchParams.get('period');
-        const days = ['day', '7d', '30d'].includes(period) ? { day: 1, '7d': 7, '30d': 30 }[period] : 30;
+        const daysParam = Number(url.searchParams.get('days'));
+        const days = Number.isFinite(daysParam) && daysParam > 0
+          ? Math.max(1, Math.min(90, Math.trunc(daysParam)))
+          : (['day', '7d', '30d'].includes(period) ? { day: 1, '7d': 7, '30d': 30 }[period] : 30);
         const since = `date('now',${TZ_MODIFIER},'-${days - 1} days')`;
         const shop = url.searchParams.get('shop');
         const filter = getStoreShopFilter(session.storeId, shop, 'i');
         const rows = db.prepare(`
-          SELECT CAST(json_extract(i.row_json,'$.id') AS INTEGER) AS id,
+          SELECT i.shop_id,
+                 CAST(json_extract(i.row_json,'$.id') AS INTEGER) AS id,
                  json_extract(i.row_json,'$.brand') AS brand,
                  json_extract(i.row_json,'$.model_name') AS model_name,
                  json_extract(i.row_json,'$.part_type') AS part_type,
-                 CAST(json_extract(i.row_json,'$.stock_quantity') AS INTEGER) AS stock_quantity,
-                 CAST(json_extract(i.row_json,'$.min_stock_alert') AS INTEGER) AS min_stock_alert,
+                 json_extract(i.row_json,'$.sku_barcode') AS sku_barcode,
+                 CAST(json_extract(i.row_json,'$.stock_quantity') AS REAL) AS stock_quantity,
+                 CAST(json_extract(i.row_json,'$.min_stock_alert') AS REAL) AS min_stock_alert,
                  CAST(json_extract(i.row_json,'$.cost_price') AS REAL) AS cost_price,
+                 CAST(json_extract(i.row_json,'$.price_retail') AS REAL) AS price_retail,
+                 CAST(json_extract(i.row_json,'$.price_technician') AS REAL) AS price_technician,
+                 json_extract(i.row_json,'$.supplier') AS supplier,
+                 json_extract(i.row_json,'$.location') AS location,
                  COALESCE(v.units, 0) AS units_sold
           FROM shop_rows i
           LEFT JOIN (
             SELECT si.shop_id, CAST(json_extract(si.row_json,'$.inventory_id') AS INTEGER) AS inv_id,
-                   SUM(CAST(json_extract(si.row_json,'$.quantity') AS INTEGER)) AS units
+                   SUM(CAST(json_extract(si.row_json,'$.quantity') AS REAL)) AS units
             FROM shop_rows si
             JOIN shop_rows s ON s.table_name = 'sales' AND s.shop_id = si.shop_id
               AND s.local_id = CAST(json_extract(si.row_json,'$.sale_id') AS INTEGER)
@@ -1306,7 +1393,7 @@ const server = http.createServer(async (req, res) => {
           ) v ON v.shop_id = i.shop_id AND v.inv_id = CAST(json_extract(i.row_json,'$.id') AS INTEGER)
           WHERE i.table_name = 'inventory'${filter.clause}
             AND COALESCE(CAST(json_extract(i.row_json,'$.archived') AS INTEGER), 0) = 0
-            AND (CAST(json_extract(i.row_json,'$.stock_quantity') AS INTEGER) <= CAST(json_extract(i.row_json,'$.min_stock_alert') AS INTEGER)
+            AND (CAST(json_extract(i.row_json,'$.stock_quantity') AS REAL) <= CAST(json_extract(i.row_json,'$.min_stock_alert') AS REAL)
               OR v.units > 0)
         `).all(...filter.params);
         const list = rows
@@ -1314,6 +1401,16 @@ const server = http.createServer(async (req, res) => {
             const restockQty = Math.max(1, (r.min_stock_alert - r.stock_quantity) + 1);
             return {
               id: r.id,
+              shop_id: r.shop_id,
+              brand: r.brand || '',
+              model_name: r.model_name || '',
+              part_type: r.part_type || '',
+              sku_barcode: r.sku_barcode || '',
+              cost_price: Number(r.cost_price) || 0,
+              price_retail: Number(r.price_retail) || 0,
+              price_technician: Number(r.price_technician) || 0,
+              supplier: r.supplier || '',
+              location: r.location || '',
               name: [r.brand, r.model_name, r.part_type].filter(Boolean).join(' '),
               stock_quantity: r.stock_quantity,
               min_stock_alert: r.min_stock_alert,
@@ -1328,6 +1425,296 @@ const server = http.createServer(async (req, res) => {
           .sort((a, b) => ((b.below_min ? 1 : 0) - (a.below_min ? 1 : 0)) || (a.stock_quantity - b.stock_quantity))
           .slice(0, 300);
         return json(res, 200, list);
+      }
+
+      if (p === '/api/inventory/reorder' && req.method === 'GET') {
+        const d = Math.max(1, Math.min(90, Math.trunc(Number(url.searchParams.get('days')) || 7)));
+        const sinceIso = new Date(Date.now() - d * 86400 * 1000).toISOString();
+        const shop = url.searchParams.get('shop');
+        const filter = getStoreShopFilter(session.storeId, shop, 'si');
+        const rows = db.prepare(`
+          SELECT i.shop_id,
+                 CAST(json_extract(i.row_json,'$.id') AS INTEGER) AS id,
+                 json_extract(i.row_json,'$.brand') AS brand,
+                 json_extract(i.row_json,'$.model_name') AS model_name,
+                 json_extract(i.row_json,'$.part_type') AS part_type,
+                 json_extract(i.row_json,'$.sku_barcode') AS sku_barcode,
+                 CAST(json_extract(i.row_json,'$.cost_price') AS REAL) AS cost_price,
+                 CAST(json_extract(i.row_json,'$.price_retail') AS REAL) AS price_retail,
+                 CAST(json_extract(i.row_json,'$.price_technician') AS REAL) AS price_technician,
+                 CAST(json_extract(i.row_json,'$.stock_quantity') AS REAL) AS stock_quantity,
+                 CAST(json_extract(i.row_json,'$.min_stock_alert') AS REAL) AS min_stock_alert,
+                 COALESCE(CAST(json_extract(i.row_json,'$.allow_fractional') AS INTEGER), 0) AS allow_fractional,
+                 json_extract(i.row_json,'$.supplier') AS supplier,
+                 json_extract(i.row_json,'$.location') AS location,
+                 SUM(CAST(json_extract(si.row_json,'$.quantity') AS REAL)) AS qty_sold,
+                 COUNT(DISTINCT s.local_id) AS sale_count,
+                 MAX(json_extract(s.row_json,'$.created_at')) AS last_sold_at
+          FROM shop_rows si
+          JOIN shop_rows s ON s.table_name = 'sales' AND s.shop_id = si.shop_id
+            AND s.local_id = CAST(json_extract(si.row_json,'$.sale_id') AS INTEGER)
+          JOIN shop_rows i ON i.table_name = 'inventory' AND i.shop_id = si.shop_id
+            AND i.local_id = CAST(json_extract(si.row_json,'$.inventory_id') AS INTEGER)
+          WHERE si.table_name = 'sale_items'${filter.clause}
+            AND json_extract(si.row_json,'$.item_type') = 'part'
+            AND json_extract(si.row_json,'$.inventory_id') IS NOT NULL
+            AND COALESCE(CAST(json_extract(s.row_json,'$.voided') AS INTEGER), 0) = 0
+            AND COALESCE(CAST(json_extract(i.row_json,'$.archived') AS INTEGER), 0) = 0
+            AND json_extract(s.row_json,'$.created_at') >= ?
+          GROUP BY i.shop_id, i.local_id
+          ORDER BY qty_sold DESC, stock_quantity ASC, brand ASC, model_name ASC
+        `).all(...filter.params, sinceIso);
+        const mapped = rows.map(r => {
+          const sold = Number(r.qty_sold) || 0;
+          const stock = Number(r.stock_quantity) || 0;
+          const minAlert = Number(r.min_stock_alert) || 0;
+          // Match the counter's reorder sheet (src/inventory.js
+          // listReorderSuggestions): net replenishment need, not a full
+          // buy-up of everything sold. The two surfaces must agree.
+          const suggested_qty = Math.max(Math.round((sold - stock) * 1000) / 1000, 0);
+          return {
+            id: r.id,
+            shop_id: r.shop_id,
+            brand: r.brand || '',
+            model_name: r.model_name || '',
+            part_type: r.part_type || '',
+            sku_barcode: r.sku_barcode || '',
+            cost_price: Number(r.cost_price) || 0,
+            price_retail: Number(r.price_retail) || 0,
+            price_technician: Number(r.price_technician) || 0,
+            stock_quantity: stock,
+            min_stock_alert: minAlert,
+            allow_fractional: Number(r.allow_fractional) ? 1 : 0,
+            supplier: r.supplier || '',
+            location: r.location || '',
+            qty_sold: sold,
+            sale_count: Number(r.sale_count) || 0,
+            last_sold_at: r.last_sold_at || '',
+            suggested_qty,
+            est_cost: Math.round(suggested_qty * (Number(r.cost_price) || 0) * 100) / 100
+          };
+        });
+        return json(res, 200, { days: d, rows: mapped });
+      }
+
+      if (p === '/api/inventory/adjust-stock' && req.method === 'POST') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const id = Number(body.id);
+        const rawDelta = Number(body.delta);
+        if (!positiveId(id)) return json(res, 400, { error: 'valid part id required' });
+        if (!Number.isFinite(rawDelta) || rawDelta === 0 || Math.abs(rawDelta) > 100000) {
+          return json(res, 400, { error: 'delta must be a non-zero number' });
+        }
+        const reason = String(body.reason || 'receive').trim().slice(0, 40) || 'receive';
+        const note = String(body.note || 'Added from Cloud').trim().slice(0, 200);
+        const opId = typeof body.op_id === 'string' && body.op_id.trim()
+          ? body.op_id.trim().slice(0, 120)
+          : `cloud-adj-${crypto.randomUUID()}`;
+
+        const storeShops = db.prepare(`SELECT shop_id FROM shops WHERE store_id = ? OR (? = 'default' AND (store_id IS NULL OR store_id = '')) ORDER BY last_seen DESC`).all(session.storeId, session.storeId).map(s => s.shop_id);
+        if (storeShops.length === 0) return json(res, 400, { error: 'No shop register is paired yet' });
+
+        let targetShopId = body.shop_id && storeShops.includes(body.shop_id) ? body.shop_id : '';
+        if (!targetShopId) {
+          if (storeShops.length === 1) {
+            targetShopId = storeShops[0];
+          } else {
+            const matching = storeShops.filter(sid => db.prepare("SELECT 1 FROM shop_rows WHERE shop_id = ? AND table_name = 'inventory' AND local_id = ?").get(sid, id));
+            if (matching.length === 1) targetShopId = matching[0];
+            else return json(res, 400, { error: 'Select a specific shop register first' });
+          }
+        }
+
+        const existingCmd = db.prepare('SELECT id FROM cloud_commands WHERE op_id = ?').get(opId);
+        const invRow = db.prepare("SELECT row_json FROM shop_rows WHERE shop_id = ? AND table_name = 'inventory' AND local_id = ?").get(targetShopId, id);
+        if (!invRow) return json(res, 404, { error: 'Part not found in cloud mirror' });
+        const item = JSON.parse(invRow.row_json);
+        if (existingCmd) {
+          return json(res, 200, { ok: true, shop_id: targetShopId, item, deduplicated: true });
+        }
+
+        const allowFrac = Boolean(item.allow_fractional);
+        if (!allowFrac && !Number.isInteger(rawDelta)) {
+          return json(res, 400, { error: 'delta must be a non-zero integer' });
+        }
+        const delta = allowFrac ? Math.round(rawDelta * 1000) / 1000 : rawDelta;
+        if (allowFrac && delta === 0) {
+          return json(res, 400, { error: 'delta must be at least 0.001' });
+        }
+
+        const now = new Date().toISOString();
+        const rawNext = (Number(item.stock_quantity) || 0) + delta;
+        const nextStock = allowFrac ? Math.max(0, Math.round(rawNext * 1000) / 1000) : Math.max(0, rawNext);
+        item.stock_quantity = nextStock;
+        item.updated_at = now;
+        const cmdPayload = JSON.stringify({ id, delta, reason, note });
+
+        db.exec('BEGIN');
+        try {
+          db.prepare("UPDATE shop_rows SET row_json = ?, updated_at = ? WHERE shop_id = ? AND table_name = 'inventory' AND local_id = ?")
+            .run(JSON.stringify(item), now, targetShopId, id);
+          db.prepare('INSERT INTO cloud_commands (shop_id, op_id, kind, payload_json, created_at) VALUES (?, ?, ?, ?, ?)')
+            .run(targetShopId, opId, 'adjust_stock', cmdPayload, now);
+          db.exec('COMMIT');
+        } catch (err) {
+          db.exec('ROLLBACK');
+          throw err;
+        }
+        broadcast('change', { shop_id: targetShopId, count: 1, tables: ['inventory'] }, session.storeId);
+        return json(res, 200, { ok: true, shop_id: targetShopId, item });
+      }
+
+      if (p === '/api/inventory/import' && req.method === 'POST') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const rows = body.rows;
+        if (!Array.isArray(rows) || rows.length === 0 || rows.length > 2000) {
+          return json(res, 400, { error: 'rows must be an array of 1 to 2000 items' });
+        }
+        const opId = typeof body.op_id === 'string' && body.op_id.trim()
+          ? body.op_id.trim().slice(0, 120)
+          : `cloud-imp-${crypto.randomUUID()}`;
+
+        const storeShops = db.prepare(`SELECT shop_id FROM shops WHERE store_id = ? OR (? = 'default' AND (store_id IS NULL OR store_id = '')) ORDER BY last_seen DESC`).all(session.storeId, session.storeId).map(s => s.shop_id);
+        if (storeShops.length === 0) return json(res, 400, { error: 'No shop register is paired yet' });
+
+        let targetShopId = body.shop_id && storeShops.includes(body.shop_id) ? body.shop_id : '';
+        if (!targetShopId) {
+          if (storeShops.length === 1) targetShopId = storeShops[0];
+          else return json(res, 400, { error: 'Select a specific shop register in the top bar before importing CSV' });
+        }
+
+        const existingCmd = db.prepare('SELECT id FROM cloud_commands WHERE op_id = ?').get(opId);
+        if (existingCmd) {
+          return json(res, 200, { ok: true, shop_id: targetShopId, created: 0, updated: 0, skipped: 0, deduplicated: true });
+        }
+
+        const now = new Date().toISOString();
+        const existingRows = db.prepare("SELECT local_id, row_json FROM shop_rows WHERE shop_id = ? AND table_name = 'inventory'").all(targetShopId)
+          .map(r => ({ local_id: r.local_id, data: JSON.parse(r.row_json) }));
+        let maxLocalId = existingRows.reduce((m, r) => Math.max(m, Number(r.local_id) || 0), 0);
+
+        const upsertStmt = db.prepare(`
+          INSERT INTO shop_rows (shop_id, table_name, local_id, row_json, updated_at)
+          VALUES (?, 'inventory', ?, ?, ?)
+          ON CONFLICT (shop_id, table_name, local_id)
+          DO UPDATE SET row_json = excluded.row_json, updated_at = excluded.updated_at
+        `);
+
+        let created = 0, updated = 0, skipped = 0;
+        const cleanRows = [];
+
+        db.exec('BEGIN');
+        try {
+          for (const raw of rows) {
+            if (!raw || typeof raw !== 'object') { skipped++; continue; }
+            const item_name = raw.item_name && String(raw.item_name).trim() ? String(raw.item_name).trim() : null;
+            const brand = String(raw.brand || '').trim() || (item_name ? 'General' : '');
+            const model_name = String(raw.model_name || '').trim() || (item_name || '');
+            const part_type = String(raw.part_type || '').trim() || (item_name ? (String(raw.category || '').trim() || 'General') : '');
+            if (!brand || !model_name || !part_type) { skipped++; continue; }
+
+            const sku = raw.sku_barcode && String(raw.sku_barcode).trim() ? String(raw.sku_barcode).trim() : null;
+            let match = sku
+              ? existingRows.find(e => e.data && String(e.data.sku_barcode || '').trim() === sku)
+              : null;
+            if (!match) {
+              const bL = brand.toLowerCase(), mL = model_name.toLowerCase(), pL = part_type.toLowerCase();
+              match = existingRows.find(e => e.data
+                && String(e.data.brand || '').trim().toLowerCase() === bL
+                && String(e.data.model_name || '').trim().toLowerCase() === mL
+                && String(e.data.part_type || '').trim().toLowerCase() === pL);
+            }
+
+            const cost = Math.max(0, Number(raw.cost_price) || 0);
+            const retail = Math.max(0, Number(raw.price_retail) || 0);
+            const tech = raw.price_technician !== undefined && raw.price_technician !== '' && Number(raw.price_technician) >= 0
+              ? Number(raw.price_technician)
+              : retail;
+            const hasFracFlag = raw.allow_fractional !== undefined && raw.allow_fractional !== '';
+            const allowFrac = hasFracFlag
+              ? (raw.allow_fractional === true || /^(1|true|yes)$/i.test(String(raw.allow_fractional).trim()))
+              : Boolean(match?.data?.allow_fractional);
+            const rawQty = Math.max(0, Number(raw.stock_quantity) || 0);
+            const qty = allowFrac ? Math.round(rawQty * 1000) / 1000 : Math.trunc(rawQty);
+            const hasMinAlert = raw.min_stock_alert !== undefined && raw.min_stock_alert !== '' && Number(raw.min_stock_alert) >= 0;
+            const minAlert = hasMinAlert ? (allowFrac ? Math.round(Number(raw.min_stock_alert) * 1000) / 1000 : Math.trunc(Number(raw.min_stock_alert))) : 3;
+            const supplier = String(raw.supplier || '').trim();
+            const location = String(raw.location || '').trim();
+            const category = raw.category && String(raw.category).trim() ? String(raw.category).trim() : part_type;
+            const uom = raw.uom && String(raw.uom).trim() ? String(raw.uom).trim() : '';
+
+            cleanRows.push({
+              brand, model_name, part_type,
+              item_name: item_name || '',
+              category,
+              uom,
+              allow_fractional: allowFrac ? 1 : 0,
+              sku_barcode: sku || '',
+              cost_price: cost,
+              price_retail: retail,
+              price_technician: tech,
+              stock_quantity: qty,
+              min_stock_alert: hasMinAlert ? minAlert : '',
+              supplier, location
+            });
+
+            if (match) {
+              const d = match.data;
+              const sum = (Number(d.stock_quantity) || 0) + qty;
+              d.stock_quantity = allowFrac ? Math.max(0, Math.round(sum * 1000) / 1000) : Math.max(0, sum);
+              if (item_name) d.item_name = item_name;
+              if (raw.category && String(raw.category).trim()) d.category = category;
+              if (uom) d.uom = uom;
+              if (hasFracFlag) d.allow_fractional = allowFrac ? 1 : 0;
+              if (cost > 0) d.cost_price = cost;
+              if (retail > 0) d.price_retail = retail;
+              if (tech > 0) d.price_technician = tech;
+              if (hasMinAlert) d.min_stock_alert = minAlert;
+              if (sku) d.sku_barcode = sku;
+              if (supplier) d.supplier = supplier;
+              if (location) d.location = location;
+              d.archived = 0;
+              d.updated_at = now;
+              upsertStmt.run(targetShopId, match.local_id, JSON.stringify(d), now);
+              updated++;
+            } else {
+              const newId = ++maxLocalId;
+              const newItem = {
+                id: newId,
+                brand, model_name, part_type,
+                item_name,
+                category,
+                uom: uom || 'pcs',
+                allow_fractional: allowFrac ? 1 : 0,
+                sku_barcode: sku,
+                cost_price: cost,
+                price_retail: retail,
+                price_technician: tech,
+                stock_quantity: qty,
+                min_stock_alert: minAlert,
+                supplier, location,
+                archived: 0,
+                created_at: now,
+                updated_at: now
+              };
+              existingRows.push({ local_id: newId, data: newItem });
+              upsertStmt.run(targetShopId, newId, JSON.stringify(newItem), now);
+              created++;
+            }
+          }
+          if (cleanRows.length > 0) {
+            db.prepare('INSERT INTO cloud_commands (shop_id, op_id, kind, payload_json, created_at) VALUES (?, ?, ?, ?, ?)')
+              .run(targetShopId, opId, 'import_inventory', JSON.stringify({ rows: cleanRows }), now);
+          }
+          db.exec('COMMIT');
+        } catch (err) {
+          db.exec('ROLLBACK');
+          throw err;
+        }
+        if (created + updated > 0) {
+          broadcast('change', { shop_id: targetShopId, count: created + updated, tables: ['inventory'] }, session.storeId);
+        }
+        return json(res, 200, { ok: true, shop_id: targetShopId, created, updated, skipped });
       }
 
       if (p === '/api/dead-stock') {
@@ -1362,13 +1749,13 @@ const server = http.createServer(async (req, res) => {
                  json_extract(r.row_json,'$.brand') AS brand,
                  json_extract(r.row_json,'$.model_name') AS model_name,
                  json_extract(r.row_json,'$.part_type') AS part_type,
-                 CAST(json_extract(r.row_json,'$.stock_quantity') AS INTEGER) AS stock_quantity,
+                 CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL) AS stock_quantity,
                  CAST(json_extract(r.row_json,'$.cost_price') AS REAL) AS cost_price,
                  date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) AS stocked_at
           FROM shop_rows r
           WHERE r.table_name = 'inventory'${filter.clause}
             AND COALESCE(CAST(json_extract(r.row_json,'$.archived') AS INTEGER), 0) = 0
-            AND CAST(json_extract(r.row_json,'$.stock_quantity') AS INTEGER) > 0
+            AND CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL) > 0
         `).all(...filter.params);
         const dead = rows
           .filter(r => !soldInWindow.has(`${r.shop_id}:${r.id}`))

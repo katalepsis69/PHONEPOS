@@ -69,7 +69,7 @@ phone-repair-pos/
 │   ├── money.js               # Cent rounding helper shared by every money path
 │   ├── names.js               # Customer-name normalization and Unicode folding
 │   ├── printer.js             # ESC/POS slip layout and PowerShell print transport
-│   ├── sync.js                # Push-only outbox sync agent to the cloud
+│   ├── sync.js                # Outbox sync agent: pushes rows up, applies cloud stock commands down
 │   ├── updater.js             # GitHub Releases checks, SHA-256 gated self-update
 │   ├── license.js             # Ed25519 license verification & machine ID
 │   └── seed.js                # Initial standard parts catalog & demo data

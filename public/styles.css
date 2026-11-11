@@ -736,7 +736,7 @@ button:disabled {
 /* Manager tools as one compact icon row (hidden for staff via data-manager-only) */
 .rail-tools {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 3px;
 }
 
@@ -2908,7 +2908,30 @@ html.light .modal-backdrop {
 
 .draft-chip i.ph {
   font-size: 0.75rem;
+}
 
+.draft-chip.is-synced {
+  border-color: color-mix(in oklab, var(--ok) 36%, transparent);
+  background: color-mix(in oklab, var(--ok) 12%, transparent);
+  color: var(--ok);
+}
+
+.draft-chip.is-syncing {
+  border-color: color-mix(in oklab, var(--accent) 36%, transparent);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.draft-chip.is-error {
+  border-color: color-mix(in oklab, var(--danger) 38%, transparent);
+  background: color-mix(in oklab, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.draft-chip.is-local {
+  border-color: var(--line);
+  background: var(--surface-2);
+  color: var(--txt-3);
 }
 
 /* ---- counter at narrower widths (maintains 2 columns down to 820px tablet breakpoint) ---- */
@@ -3579,6 +3602,12 @@ a.btn-mini {
   border-color: var(--line-strong);
   background: var(--surface-3);
   color: var(--txt);
+}
+
+.btn-mini:focus-visible,
+.btn-mini:focus-within {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
 }
 
 .btn-mini i.ph {
@@ -5018,12 +5047,12 @@ html[data-density='roomy'] .ptable th {
   .gate__link,
   .seg-btn,
   .mini-link {
-    min-height: 40px;
-    min-width: 40px;
+    min-height: 44px;
+    min-width: 44px;
     font-size: 0.75rem;
   }
 
-  .btn-mini { padding: 8px 12px; }
+  .btn-mini { min-height: 44px; min-width: 44px; padding: 8px 12px; font-size: 0.75rem; }
 
   /* Hover-only affordances mean nothing on touch: show the pressed state */
   .btn-mini:hover,
@@ -5035,9 +5064,9 @@ html[data-density='roomy'] .ptable th {
   }
 
   .rail-link { min-height: 44px; }
-  .rail-tool { min-height: 40px; }
+  .rail-tool { min-height: 44px; }
   .pay-btn { min-height: 44px; }
-  .seg-btn { min-height: 40px; }
+  .seg-btn { min-height: 44px; }
   .combo__opt { min-height: 44px; font-size: 0.8125rem; }
   .toast-item { font-size: 0.8125rem; }
 }

@@ -1,9 +1,10 @@
 // phone-repair-pos/tests/e2e.test.js
 const assert = require('node:assert');
-const { serverTest } = require('./helper');
+const { serverTest, ensurePinChanged } = require('./helper');
 const { seedInitialParts } = require('../src/seed');
 
 serverTest('End-to-end flow: Seed catalog -> Check stock -> Create POS GCash Sale -> Settle Credit -> Verify Stats', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
   // 1. Seed database with real parts and initial sample transactions
   const count = seedInitialParts(db);
   assert.ok(count >= 10, 'Should seed at least 10 sample parts');
