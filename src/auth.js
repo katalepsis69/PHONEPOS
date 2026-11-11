@@ -87,20 +87,38 @@ function isDefaultPin(db) {
 // counter's 5-try budget, or five guesses from a phone freeze the register.
 const PIN_NAMESPACES = {
   counter: { attempts: 'pin_failed_attempts', lockout: 'pin_lockout_until', ms: LOCKOUT_MS, what: 'Workstation' },
-  report: { attempts: 'report_pin_failed_attempts', lockout: 'report_pin_lockout_until', ms: 15 * 60 * 1000, what: 'Report logins' }
+  report: { attempts: 'report_pin_failed_attempts', lockout: 'report_pin_lockout_until', ms: 15 * 60 * 1000, what: 'Report logins' },
+  recovery: { attempts: 'recovery_failed_attempts', lockout: 'recovery_lockout_until', ms: 15 * 60 * 1000, what: 'PIN recovery' }
 };
 
-function verifyManagerPin(db, pin, ns = 'counter') {
-  const { attempts: attemptsKey, lockout: lockoutKey, ms: lockoutMs, what } = PIN_NAMESPACES[ns] || PIN_NAMESPACES.counter;
-  // Lockout lives in the database, not in module memory: otherwise closing and
-  // reopening the app resets the counter and the limit means nothing.
-  const lockoutUntil = Number(getSetting(db, lockoutKey)) || 0;
+function checkLockout(db, ns) {
+  const config = PIN_NAMESPACES[ns] || PIN_NAMESPACES.counter;
+  const lockoutUntil = Number(getSetting(db, config.lockout)) || 0;
   const now = Date.now();
   if (now < lockoutUntil) {
     const e = new Error(`Too many incorrect PIN attempts. Locked for ${Math.ceil((lockoutUntil - now) / 1000)}s.`);
     e.statusCode = 429;
     throw e;
   }
+  return config;
+}
+
+function recordPinFailure(db, ns) {
+  const { attempts: attemptsKey, lockout: lockoutKey, ms: lockoutMs, what } = PIN_NAMESPACES[ns] || PIN_NAMESPACES.counter;
+  const attempts = (Number(getSetting(db, attemptsKey)) || 0) + 1;
+  if (attempts >= MAX_ATTEMPTS) {
+    setSetting(db, attemptsKey, 0);
+    setSetting(db, lockoutKey, Date.now() + lockoutMs);
+    const e = new Error(`Too many incorrect PIN attempts. ${what} locked for ${lockoutMs / 1000}s.`);
+    e.statusCode = 429;
+    throw e;
+  }
+  setSetting(db, attemptsKey, attempts);
+  return false;
+}
+
+function verifyManagerPin(db, pin, ns = 'counter') {
+  const { attempts: attemptsKey, lockout: lockoutKey } = checkLockout(db, ns);
 
   const storedHash = getSetting(db, 'manager_pin_hash');
   const { ok: isValid, upgrade } = verifyPinHash(storedHash, pin);
@@ -112,16 +130,7 @@ function verifyManagerPin(db, pin, ns = 'counter') {
     return true;
   }
 
-  const attempts = (Number(getSetting(db, attemptsKey)) || 0) + 1;
-  if (attempts >= MAX_ATTEMPTS) {
-    setSetting(db, attemptsKey, 0);
-    setSetting(db, lockoutKey, Date.now() + lockoutMs);
-    const e = new Error(`Too many incorrect PIN attempts. ${what} locked for ${lockoutMs / 1000}s.`);
-    e.statusCode = 429;
-    throw e;
-  }
-  setSetting(db, attemptsKey, attempts);
-  return false;
+  return recordPinFailure(db, ns);
 }
 
 // One token shared by manager report sessions. It rotates after a bounded
@@ -146,27 +155,87 @@ function verifyReportToken(db, token) {
   return input.length === stored.length && crypto.timingSafeEqual(input, stored);
 }
 
-function updateManagerPin(db, oldPin, newPin) {
-  if (!verifyManagerPin(db, oldPin)) {
-    throw new Error('Current PIN is incorrect');
+function validateNewPin(pin) {
+  if (!pin || !/^\d{4,}$/.test(String(pin))) {
+    const e = new Error('New PIN must be at least 4 digits');
+    e.statusCode = 400;
+    throw e;
   }
-  if (!newPin || !/^\d{4,}$/.test(String(newPin))) {
-    throw new Error('New PIN must be at least 4 digits');
+  if (String(pin) === '1234') {
+    const e = new Error('Choose a PIN other than the factory default');
+    e.statusCode = 400;
+    throw e;
   }
-  if (String(newPin) === '1234') {
-    throw new Error('Choose a PIN other than the factory default');
-  }
+}
+
+function applyManagerPinReset(db, newPin) {
   setSetting(db, 'manager_pin_hash', hashPin(newPin));
   setSetting(db, 'pin_failed_attempts', 0);
   setSetting(db, 'pin_lockout_until', 0);
   setSetting(db, 'report_pin_failed_attempts', 0);
   setSetting(db, 'report_pin_lockout_until', 0);
+  setSetting(db, 'recovery_failed_attempts', 0);
+  setSetting(db, 'recovery_lockout_until', 0);
   _defaultPinCache.delete(db);
   // PIN change is also report-token revocation: every logged-in phone
   // is holding a token that no longer matches.
   setSetting(db, 'report_token', crypto.randomBytes(32).toString('hex'));
   setSetting(db, 'report_token_expires_at', Date.now() + REPORT_TOKEN_TTL_MS);
+}
+
+function updateManagerPin(db, oldPin, newPin) {
+  if (!verifyManagerPin(db, oldPin)) {
+    const e = new Error('Current PIN is incorrect');
+    e.statusCode = 400;
+    throw e;
+  }
+  validateNewPin(newPin);
+  applyManagerPinReset(db, newPin);
   return { success: true };
+}
+
+function hasRecoveryPassword(db) {
+  return Boolean(getSetting(db, 'recovery_password_hash'));
+}
+
+function setRecoveryPassword(db, recoveryPassword) {
+  if (typeof recoveryPassword !== 'string' || recoveryPassword.length < 6 || recoveryPassword.trim().length < 6) {
+    const e = new Error('Recovery password must be at least 6 characters');
+    e.statusCode = 400;
+    throw e;
+  }
+  if (recoveryPassword === '1234') {
+    const e = new Error('Recovery password must be different from factory default (1234)');
+    e.statusCode = 400;
+    throw e;
+  }
+  if (verifyPinHash(getManagerPinHash(db), recoveryPassword).ok) {
+    const e = new Error('Recovery password must be different from your current Manager PIN.');
+    e.statusCode = 400;
+    throw e;
+  }
+  setSetting(db, 'recovery_password_hash', hashPin(recoveryPassword));
+  setSetting(db, 'recovery_failed_attempts', 0);
+  setSetting(db, 'recovery_lockout_until', 0);
+}
+
+function recoverManagerPin(db, recoveryPassword, newPin) {
+  if (!hasRecoveryPassword(db)) {
+    const e = new Error('No recovery password is set on this workstation.');
+    e.statusCode = 400;
+    throw e;
+  }
+  checkLockout(db, 'recovery');
+
+  const storedHash = getSetting(db, 'recovery_password_hash');
+  const { ok: isValid } = verifyPinHash(storedHash, recoveryPassword);
+  if (!isValid) {
+    return recordPinFailure(db, 'recovery');
+  }
+
+  validateNewPin(newPin);
+  applyManagerPinReset(db, newPin);
+  return true;
 }
 
 // -------------------------------------------------------------
@@ -312,6 +381,9 @@ module.exports = {
   verifyManagerPin,
   updateManagerPin,
   isDefaultPin,
+  hasRecoveryPassword,
+  setRecoveryPassword,
+  recoverManagerPin,
   getReportToken,
   verifyReportToken,
   createStaff,

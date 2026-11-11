@@ -1,7 +1,12 @@
 // phone-repair-pos/tests/auth.test.js
 const assert = require('node:assert');
 const { dbTest } = require('./helper');
-const { verifyManagerPin, updateManagerPin, isDefaultPin, hashPin } = require('../src/auth');
+const {
+  verifyManagerPin, updateManagerPin, isDefaultPin, hashPin,
+  hasRecoveryPassword, setRecoveryPassword, recoverManagerPin,
+  getReportToken, verifyReportToken
+} = require('../src/auth');
+const { getShopSettings } = require('../src/settings');
 
 dbTest('Default manager PIN is 1234 and is flagged for replacement', (db) => {
   assert.strictEqual(verifyManagerPin(db, '1234'), true);
@@ -68,4 +73,57 @@ dbTest('A correct PIN clears the failure counter', (db) => {
   // Counter reset, so 4 more failures must not lock out.
   for (let i = 0; i < 4; i++) assert.strictEqual(verifyManagerPin(db, '0000'), false);
 });
+
+dbTest('recovery password validation, independent 15m lockout, and Manager PIN reset', (db) => {
+  assert.strictEqual(hasRecoveryPassword(db), false);
+  assert.throws(() => recoverManagerPin(db, 'secret1', '5678'), /No recovery password/);
+
+  for (const bad of ['', '12345', '      ', '1234']) {
+    assert.throws(() => setRecoveryPassword(db, bad));
+  }
+  updateManagerPin(db, '1234', '2580');
+  assert.throws(() => setRecoveryPassword(db, '2580'), /different|6/);
+  updateManagerPin(db, '2580', '258099');
+  assert.throws(() => setRecoveryPassword(db, '258099'), /Manager PIN/i);
+
+  setRecoveryPassword(db, 'shop-owner-99');
+  assert.strictEqual(hasRecoveryPassword(db), true);
+  const pub = getShopSettings(db);
+  assert.strictEqual('recovery_password_hash' in pub, false);
+  assert.strictEqual('recovery_lockout_until' in pub, false);
+  assert.strictEqual('recovery_failed_attempts' in pub, false);
+
+  // 5 wrong recovery tries lock recovery only, leaving Manager PIN login working
+  for (let i = 0; i < 4; i++) assert.strictEqual(recoverManagerPin(db, 'wrong-pw', '4321'), false);
+  assert.throws(() => recoverManagerPin(db, 'wrong-pw', '4321'), err => err.statusCode === 429);
+  assert.strictEqual(verifyManagerPin(db, '258099'), true);
+
+  // Reset recovery lockout timestamp cleanly in test DB, then recover PIN to 7788
+  db.prepare("UPDATE shop_settings SET value = '0' WHERE key IN ('recovery_failed_attempts','recovery_lockout_until')").run();
+  const prevReport = getReportToken(db);
+  assert.strictEqual(recoverManagerPin(db, 'shop-owner-99', '7788'), true);
+  assert.strictEqual(verifyManagerPin(db, '7788'), true);
+  assert.strictEqual(verifyReportToken(db, prevReport), false);
+});
+
+dbTest('recovery password input validation and new PIN edge cases', (db) => {
+  // Unconfigured recovery password throws 400
+  assert.throws(() => recoverManagerPin(db, 'secret1', '5678'), err => err.statusCode === 400 && /No recovery password/.test(err.message));
+
+  // Non-string or null recovery passwords throw 400
+  for (const bad of [null, undefined, 123456, {}, []]) {
+    assert.throws(() => setRecoveryPassword(db, bad), err => err.statusCode === 400);
+  }
+
+  setRecoveryPassword(db, 'shop-owner-99');
+
+  // Once recovery password is set, wrong password returns false and does not throw 400
+  assert.strictEqual(recoverManagerPin(db, 'wrong-password', '5678'), false);
+
+  // Correct recovery password with invalid newPin throws 400
+  for (const badPin of ['', '123', 'abcd', '1234', null, undefined]) {
+    assert.throws(() => recoverManagerPin(db, 'shop-owner-99', badPin), err => err.statusCode === 400);
+  }
+});
+
 

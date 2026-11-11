@@ -2,7 +2,12 @@
 // Shop settings read/write. Private keys never leave the server, and only
 // the editable whitelist can be written.
 const dns = require('node:dns');
-const PRIVATE_SETTINGS = new Set(['manager_pin_hash', 'license_key', 'pin_failed_attempts', 'pin_lockout_until', 'report_pin_failed_attempts', 'report_pin_lockout_until', 'report_token', 'report_token_expires_at', 'counter_session_secret', 'sync_token']);
+const PRIVATE_SETTINGS = new Set([
+  'manager_pin_hash', 'license_key', 'pin_failed_attempts', 'pin_lockout_until',
+  'report_pin_failed_attempts', 'report_pin_lockout_until',
+  'recovery_password_hash', 'recovery_failed_attempts', 'recovery_lockout_until',
+  'report_token', 'report_token_expires_at', 'counter_session_secret', 'sync_token'
+]);
 
 function getShopSettings(db) {
   const rows = db.prepare('SELECT key, value FROM shop_settings').all();
