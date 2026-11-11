@@ -196,6 +196,12 @@ serverTest('GET /api/backup/download guards, traversal rejection, integrity chec
   assert.match(corruptBody.error, /cannot be downloaded/i);
   assert.doesNotMatch(corruptBody.error, /restored/i);
 
+  // 5b. No file param with only an UNVERIFIABLE file on disk: the newest
+  // fallback skips the corrupt snapshot and answers 404 rather than
+  // handing out anything it could not verify.
+  const emptyRes = await fetch(`${baseUrl}/api/backup/download`, { headers: { ...managerAuth } });
+  assert.strictEqual(emptyRes.status, 404);
+
   // 6. Create valid backup, then download with ?file=
   const bRes = await fetch(`${baseUrl}/api/backup`, { method: 'POST', headers: { ...managerAuth } });
   assert.equal(bRes.status, 200);
@@ -203,6 +209,12 @@ serverTest('GET /api/backup/download guards, traversal rejection, integrity chec
 
   const downRes = await fetch(`${baseUrl}/api/backup/download?file=${backupFile}`, { headers: { ...managerAuth } });
   assert.equal(downRes.status, 200);
+
+  // 6b. No file param: the newest VERIFIED snapshot downloads and the
+  // Content-Disposition names it, so the USB copy lands with a real name.
+  const newestRes = await fetch(`${baseUrl}/api/backup/download`, { headers: { ...managerAuth } });
+  assert.equal(newestRes.status, 200);
+  assert.match(newestRes.headers.get('content-disposition') || '', /attachment; filename="shop/);
   assert.equal(downRes.headers.get('content-type'), 'application/octet-stream');
   assert.equal(downRes.headers.get('content-disposition'), `attachment; filename="${backupFile}"`);
   assert.equal(downRes.headers.get('cache-control'), 'no-store');

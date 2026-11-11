@@ -1189,3 +1189,40 @@ require(${JSON.stringify(serverPath)});
   }
 });
 
+
+serverTest('factory-PIN login yields a session without elevation and answers pin_change_required', async (baseUrl) => {
+  const res = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin: '1234' })
+  });
+  assert.strictEqual(res.status, 200);
+  const data = await res.json();
+  assert.ok(data.token, 'a session token is issued so the setup screens work');
+  assert.strictEqual(data.pin_change_required, true);
+  assert.strictEqual(data.elevationToken, undefined, 'the factory PIN must never mint elevation');
+  // The bare session stays locked out of an elevated route (pair-cloud checks
+  // elevation before it reads the body, and the factory-PIN gate after).
+  const denied = await fetch(`${baseUrl}/api/settings/pair-cloud`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.token}` },
+    body: JSON.stringify({ url: 'https://example.com', code: '123456' })
+  });
+  assert.strictEqual(denied.status, 403);
+});
+
+serverTest('update posture: progress reads without a session, apply stays locked', async (baseUrl) => {
+  // GET /progress is deliberately reachable with no session (the kiosk boot
+  // poll and the settings panel both read it); pin that, and pin that POST
+  // /apply still demands a session so no LAN peer can start an install.
+  const progressRes = await fetch(`${baseUrl}/api/system/update/progress`);
+  assert.strictEqual(progressRes.status, 200);
+  const progressData = await progressRes.json();
+  assert.ok(typeof progressData === 'object');
+  const applyRes = await fetch(`${baseUrl}/api/system/update/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.strictEqual(applyRes.status, 401);
+});

@@ -73,8 +73,10 @@ the remediation finding and move on); the tree shows concurrent interference. Re
 and stop.
 
 TREE STATE (measured 2026-11-12; refresh to observed state on every run)
-- HEAD: 533f07a (on main, 10 commits ahead of origin/main 94d1206). Full source is tracked
-  in git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 610/610 pass, 0 fail, exit 0 across 49 test
-  files (all tracked).
+- HEAD: 63075df (on main, 13 commits ahead of origin/main 94d1206; the v9 audit batch,
+  remediation verification, and the serviceModeFromEnv refactor landed since 533f07a).
+  Full source is tracked in git (since 2026-11-07); the release pipeline commits
+  mid-session, so never --amend.
+- Gates: npm run build:css exit 0; npm test 615/615 pass, 0 fail, exit 0 across 49 test
+  files (all tracked; 610 baseline plus five audit/remediation regression tests).
 - Working tree: clean at measurement (`git status --short` empty).
