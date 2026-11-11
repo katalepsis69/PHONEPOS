@@ -1747,7 +1747,46 @@ async function confirmRestore(file) {
   }
 }
 
+export async function downloadBackup() {
+  if (!hasElevation()) {
+    return new Promise((resolve, reject) => {
+      requireManagerPin('Enter manager PIN to download a database backup', () => {
+        downloadBackup().then(resolve, reject);
+      });
+    });
+  }
+
+  try {
+    const res = await fetch('/api/backup', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || !data.backup_file) {
+      throw new Error(data.error || 'Backup creation failed');
+    }
+    const dl = typeof downloadCsvFile === 'function' ? downloadCsvFile : (await import('../main.js')).downloadCsvFile;
+    await dl('/api/backup/download?file=' + encodeURIComponent(data.backup_file), data.backup_file);
+    showToast(`Backup downloaded: ${data.backup_file}`, 'success');
+  } catch (err) {
+    showToast(`Error creating backup download: ${err.message}`, 'error');
+  }
+}
+
 export async function shutdownServer() {
+  if (S.serviceMode) {
+    document.body.innerHTML = `
+      <div style="min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: #0b1120; color: #f1f5f9; font-family: sans-serif; padding: 24px;">
+        <div style="max-width: 420px; text-align: center; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
+          <div style="width: 48px; height: 48px; border-radius: 9999px; background: rgba(16, 185, 129, 0.15); color: #10b981; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
+            <svg style="width: 24px; height: 24px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+          </div>
+          <h2 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 8px;">POS Window Closed</h2>
+          <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 12px;">Background server stays active; open the TechParts POS desktop shortcut whenever you want to return.</p>
+          <p style="color: #64748b; font-size: 0.75rem; margin-bottom: 0;">You can now close this browser tab.</p>
+        </div>
+      </div>`;
+    try { window.close(); } catch (_) {}
+    return;
+  }
+
   if (!hasElevation()) {
     requireManagerPin('Enter manager PIN to quit the POS', () => shutdownServer());
     return;
@@ -2149,7 +2188,7 @@ function showUpdateHandoffStalled(releaseUrl, waitedS) {
         </div>
         <h2 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 8px;">The register has not come back</h2>
         <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 12px;">Nothing answered here for ${waitedS} seconds. Start TechParts POS again and press Update Now to retry the swap.</p>
-        <p style="color: #64748b; font-size: 0.75rem; margin-bottom: 12px;">If it stays stuck, the swap log is at %LOCALAPPDATA%\\TechPartsPOS\\TechPartsPOS_update.handoff.log.</p>
+        <p style="color: #64748b; font-size: 0.75rem; margin-bottom: 12px;">If it stays stuck, the swap log is at ${S.serviceMode ? 'C:\\ProgramData\\TechPartsPOS\\updates\\TechPartsPOS_update.handoff.log' : '%LOCALAPPDATA%\\TechPartsPOS\\TechPartsPOS_update.handoff.log'}.</p>
         <p id="update-handoff-clock" style="color: #94a3b8; font-size: 0.8125rem; margin-bottom: 20px;">Waiting for the register to answer. 0s elapsed.</p>
         <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
           <button type="button" id="update-handoff-wait" style="${btn} background: #06b6d4; color: #0b1120;">Keep waiting</button>

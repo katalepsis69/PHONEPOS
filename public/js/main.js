@@ -1,9 +1,9 @@
 import { S } from './state.js';
 import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, debouncedViewLoad, initConfirmModal, initInputModal, initLiveClock, openModal, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
-import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, syncCloudUi } from './auth.js';
+import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, syncCloudUi, openForgotPinPanel, closeForgotPinPanel, submitRecoveryPinReset, submitRecoveryPasswordChange } from './auth.js';
 import { autoPrintEnabled, calculateChange, calculateCreditBalance, clearDeviceSelection, setPosBrandFilter, clearRepairOrder, completeSale, copyRepairRef, customerComboboxInit, editCartQtyPrompt, fillExactAmount, focusImeiForScan, loadCustomerSuggestions, loadPosCatalog, newRepairRef, onCustomerNameInput, onDeviceSelected, onPartSearchKeydown, onRepairIntakeInput, printClaimStub, quickAddPart, refreshDraftChip, removeCartItem, renderCartSummary, resetPosFilters, resetRepairCounter, restoreCartRecovery, saveRepairDraft, setPartCategory, setInStockOnly, setPaymentMethod, setPriceTier, toggleRepairNote, renderPartsTable, initScanListeners, resumeRepairDraft } from './views/pos.js';
 import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, setAddItemTemplate, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
-import { editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, dismissUpdateBanner, openUpdateModal } from './views/backoffice.js';
+import { editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, dismissUpdateBanner, openUpdateModal, downloadBackup } from './views/backoffice.js';
 import { openShiftPrompt, closeShiftPrompt } from './views/pos.js';
 import { printModalSlip, printTestReceipt, printZReport, reprintLastReceipt } from './receipts.js';
 import './api.js'; // side effect: session/auth-aware fetch wrapper
@@ -262,6 +262,7 @@ const ACTIONS = {
   'export-sales-csv': () => requireManagerPin('Enter manager PIN to export sales data', () => downloadCsvFile('/api/export/sales.csv', 'sales.csv')),
   'export-customers-csv': () => requireManagerPin('Enter manager PIN to export customer data', () => downloadCsvFile('/api/export/customers.csv', 'customers.csv')),
   'trigger-backup': () => triggerBackup(),
+  'download-backup': () => downloadBackup(),
   'restore-backup': () => restoreBackup(),
   'check-updates': () => checkForAppUpdates(),
   'apply-update': () => applyAppUpdate(),
@@ -345,6 +346,9 @@ const ACTIONS = {
   'skip-pin-setup': () => skipPinSetup(),
   'login-back': () => loginGateBack(),
   'login-submit': () => submitLoginPin(),
+  'forgot-pin-open': () => openForgotPinPanel(),
+  'recover-pin-submit': () => submitRecoveryPinReset(),
+  'recover-pin-cancel': () => closeForgotPinPanel(),
   'close-pin': () => closePinModal(),
   'verify-pin': () => submitPinVerification(),
   'reset-demo': () => triggerResetDemoData(),
@@ -511,6 +515,9 @@ function initFormWiring() {
   on('settings-pin-btn', 'click', submitPinChange);
   on('settings-current-pin', 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submitPinChange(); } });
   on('settings-new-pin', 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submitPinChange(); } });
+  on('settings-recovery-btn', 'click', submitRecoveryPasswordChange);
+  on('settings-recovery-new', 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('settings-recovery-confirm')?.focus(); } });
+  on('settings-recovery-confirm', 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submitRecoveryPasswordChange(); } });
   on('btn-pair-cloud', 'click', pairCloudWithCode);
   on('settings-pair-code', 'keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pairCloudWithCode(); } });
   // Enter in the staff fields adds the person, instead of falling through to
@@ -528,13 +535,43 @@ function initFormWiring() {
   });
   on('pin-setup-new', 'input', () => document.getElementById('pin-setup-error')?.classList.add('hidden'));
   on('pin-setup-confirm', 'input', () => document.getElementById('pin-setup-error')?.classList.add('hidden'));
+  on('pin-setup-recovery', 'input', () => document.getElementById('pin-setup-error')?.classList.add('hidden'));
+  on('pin-setup-recovery-confirm', 'input', () => document.getElementById('pin-setup-error')?.classList.add('hidden'));
   on('pin-setup-new', 'keydown', e => {
     if (e.key === 'Enter') {
       e.preventDefault();
       document.getElementById('pin-setup-confirm')?.focus();
     }
   });
-  on('pin-setup-confirm', 'keydown', e => { if (e.key === 'Enter') submitPinSetup(); });
+  on('pin-setup-confirm', 'keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('pin-setup-recovery')?.focus();
+    }
+  });
+  on('pin-setup-recovery', 'keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('pin-setup-recovery-confirm')?.focus();
+    }
+  });
+  on('pin-setup-recovery-confirm', 'keydown', e => { if (e.key === 'Enter') submitPinSetup(); });
+  on('recover-pw', 'input', () => document.getElementById('recover-error')?.classList.add('hidden'));
+  on('recover-new-pin', 'input', () => document.getElementById('recover-error')?.classList.add('hidden'));
+  on('recover-confirm-pin', 'input', () => document.getElementById('recover-error')?.classList.add('hidden'));
+  on('recover-pw', 'keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('recover-new-pin')?.focus();
+    }
+  });
+  on('recover-new-pin', 'keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('recover-confirm-pin')?.focus();
+    }
+  });
+  on('recover-confirm-pin', 'keydown', e => { if (e.key === 'Enter') submitRecoveryPinReset(); });
   on('pin-input', 'keydown', e => { if (e.key === 'Enter') submitPinVerification(); });
 }
 

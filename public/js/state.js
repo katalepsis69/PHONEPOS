@@ -43,6 +43,8 @@ const _state = {
   sessionActor: null, // {type:'manager'|'staff', id, name}
   elevationToken: null,
   elevationExpiresAt: 0,
+  serviceMode: false,
+  recoveryConfigured: false,
   loginGateResolve: null,
   loginGateTarget: null, // {staffId|null, name} — who the PIN row is for
   isManagerUnlocked: false,

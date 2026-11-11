@@ -1322,3 +1322,438 @@ test('the sync chip shows the error state only for a synced-but-refused credenti
   assert.equal(run({ state: 'syncing', pending: 3, last_error: 'x', url_configured: true }), 'Syncing 3 changes');
   assert.equal(run({ state: 'attention', pending: 2, last_error: null, url_configured: true }), '2 changes queued');
 });
+
+// -------------------------------------------------------------
+// Task 3: PIN Recovery, USB Backup Download, and Close POS UI
+// -------------------------------------------------------------
+test('Task 3: public/index.html contains all required recovery and backup DOM elements and actions', () => {
+  const html = source('public/index.html');
+  const requiredIds = [
+    'pin-setup-recovery',
+    'pin-setup-recovery-confirm',
+    'pin-setup-skip',
+    'counter-exit-btn',
+    'settings-recovery-status',
+    'settings-recovery-new',
+    'settings-recovery-confirm',
+    'settings-recovery-btn',
+    'settings-recovery-msg',
+    'login-gate-forgot-pin',
+    'login-gate-no-recovery',
+    'recover-pw',
+    'recover-new-pin',
+    'recover-confirm-pin',
+    'recover-error'
+  ];
+  for (const id of requiredIds) {
+    assert.ok(html.includes(`id="${id}"`), `public/index.html must contain id="${id}"`);
+  }
+
+  const requiredActions = [
+    'data-action="download-backup"',
+    'data-action="forgot-pin-open"',
+    'data-action="recover-pin-submit"',
+    'data-action="recover-pin-cancel"'
+  ];
+  for (const act of requiredActions) {
+    assert.ok(html.includes(act), `public/index.html must contain action ${act}`);
+  }
+
+  // Zero references to scripts/set-pin.js in public/
+  const authSrc = source('public/js/auth.js');
+  assert.equal(html.includes('scripts/set-pin.js'), false, 'index.html must not reference scripts/set-pin.js');
+  assert.equal(authSrc.includes('scripts/set-pin.js'), false, 'auth.js must not reference scripts/set-pin.js');
+});
+
+test('Task 3: public/js/state.js defines serviceMode and recoveryConfigured', () => {
+  const stateSrc = source('public/js/state.js');
+  assert.match(stateSrc, /serviceMode:\s*false/, 'state.js must initialize serviceMode: false');
+  assert.match(stateSrc, /recoveryConfigured:\s*false/, 'state.js must initialize recoveryConfigured: false');
+});
+
+test('Task 3: syncServiceModeUi updates exit button and hides pin setup skip button', () => {
+  const authSrc = source('public/js/auth.js');
+  assert.match(authSrc, /export function syncServiceModeUi\(/, 'auth.js must export syncServiceModeUi');
+
+  const skipBtn = {
+    classes: new Set(),
+    classList: {
+      add(c) { skipBtn.classes.add(c); },
+      remove(c) { skipBtn.classes.delete(c); },
+      toggle(c, force) { if (force) skipBtn.classes.add(c); else skipBtn.classes.delete(c); }
+    }
+  };
+  const exitBtn = {
+    title: 'Quit / Exit POS',
+    ariaLabel: 'Quit or exit POS',
+    textContent: 'Quit',
+    setAttribute(k, v) { if (k === 'aria-label') exitBtn.ariaLabel = v; }
+  };
+  const S = { serviceMode: false };
+  const ctx = vm.createContext({
+    S,
+    document: {
+      getElementById: id => (id === 'pin-setup-skip' ? skipBtn : (id === 'counter-exit-btn' ? exitBtn : null)),
+      querySelector: sel => (sel === '#counter-exit-btn' || sel === '[data-action="shutdown"]' ? exitBtn : null)
+    }
+  });
+
+  const fnStart = authSrc.indexOf('export function syncServiceModeUi(');
+  assert.ok(fnStart > -1, 'syncServiceModeUi must exist in auth.js');
+  const fnEnd = authSrc.indexOf('\nexport ', fnStart + 1);
+  const fnCode = authSrc.slice(fnStart, fnEnd > -1 ? fnEnd : fnStart + 600).replace('export ', '');
+  vm.runInContext(fnCode, ctx);
+
+  // When service mode is true
+  ctx.syncServiceModeUi(true);
+  assert.equal(S.serviceMode, true, 'S.serviceMode must be set to true');
+  assert.ok(skipBtn.classes.has('hidden'), '#pin-setup-skip must have hidden class in service mode');
+  assert.equal(exitBtn.title, 'Close POS Window', 'Exit button title should be Close POS Window');
+
+  // When service mode is false
+  ctx.syncServiceModeUi(false);
+  assert.equal(S.serviceMode, false, 'S.serviceMode must be set to false');
+  assert.ok(!skipBtn.classes.has('hidden'), '#pin-setup-skip must not have hidden class in dev mode');
+  assert.equal(exitBtn.title, 'Quit / Exit POS', 'Exit button title should be restored');
+});
+
+test('Task 3: skipPinSetup is blocked when S.serviceMode is true', () => {
+  const authSrc = source('public/js/auth.js');
+  const start = authSrc.indexOf('export function skipPinSetup()');
+  const end = authSrc.indexOf('\nexport ', start + 1);
+  const code = authSrc.slice(start, end).replace('export ', '');
+
+  let overlayHidden = false;
+  let sessionStored = false;
+  const S = { serviceMode: true };
+  const ctx = vm.createContext({
+    S,
+    isPinSetupSubmitting: false,
+    sessionStorage: { setItem: () => { sessionStored = true; } },
+    document: {
+      getElementById: id => (id === 'pin-setup-overlay' ? { classList: { add: () => { overlayHidden = true; } } } : null)
+    },
+    syncAppInert: () => {},
+    showToast: () => {}
+  });
+  vm.runInContext(code, ctx);
+
+  // In service mode:
+  ctx.skipPinSetup();
+  assert.equal(overlayHidden, false, 'skipPinSetup must not hide overlay when in service mode');
+  assert.equal(sessionStored, false, 'skipPinSetup must not record pin_setup_skipped when in service mode');
+
+  // In non-service mode:
+  S.serviceMode = false;
+  ctx.skipPinSetup();
+  assert.equal(overlayHidden, true, 'skipPinSetup hides overlay in non-service mode');
+  assert.equal(sessionStored, true, 'skipPinSetup stores skipped in non-service mode');
+});
+
+test('Task 3: shutdownServer renders Close POS screen and skips API call in service mode', async () => {
+  const backofficeSrc = source('public/js/views/backoffice.js');
+  const start = backofficeSrc.indexOf('export async function shutdownServer()');
+  const end = backofficeSrc.indexOf('\nexport ', start + 1);
+  const code = backofficeSrc.slice(start, end > -1 ? end : undefined).replace('export ', '');
+
+  let apiCalled = false;
+  let closed = false;
+  const S = { serviceMode: true };
+  let bodyHtml = '';
+  const ctx = vm.createContext({
+    S,
+    hasElevation: () => false,
+    requireManagerPin: () => { throw new Error('should not prompt manager pin'); },
+    confirmModal: async () => true,
+    document: {
+      body: {
+        set innerHTML(v) { bodyHtml = v; },
+        get innerHTML() { return bodyHtml; }
+      }
+    },
+    window: { close: () => { closed = true; } },
+    fetch: async () => { apiCalled = true; return { ok: true }; }
+  });
+  vm.runInContext(code, ctx);
+
+  await ctx.shutdownServer();
+  assert.equal(apiCalled, false, 'shutdownServer must not call /api/system/shutdown in service mode');
+  assert.equal(closed, true, 'shutdownServer must call window.close()');
+  assert.ok(bodyHtml.includes('POS Window Closed'), 'must render POS Window Closed screen');
+  assert.ok(bodyHtml.includes('Background server stays active'), 'must inform user background server stays active');
+});
+
+test('Task 3: downloadBackup requires elevation, creates backup, and triggers browser download', async () => {
+  const backofficeSrc = source('public/js/views/backoffice.js');
+  assert.match(backofficeSrc, /export async function downloadBackup\(/, 'backoffice.js must export downloadBackup');
+  const start = backofficeSrc.indexOf('export async function downloadBackup()');
+  const end = backofficeSrc.indexOf('\nexport ', start + 1);
+  const code = backofficeSrc.slice(start, end > -1 ? end : undefined).replace('export ', '');
+
+  let elevationPrompted = false;
+  let backupPostCalled = false;
+  let downloadedUrl = '';
+  let downloadedFile = '';
+  let elevated = false;
+
+  const ctx = vm.createContext({
+    hasElevation: () => elevated,
+    requireManagerPin: (reason, cb) => {
+      elevationPrompted = true;
+      elevated = true;
+      cb();
+    },
+    fetch: async (url, opts) => {
+      if (url === '/api/backup' && opts?.method === 'POST') {
+        backupPostCalled = true;
+        return { ok: true, json: async () => ({ success: true, backup_file: 'shop-20261111-test.db' }) };
+      }
+      return { ok: false };
+    },
+    downloadCsvFile: async (url, file) => {
+      downloadedUrl = url;
+      downloadedFile = file;
+    },
+    showToast: () => {}
+  });
+  vm.runInContext(code, ctx);
+
+  await ctx.downloadBackup();
+  assert.equal(elevationPrompted, true, 'must require manager pin if not elevated');
+  assert.equal(backupPostCalled, true, 'must call POST /api/backup');
+  assert.equal(downloadedFile, 'shop-20261111-test.db');
+  assert.ok(downloadedUrl.includes('/api/backup/download?file=shop-20261111-test.db'));
+});
+
+test('Task 3: submitPinChange prompts for recovery password when !S.recoveryConfigured', async () => {
+  const authSrc = source('public/js/auth.js');
+  const start = authSrc.indexOf('export async function submitPinChange()');
+  const end = authSrc.indexOf('export function syncRecoveryStatusUi', start + 1);
+  const code = authSrc.slice(start, end).replace('export ', '');
+
+  let focusedRecovery = false;
+  let errorMsg = '';
+  let apiCalled = false;
+  const S = { recoveryConfigured: false };
+  const ctx = vm.createContext({
+    S,
+    document: {
+      getElementById: id => {
+        if (id === 'settings-current-pin') return { value: '1234' };
+        if (id === 'settings-new-pin') return { value: '5678' };
+        if (id === 'settings-pin-msg') return { textContent: '', classList: { remove() {}, add() {} }, set textContent(v) { errorMsg = v; } };
+        if (id === 'settings-recovery-new') return { focus: () => { focusedRecovery = true; } };
+        return null;
+      }
+    },
+    setTimeout: (fn) => fn(),
+    fetch: async () => { apiCalled = true; return { ok: true }; }
+  });
+  vm.runInContext(code, ctx);
+
+  await ctx.submitPinChange();
+  assert.equal(apiCalled, false, 'must not call change-pin when recovery password is not configured');
+  assert.ok(errorMsg.includes('Manager Recovery Password'), 'must explain why change was blocked');
+  assert.equal(focusedRecovery, true, 'must focus the recovery password input');
+});
+
+test('Task 3: submitPinSetup validates recovery password and posts to /api/auth/recovery-password', async () => {
+  const authSrc = source('public/js/auth.js');
+  const start = authSrc.indexOf('let pinSetupPinChanged = false;');
+  const end = authSrc.indexOf('export function requireManagerPin', start + 1);
+  const code = authSrc.slice(start, end).replace(/export /g, '');
+
+  const dom = {
+    'setup-shop-name': { value: 'FixZone Repair' },
+    'setup-owner-name': { value: 'Owner' },
+    'setup-shop-address': { value: 'Branch 1' },
+    'setup-shop-phone': { value: '09171234567' },
+    'setup-footer-note': { value: 'Thanks' },
+    'setup-warranty-days': { value: '7' },
+    'pin-setup-new': { value: '5678', removeAttribute() {}, setAttribute() {} },
+    'pin-setup-confirm': { value: '5678', removeAttribute() {}, setAttribute() {} },
+    'pin-setup-recovery': { value: 'short', removeAttribute() {}, setAttribute() {} },
+    'pin-setup-recovery-confirm': { value: 'short', removeAttribute() {}, setAttribute() {} },
+    'setup-seed-parts': { checked: false },
+    'setup-license-key': { value: '' },
+    'pin-setup-error': { classList: { add() {}, remove() {} }, textContent: '' },
+    'pin-setup-overlay': { classList: { add() {} } }
+  };
+
+  let postedUrls = [];
+  let postedBodies = [];
+  const S = {
+    serviceMode: false,
+    recoveryConfigured: false,
+    shopSettings: {},
+    sessionToken: null
+  };
+
+  const ctx = vm.createContext({
+    S,
+    isPinSetupSubmitting: false,
+    document: {
+      getElementById: id => dom[id] || null,
+      querySelector: sel => {
+        if (sel === '[data-action="save-pin-setup"]') return { disabled: false, textContent: 'Save' };
+        if (sel === '[data-action="skip-pin-setup"]') return { disabled: false };
+        if (sel === '[data-setup-width].is-active') return { dataset: { setupWidth: '80mm' } };
+        return null;
+      }
+    },
+    extractLicenseKeyClient: () => '',
+    loadShopSettings: async () => {},
+    loadPosCatalog: async () => {},
+    syncAppInert: () => {},
+    showToast: () => {},
+    setElevation: () => {},
+    sessionStorage: { setItem: () => {} },
+    fetch: async (url, opts) => {
+      postedUrls.push(url);
+      postedBodies.push(JSON.parse(opts?.body || '{}'));
+      if (url === '/api/auth/change-pin') return { ok: true, json: async () => ({ token: 't-123' }) };
+      if (url === '/api/auth/recovery-password') return { ok: true, json: async () => ({ success: true }) };
+      if (url === '/api/settings') return { ok: true, json: async () => ({ success: true }) };
+      return { ok: true, json: async () => ({}) };
+    }
+  });
+  vm.runInContext(code, ctx);
+
+  // Short recovery password fails validation
+  await ctx.submitPinSetup();
+  assert.ok(dom['pin-setup-error'].textContent.includes('at least 6 characters'), 'must reject short recovery password');
+  assert.equal(postedUrls.length, 0, 'no network requests on validation failure');
+
+  // Valid recovery password passes and posts recovery password
+  dom['pin-setup-recovery'].value = 'master-secret-pw';
+  dom['pin-setup-recovery-confirm'].value = 'master-secret-pw';
+  await ctx.submitPinSetup();
+
+  assert.ok(postedUrls.includes('/api/auth/change-pin'), 'calls change-pin');
+  assert.ok(postedUrls.includes('/api/auth/recovery-password'), 'calls /api/auth/recovery-password');
+  const recBody = postedBodies[postedUrls.indexOf('/api/auth/recovery-password')];
+  assert.equal(recBody.recovery_password, 'master-secret-pw', 'sends recovery_password payload');
+  assert.equal(S.recoveryConfigured, true, 'marks recoveryConfigured in state');
+});
+
+test('Task 3: showUpdateHandoffStalled displays ProgramData log path when serviceMode is true', () => {
+  const backofficeSrc = source('public/js/views/backoffice.js');
+  const start = backofficeSrc.indexOf('function showUpdateHandoffStalled(releaseUrl, waitedS)');
+  const end = backofficeSrc.indexOf('\nfunction ', start + 1);
+  const code = backofficeSrc.slice(start, end > -1 ? end : undefined);
+
+  let capturedHtml = '';
+  const S = { serviceMode: true };
+  const ctx = vm.createContext({
+    S,
+    document: {
+      body: {
+        set innerHTML(v) { capturedHtml = v; }
+      },
+      getElementById: () => null
+    }
+  });
+  vm.runInContext(code, ctx);
+
+  ctx.showUpdateHandoffStalled('', 30);
+  assert.ok(capturedHtml.includes('C:\\ProgramData\\TechPartsPOS\\updates\\TechPartsPOS_update.handoff.log'),
+    'must reference ProgramData log path when S.serviceMode is true');
+
+  S.serviceMode = false;
+  ctx.showUpdateHandoffStalled('', 30);
+  assert.ok(capturedHtml.includes('%LOCALAPPDATA%\\TechPartsPOS\\TechPartsPOS_update.handoff.log'),
+    'must reference %LOCALAPPDATA% log path when S.serviceMode is false');
+});
+
+test('Task 3: Forgot PIN flow opens recovery panel when configured and resets PIN on valid submission', async () => {
+  const authSrc = source('public/js/auth.js');
+  const start = authSrc.indexOf('export async function openForgotPinPanel()');
+  const end = authSrc.indexOf('export async function submitLoginPin', start + 1);
+  const code = authSrc.slice(start, end).replace(/export /g, '');
+
+  const dom = {
+    'login-gate-forgot-pin': { classes: new Set(['hidden']), classList: { add(c) { dom['login-gate-forgot-pin'].classes.add(c); }, remove(c) { dom['login-gate-forgot-pin'].classes.delete(c); } } },
+    'login-gate-no-recovery': { classes: new Set(['hidden']), classList: { add(c) { dom['login-gate-no-recovery'].classes.add(c); }, remove(c) { dom['login-gate-no-recovery'].classes.delete(c); } } },
+    'recover-error': { classes: new Set(['hidden']), textContent: '', classList: { add(c) { dom['recover-error'].classes.add(c); }, remove(c) { dom['recover-error'].classes.delete(c); } } },
+    'recover-pw': { value: '', focus() {} },
+    'recover-new-pin': { value: '' },
+    'recover-confirm-pin': { value: '' },
+    'login-gate-pin': { value: '', focus() {} },
+    'login-gate': { classList: { add() {} } }
+  };
+
+  let configured = false;
+  let recoverCalled = false;
+  let recoverPayload = null;
+  let resolvedLogin = false;
+  const S = {
+    sessionToken: null,
+    sessionActor: null,
+    loginGateResolve: () => { resolvedLogin = true; }
+  };
+
+  const ctx = vm.createContext({
+    S,
+    document: { getElementById: id => dom[id] || null },
+    setTimeout: fn => fn(),
+    sessionStorage: { setItem: () => {} },
+    setElevation: () => {},
+    hideLoginGate: () => {},
+    applyRoleVisibility: () => {},
+    showToast: () => {},
+    fetch: async (url, opts) => {
+      if (url === '/api/auth/recovery-status') {
+        return { ok: true, json: async () => ({ configured }) };
+      }
+      if (url === '/api/auth/recover-pin') {
+        recoverCalled = true;
+        recoverPayload = JSON.parse(opts.body);
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            token: 'tok-recovered-mgr',
+            actor: { type: 'manager', id: null, name: 'Manager' },
+            elevationToken: 'elev-recovered'
+          })
+        };
+      }
+      return { ok: false };
+    }
+  });
+  vm.runInContext(code, ctx);
+
+  // 1. When recovery is not configured on the workstation
+  configured = false;
+  await ctx.openForgotPinPanel();
+  assert.ok(dom['login-gate-forgot-pin'].classes.has('hidden'), 'forgot-pin panel remains hidden when unconfigured');
+  assert.ok(!dom['login-gate-no-recovery'].classes.has('hidden'), 'no-recovery notice is displayed when unconfigured');
+
+  // 2. When recovery is configured
+  configured = true;
+  await ctx.openForgotPinPanel();
+  assert.ok(!dom['login-gate-forgot-pin'].classes.has('hidden'), 'forgot-pin panel is displayed when configured');
+  assert.ok(dom['login-gate-no-recovery'].classes.has('hidden'), 'no-recovery notice is hidden when configured');
+
+  // 3. Submitting invalid recovery PIN reset
+  dom['recover-pw'].value = '';
+  await ctx.submitRecoveryPinReset();
+  assert.equal(recoverCalled, false, 'must not call API when fields are empty');
+  assert.ok(!dom['recover-error'].classes.has('hidden'), 'error is displayed');
+
+  // 4. Submitting valid recovery PIN reset
+  dom['recover-pw'].value = 'correct-recovery-pw';
+  dom['recover-new-pin'].value = '9876';
+  dom['recover-confirm-pin'].value = '9876';
+  await ctx.submitRecoveryPinReset();
+
+  assert.equal(recoverCalled, true, 'calls /api/auth/recover-pin');
+  assert.equal(recoverPayload.recovery_password, 'correct-recovery-pw');
+  assert.equal(recoverPayload.new_pin, '9876');
+  assert.equal(S.sessionToken, 'tok-recovered-mgr', 'adopts returned session token');
+  assert.equal(S.sessionActor.name, 'Manager', 'adopts Manager session actor');
+  assert.equal(resolvedLogin, true, 'continues post-login app initialization');
+});
+
+
+

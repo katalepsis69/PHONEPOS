@@ -132,7 +132,7 @@
           <button data-action="trigger-backup" class="rail-tool" title="Back up database" aria-label="Back up database">
             <i class="ph ph-download-simple w-4 h-4"></i>
           </button>
-          <button data-action="shutdown" class="rail-tool rail-tool--danger" title="Quit / Exit POS" aria-label="Quit or exit POS">
+          <button id="counter-exit-btn" data-action="shutdown" class="rail-tool rail-tool--danger" title="Quit / Exit POS" aria-label="Quit or exit POS">
             <i class="ph ph-power w-4 h-4"></i>
           </button>
         </div>
@@ -1552,6 +1552,26 @@
                 <p id="settings-pin-msg" class="text-xs stock--out hidden" role="status"></p>
               </div>
 
+              <div class="space-y-2 pb-3 border-b border-[var(--line-soft)]">
+                <div class="flex items-center justify-between">
+                  <span class="field__label"><i class="ph ph-key w-3.5 h-3.5"></i> Manager Recovery Password</span>
+                  <span id="settings-recovery-status" class="text-xs font-semibold text-amber-400">Not set</span>
+                </div>
+                <p class="foot-note">Used to reset your Manager PIN if forgotten. Minimum 6 characters.</p>
+                <div class="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                  <input type="password" id="settings-recovery-new" minlength="6" placeholder="New recovery password"
+                    aria-label="New recovery password"
+                    class="w-full px-3 py-1.5 text-xs font-mono pin-masked gate__input" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+                  <input type="password" id="settings-recovery-confirm" minlength="6" placeholder="Confirm password"
+                    aria-label="Confirm recovery password"
+                    class="w-full px-3 py-1.5 text-xs font-mono pin-masked gate__input" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+                  <button type="button" id="settings-recovery-btn" class="btn-mini">
+                    <i class="ph ph-check w-3.5 h-3.5"></i> Save Password
+                  </button>
+                </div>
+                <p id="settings-recovery-msg" class="text-xs stock--out hidden" role="status"></p>
+              </div>
+
               <div class="space-y-2">
                 <div class="space-y-0.5">
                   <span class="field__label"><i class="ph ph-users-three w-3.5 h-3.5"></i> Cashier accounts</span>
@@ -1851,6 +1871,9 @@
                 <div class="flex flex-wrap gap-2">
                   <button type="button" class="btn-mini" data-action="trigger-backup">
                     <i class="ph ph-download-simple w-3.5 h-3.5"></i> Back up now
+                  </button>
+                  <button type="button" class="btn-mini" data-action="download-backup">
+                    <i class="ph ph-floppy-disk w-3.5 h-3.5"></i> Download copy
                   </button>
                   <button type="button" class="btn-mini" data-action="restore-backup">
                     <i class="ph ph-clock-counter-clockwise w-3.5 h-3.5"></i> Restore from backup
@@ -2455,6 +2478,19 @@
           </div>
         </div>
 
+        <div class="grid grid-cols-2 gap-2">
+          <div class="field">
+            <label class="field__label" for="pin-setup-recovery">Recovery Password *</label>
+            <input type="password" id="pin-setup-recovery" minlength="6" autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+              required aria-required="true" aria-describedby="pin-setup-error" class="w-full px-2.5 py-1.5 text-xs gate__input pin-masked" placeholder="Min 6 chars">
+          </div>
+          <div class="field">
+            <label class="field__label" for="pin-setup-recovery-confirm">Confirm Password *</label>
+            <input type="password" id="pin-setup-recovery-confirm" minlength="6" autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+              required aria-required="true" aria-describedby="pin-setup-error" class="w-full px-2.5 py-1.5 text-xs gate__input pin-masked" placeholder="Confirm">
+          </div>
+        </div>
+
         <label class="flex items-start gap-2.5 p-2.5 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] cursor-pointer select-none">
           <input type="checkbox" id="setup-seed-parts" checked class="mt-0.5 rounded border-slate-700 text-amber-500 focus-visible:ring-2 focus-visible:ring-amber-500/50">
           <div class="text-xs">
@@ -2484,7 +2520,7 @@
         <p id="pin-setup-error" class="gate__err hidden text-center" role="alert"></p>
 
         <button type="button" data-action="save-pin-setup" class="gate__btn gate__btn--warn w-full mt-1">Save &amp; Launch Shop</button>
-        <button type="button" data-action="skip-pin-setup" class="gate__link w-full text-center" style="margin-top: 4px;">
+        <button type="button" id="pin-setup-skip" data-action="skip-pin-setup" class="gate__link w-full text-center" style="margin-top: 4px;">
           Keep factory PIN (1234) / Skip
         </button>
         <p class="text-xs text-slate-500 text-center mt-1"><i class="ph ph-info mr-1"></i> Add cashiers anytime in Settings > Cashiers after launch.</p>
@@ -2535,9 +2571,47 @@
         <input type="text" id="login-gate-name-input" class="gate__input hidden mb-2" placeholder="Staff Name (e.g. Jun)" aria-label="Staff name" autocomplete="off">
         <input type="text" id="login-gate-pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" class="gate__input pin-masked" placeholder="••••" aria-label="PIN" aria-describedby="login-gate-error" autocomplete="off" data-lpignore="true" data-1p-ignore="true" spellcheck="false">
         <p id="login-gate-error" class="gate__err hidden" role="alert"></p>
+        <button type="button" data-action="forgot-pin-open" class="gate__link text-xs mt-1.5 hidden w-full text-center">Forgot PIN?</button>
         <div class="flex gap-2 w-full mt-2">
           <button type="button" data-action="login-back" class="gate__btn gate__btn--quiet">Back</button>
           <button type="button" data-action="login-submit" class="gate__btn">Log in</button>
+        </div>
+
+        <!-- Inline Manager PIN Recovery Form -->
+        <div id="login-gate-forgot-pin" class="hidden w-full mt-3 p-3 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] text-left space-y-2">
+          <div class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+            <i class="ph ph-key text-amber-400"></i> Reset Manager PIN
+          </div>
+          <p class="text-[11px] text-slate-400 -mt-1">Enter your recovery password to set a new Manager PIN.</p>
+          <div class="field">
+            <label class="field__label" for="recover-pw">Recovery Password</label>
+            <input type="password" id="recover-pw" minlength="6" placeholder="Enter recovery password" aria-label="Recovery password"
+              class="w-full px-2.5 py-1.5 text-xs gate__input pin-masked" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="field">
+              <label class="field__label" for="recover-new-pin">New PIN</label>
+              <input type="text" id="recover-new-pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="••••" aria-label="New PIN"
+                class="w-full px-2.5 py-1.5 text-xs gate__input pin-masked" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+            </div>
+            <div class="field">
+              <label class="field__label" for="recover-confirm-pin">Confirm PIN</label>
+              <input type="text" id="recover-confirm-pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="Confirm" aria-label="Confirm new PIN"
+                class="w-full px-2.5 py-1.5 text-xs gate__input pin-masked" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+            </div>
+          </div>
+          <p id="recover-error" class="gate__err hidden text-center" role="alert"></p>
+          <div class="flex gap-2 w-full pt-1">
+            <button type="button" data-action="recover-pin-cancel" class="gate__btn gate__btn--quiet flex-1">Cancel</button>
+            <button type="button" data-action="recover-pin-submit" class="gate__btn gate__btn--warn flex-1">Reset PIN</button>
+          </div>
+        </div>
+
+        <!-- No Recovery Configured Plain-English Notice -->
+        <div id="login-gate-no-recovery" class="hidden w-full mt-3 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-center space-y-2">
+          <p class="text-amber-300 font-medium"><i class="ph ph-warning-circle mr-1"></i>No recovery password set</p>
+          <p class="text-slate-400">No recovery password has been saved on this workstation yet. Contact your shop owner or Windows Administrator to reset the manager PIN.</p>
+          <button type="button" data-action="recover-pin-cancel" class="gate__btn gate__btn--quiet w-full">Back</button>
         </div>
       </div>
     </div>

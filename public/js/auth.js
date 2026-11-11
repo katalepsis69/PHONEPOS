@@ -68,6 +68,28 @@ function fetchWithTimeout(url, ms) {
   return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
 }
 
+export function syncServiceModeUi(flag) {
+  S.serviceMode = Boolean(flag);
+  const skipBtn = document.getElementById('pin-setup-skip');
+  if (skipBtn) {
+    skipBtn.classList.toggle('hidden', S.serviceMode);
+  }
+  const exitBtn = document.getElementById('counter-exit-btn') || document.querySelector('[data-action="shutdown"]');
+  if (exitBtn) {
+    if (S.serviceMode) {
+      exitBtn.title = 'Close POS Window';
+      exitBtn.setAttribute?.('aria-label', 'Close POS Window');
+      const labelSpan = exitBtn.querySelector?.('.rail-label') || exitBtn.querySelector?.('span');
+      if (labelSpan) labelSpan.textContent = 'Close POS';
+    } else {
+      exitBtn.title = 'Quit / Exit POS';
+      exitBtn.setAttribute?.('aria-label', 'Quit or exit POS');
+      const labelSpan = exitBtn.querySelector?.('.rail-label') || exitBtn.querySelector?.('span');
+      if (labelSpan) labelSpan.textContent = 'Quit';
+    }
+  }
+}
+
 export async function probeServer() {
   const overlay = document.getElementById('server-down-overlay');
   const detail = document.getElementById('server-down-detail');
@@ -92,6 +114,8 @@ export async function probeServer() {
       show(`The POS server answered with HTTP ${res.status}. Restart TechPartsPOS if this persists.`);
       return false;
     }
+    const data = await res.json().catch(() => ({}));
+    syncServiceModeUi(Boolean(data.service_mode));
     hide();
     return true;
   } catch (_) {
@@ -205,6 +229,9 @@ export async function renderLoginGate(subText) {
   pinRow?.classList.add('hidden');
   rolePicker?.classList.remove('hidden');
 
+  document.getElementById('login-gate-forgot-pin')?.classList.add('hidden');
+  document.getElementById('login-gate-no-recovery')?.classList.add('hidden');
+
   // BUG FIX: Clear any previous error when re-rendering the gate
   const errEl = document.getElementById('login-gate-error');
   if (errEl) errEl.classList.add('hidden');
@@ -226,6 +253,12 @@ export function loginGatePick(staffId, name, isManual = false) {
   // BUG FIX: Clear error and old values before showing PIN row
   const err = document.getElementById('login-gate-error');
   if (err) err.classList.add('hidden');
+
+  const isManager = !isManual && staffId === null;
+  const forgotBtn = document.querySelector('[data-action="forgot-pin-open"]');
+  if (forgotBtn) forgotBtn.classList.toggle('hidden', !isManager);
+  document.getElementById('login-gate-forgot-pin')?.classList.add('hidden');
+  document.getElementById('login-gate-no-recovery')?.classList.add('hidden');
 
   if (isManual) {
     if (who) who.textContent = 'Staff Login';
@@ -254,9 +287,114 @@ export function loginGateBack() {
   const err = document.getElementById('login-gate-error');
   if (err) err.classList.add('hidden');
 
+  document.getElementById('login-gate-forgot-pin')?.classList.add('hidden');
+  document.getElementById('login-gate-no-recovery')?.classList.add('hidden');
   document.getElementById('login-gate-pin-row')?.classList.add('hidden');
   document.getElementById('login-gate-staff-picker')?.classList.add('hidden');
   document.getElementById('login-gate-role-picker')?.classList.remove('hidden');
+}
+
+export async function openForgotPinPanel() {
+  const forgotPanel = document.getElementById('login-gate-forgot-pin');
+  const noRecoveryPanel = document.getElementById('login-gate-no-recovery');
+  const errorEl = document.getElementById('recover-error');
+  if (errorEl) errorEl.classList.add('hidden');
+
+  try {
+    const res = await fetch('/api/auth/recovery-status');
+    const data = await res.json().catch(() => ({}));
+    if (data.configured) {
+      noRecoveryPanel?.classList.add('hidden');
+      forgotPanel?.classList.remove('hidden');
+      const pwInput = document.getElementById('recover-pw');
+      if (pwInput) {
+        pwInput.value = '';
+        setTimeout(() => pwInput.focus(), 100);
+      }
+      const newPinInput = document.getElementById('recover-new-pin');
+      if (newPinInput) newPinInput.value = '';
+      const confPinInput = document.getElementById('recover-confirm-pin');
+      if (confPinInput) confPinInput.value = '';
+    } else {
+      forgotPanel?.classList.add('hidden');
+      noRecoveryPanel?.classList.remove('hidden');
+    }
+  } catch (err) {
+    if (errorEl) {
+      errorEl.textContent = 'Cannot reach the POS server.';
+      errorEl.classList.remove('hidden');
+    }
+  }
+}
+
+export function closeForgotPinPanel() {
+  document.getElementById('login-gate-forgot-pin')?.classList.add('hidden');
+  document.getElementById('login-gate-no-recovery')?.classList.add('hidden');
+  const input = document.getElementById('login-gate-pin');
+  if (input) setTimeout(() => input.focus(), 50);
+}
+
+export async function submitRecoveryPinReset() {
+  const pwInput = document.getElementById('recover-pw');
+  const newPinInput = document.getElementById('recover-new-pin');
+  const confPinInput = document.getElementById('recover-confirm-pin');
+  const errEl = document.getElementById('recover-error');
+
+  const fail = msg => {
+    if (errEl) {
+      errEl.textContent = msg;
+      errEl.classList.remove('hidden');
+    }
+  };
+
+  const recoveryPassword = (pwInput?.value || '').trim();
+  const newPin = (newPinInput?.value || '').trim();
+  const confirmPin = (confPinInput?.value || '').trim();
+
+  if (!recoveryPassword) return fail('Please enter your recovery password.');
+  if (!/^\d{4,}$/.test(newPin)) return fail('New PIN must be at least 4 digits.');
+  if (newPin === '1234') return fail('Choose a PIN other than 1234.');
+  if (newPin !== confirmPin) return fail('The two PINs do not match.');
+
+  try {
+    const res = await fetch('/api/auth/recover-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recovery_password: recoveryPassword, new_pin: newPin })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return fail(data.error || 'Failed to reset PIN.');
+    }
+    if (!data.token) return fail('Recovery failed: invalid response.');
+
+    S.sessionToken = data.token;
+    try { sessionStorage.setItem('pos_session', S.sessionToken); } catch (_) {}
+    S.sessionActor = data.actor;
+    if (data.elevationToken) setElevation(data.elevationToken, data.expiresAt);
+    pinSetupPinChanged = false;
+
+    if (pwInput) pwInput.value = '';
+    if (newPinInput) newPinInput.value = '';
+    if (confPinInput) confPinInput.value = '';
+    const loginPinInput = document.getElementById('login-gate-pin');
+    if (loginPinInput) loginPinInput.value = '';
+
+    closeForgotPinPanel();
+    hideLoginGate();
+    applyRoleVisibility();
+
+    const resolve = S.loginGateResolve;
+    S.loginGateResolve = null;
+    if (resolve) {
+      resolve();
+    } else {
+      window.location.reload();
+    }
+    showToast('Manager PIN reset successfully. Logged in as Manager.', 'success');
+  } catch (err) {
+    fail('Cannot reach the POS server.');
+  }
 }
 
 let isLoginSubmitting = false;
@@ -386,11 +524,13 @@ export async function loadShopSettings() {
     if (res.ok) {
       const data = await res.json();
       S.shopSettings = { ...S.shopSettings, ...data };
+      S.recoveryConfigured = Boolean(data.recovery_password_configured);
       S.shopSettingsUnavailable = false;
       hideSettingsBanner();
       updateGcashUiDisplays();
       applyBusinessModeUi();
       enforcePinSetup();
+      syncRecoveryStatusUi();
       return;
     }
   } catch (err) {
@@ -890,6 +1030,10 @@ export function openSettingsModal(targetTab = 'store') {
   if (document.getElementById('settings-current-pin')) document.getElementById('settings-current-pin').value = '';
   if (document.getElementById('settings-new-pin')) document.getElementById('settings-new-pin').value = '';
   if (document.getElementById('settings-pin-msg')) document.getElementById('settings-pin-msg').classList.add('hidden');
+  if (document.getElementById('settings-recovery-new')) document.getElementById('settings-recovery-new').value = '';
+  if (document.getElementById('settings-recovery-confirm')) document.getElementById('settings-recovery-confirm').value = '';
+  if (document.getElementById('settings-recovery-msg')) document.getElementById('settings-recovery-msg').classList.add('hidden');
+  syncRecoveryStatusUi();
 
   const preview = document.getElementById('settings-qr-preview');
   if (preview) {
@@ -1020,7 +1164,10 @@ export async function saveShopSettings(e) {
       throw new Error(errData.error || 'Failed to update settings');
     }
 
-    S.shopSettings = await res.json();
+    const savedData = await res.json();
+    S.shopSettings = savedData;
+    S.recoveryConfigured = Boolean(savedData.recovery_password_configured);
+    syncRecoveryStatusUi();
     updateGcashUiDisplays();
     applyBusinessModeUi();
     enforcePinSetup();
@@ -1119,6 +1266,13 @@ export async function submitPinChange() {
   const fail = m => { if (msg) { msg.textContent = m; msg.classList.remove('hidden'); } };
   if (!newPin) return fail('Enter a new PIN to change it.');
 
+  if (!S.recoveryConfigured) {
+    fail('Set a Manager Recovery Password first so your PIN can be recovered if forgotten.');
+    const recInput = document.getElementById('settings-recovery-new');
+    if (recInput) setTimeout(() => recInput.focus(), 50);
+    return;
+  }
+
   try {
     const res = await fetch('/api/auth/change-pin', {
       method: 'POST',
@@ -1143,6 +1297,62 @@ export async function submitPinChange() {
     document.getElementById('settings-new-pin').value = '';
     if (msg) msg.classList.add('hidden');
     showToast('Manager PIN updated', 'success');
+  } catch (err) {
+    fail('Could not reach the server.');
+  }
+}
+
+export function syncRecoveryStatusUi() {
+  const statusEl = document.getElementById('settings-recovery-status');
+  if (statusEl) {
+    if (S.recoveryConfigured) {
+      statusEl.textContent = 'Configured';
+      statusEl.className = 'text-xs font-semibold text-emerald-400';
+    } else {
+      statusEl.textContent = 'Not set';
+      statusEl.className = 'text-xs font-semibold text-amber-400';
+    }
+  }
+}
+
+export async function submitRecoveryPasswordChange() {
+  const newPw = (document.getElementById('settings-recovery-new')?.value || '').trim();
+  const confirmPw = (document.getElementById('settings-recovery-confirm')?.value || '').trim();
+  const msg = document.getElementById('settings-recovery-msg');
+  const fail = m => { if (msg) { msg.textContent = m; msg.classList.remove('hidden'); } };
+
+  if (newPw.length < 6) return fail('Recovery password must be at least 6 characters.');
+  if (newPw === '1234') return fail('Recovery password cannot be 1234.');
+  if (newPw !== confirmPw) return fail('The recovery passwords do not match.');
+
+  if (!hasElevation()) {
+    requireManagerPin('Enter manager PIN to set recovery password', () => submitRecoveryPasswordChange());
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/auth/recovery-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recovery_password: newPw })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 403 && (data.code === 'elevation_required' || /manager/i.test(data.error || ''))) {
+        requireManagerPin('Enter manager PIN to set recovery password', () => submitRecoveryPasswordChange());
+        return;
+      }
+      return fail(data.error || 'Could not save recovery password.');
+    }
+
+    S.recoveryConfigured = true;
+    syncRecoveryStatusUi();
+    const newEl = document.getElementById('settings-recovery-new');
+    const confEl = document.getElementById('settings-recovery-confirm');
+    if (newEl) newEl.value = '';
+    if (confEl) confEl.value = '';
+    if (msg) msg.classList.add('hidden');
+    showToast('Manager recovery password updated', 'success');
   } catch (err) {
     fail('Could not reach the server.');
   }
@@ -1326,6 +1536,7 @@ export async function checkLicenseStatus(forceOverlay = false) {
   try {
     const res = await fetch('/api/license/status');
     const data = await res.json();
+    syncServiceModeUi(Boolean(data.service_mode));
     const overlay = document.getElementById('license-overlay');
     const machineIdEl = document.getElementById('license-machine-id');
     const setupMidEl = document.getElementById('setup-machine-id');
@@ -1530,6 +1741,7 @@ let isPinSetupSubmitting = false;
 // True once an attempt has successfully changed the PIN — a retry then skips
 // change-pin instead of re-sending the factory PIN (which now fails).
 let pinSetupPinChanged = false;
+let pinSetupRecoverySaved = false;
 
 export function openPinSetup() {
   try { sessionStorage.removeItem('pin_setup_skipped'); } catch (_) {}
@@ -1537,7 +1749,7 @@ export function openPinSetup() {
 }
 
 export function skipPinSetup() {
-  if (isPinSetupSubmitting) return;
+  if (isPinSetupSubmitting || S.serviceMode) return;
   try { sessionStorage.setItem('pin_setup_skipped', '1'); } catch (_) {}
   document.getElementById('pin-setup-overlay')?.classList.add('hidden');
   syncAppInert();
@@ -1554,23 +1766,30 @@ export async function submitPinSetup() {
   const warrantyDays = (document.getElementById('setup-warranty-days')?.value || '').trim() || '7';
   const newPin = (document.getElementById('pin-setup-new')?.value || '').trim();
   const confirmPin = (document.getElementById('pin-setup-confirm')?.value || '').trim();
+  const recoveryPw = (document.getElementById('pin-setup-recovery')?.value || '').trim();
+  const confirmRecoveryPw = (document.getElementById('pin-setup-recovery-confirm')?.value || '').trim();
   const activeWidthBtn = document.querySelector('[data-setup-width].is-active');
   const paperWidth = activeWidthBtn?.dataset?.setupWidth || '80mm';
   const shouldSeedParts = document.getElementById('setup-seed-parts')?.checked ?? false;
   const errorEl = document.getElementById('pin-setup-error');
   if (errorEl) errorEl.classList.add('hidden');
-  ['pin-setup-new', 'pin-setup-confirm'].forEach(id => document.getElementById(id)?.removeAttribute('aria-invalid'));
+  ['pin-setup-new', 'pin-setup-confirm', 'pin-setup-recovery', 'pin-setup-recovery-confirm'].forEach(id => document.getElementById(id)?.removeAttribute('aria-invalid'));
   const fail = msg => {
     if (errorEl) { errorEl.textContent = msg; errorEl.classList.remove('hidden'); }
     // PIN-related failures mark the fields; the error paragraph is a live
     // region (role="alert"), so the message is announced.
     if (/PIN/i.test(msg)) ['pin-setup-new', 'pin-setup-confirm'].forEach(id => document.getElementById(id)?.setAttribute('aria-invalid', 'true'));
+    if (/recovery password/i.test(msg)) ['pin-setup-recovery', 'pin-setup-recovery-confirm'].forEach(id => document.getElementById(id)?.setAttribute('aria-invalid', 'true'));
   };
 
   if (!shopName) return fail('Please enter your shop name.');
   if (!/^\d{4,}$/.test(newPin)) return fail('PIN must be at least 4 digits.');
   if (newPin === '1234') return fail('Choose a PIN other than 1234, or click "Keep factory PIN / Skip" below.');
   if (newPin !== confirmPin) return fail('The two PINs do not match.');
+  if (recoveryPw.length < 6) return fail('Recovery password must be at least 6 characters.');
+  if (recoveryPw === '1234') return fail('Recovery password cannot be 1234.');
+  if (recoveryPw === newPin) return fail('Recovery password cannot be the same as your PIN.');
+  if (recoveryPw !== confirmRecoveryPw) return fail('The recovery passwords do not match.');
 
   const submitBtn = document.querySelector('[data-action="save-pin-setup"]');
   const skipBtn = document.querySelector('[data-action="skip-pin-setup"]');
@@ -1603,6 +1822,20 @@ export async function submitPinSetup() {
       if (data.token) { S.sessionToken = data.token; try { sessionStorage.setItem('pos_session', S.sessionToken); } catch (_) {} }
       if (data.elevationToken) setElevation(data.elevationToken, data.expiresAt);
       pinSetupPinChanged = true;
+    }
+
+    if (!pinSetupRecoverySaved) {
+      const recRes = await fetch('/api/auth/recovery-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recovery_password: recoveryPw })
+      });
+      if (!recRes.ok) {
+        const rdata = await recRes.json().catch(() => ({}));
+        return fail(rdata.error || 'Could not save recovery password — submit again to retry (your PIN is already set).');
+      }
+      pinSetupRecoverySaved = true;
+      S.recoveryConfigured = true;
     }
 
     // Save shop settings (api.js fetch automatically attaches session & X-Elevation)
@@ -1656,6 +1889,12 @@ export async function submitPinSetup() {
 
     await loadShopSettings();
     await loadPosCatalog();
+    pinSetupPinChanged = false;
+    pinSetupRecoverySaved = false;
+    const recEl = document.getElementById('pin-setup-recovery');
+    if (recEl) recEl.value = '';
+    const recConfEl = document.getElementById('pin-setup-recovery-confirm');
+    if (recConfEl) recConfEl.value = '';
     document.getElementById('pin-setup-overlay')?.classList.add('hidden');
     syncAppInert();
     showToast('Shop configured successfully! Ready for sales.', 'success');
@@ -1787,6 +2026,7 @@ export async function triggerResetDemoData() {
 // STAFF MANAGEMENT (manager-gated, lives in Store & print settings)
 // -------------------------------------------------------------
 export async function renderStaffPanel() {
+  syncRecoveryStatusUi();
   const list = document.getElementById('staff-list');
   if (!list) return;
   let staff = [];
