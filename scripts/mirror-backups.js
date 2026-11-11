@@ -8,14 +8,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getBaseDir } = require('../src/db');
 
-// The packaged exe relocates data to %LOCALAPPDATA%\TechPartsPOS while this
-// script (running under node) would otherwise resolve the project folder, so
-// on an exe install it mirrored stale files while the live backups sat in
-// LOCALAPPDATA. Prefer the exe home whenever its live database exists;
-// POS_BACKUP_DIR still wins for explicit setups.
+// The installed exe routes its data to C:\ProgramData\TechPartsPOS (or
+// %LOCALAPPDATA%\TechPartsPOS on legacy/portable installs) while this script
+// (running under node) would otherwise resolve the project folder, so on an exe
+// install it mirrored stale files while live backups sat in ProgramData or
+// LOCALAPPDATA. Prefer ProgramData first, then LOCALAPPDATA whenever their live
+// database exists; POS_BACKUP_DIR still wins for explicit setups.
+const programDataHome = path.join(process.env.ProgramData || process.env.ALLUSERSPROFILE || 'C:\\ProgramData', 'TechPartsPOS');
 const exeHome = path.join(process.env.LOCALAPPDATA || '', 'TechPartsPOS');
 const src = process.env.POS_BACKUP_DIR
-  || (fs.existsSync(path.join(exeHome, 'data', 'shop.db')) ? path.join(exeHome, 'backups') : path.join(getBaseDir(), 'backups'));
+  || (fs.existsSync(path.join(programDataHome, 'data', 'shop.db'))
+    ? path.join(programDataHome, 'backups')
+    : (fs.existsSync(path.join(exeHome, 'data', 'shop.db'))
+      ? path.join(exeHome, 'backups')
+      : path.join(getBaseDir(), 'backups')));
 const dest = process.env.POS_BACKUP_MIRROR;
 // A zip-extract install (the README's own instruction) keeps its data beside
 // the exe, so the repo-resolution above can land on the CHECKOUT's backups and

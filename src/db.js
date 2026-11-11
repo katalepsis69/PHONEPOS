@@ -45,22 +45,38 @@ function isDirWritable(dir) {
 // valid bases, as they did before.
 const isReleaseShaped = dir => /(^|[\\/])(?:release|publish)([\\/]|$)/i.test(String(dir || ''));
 
-function getBaseDir() {
-  if (cachedBaseDir) return cachedBaseDir;
-  let base = (process.execPath && !process.execPath.toLowerCase().endsWith('node.exe'))
+// Installs into Program Files or Program Files (x86) route their data
+// strictly to C:\ProgramData\TechPartsPOS so a shared background service
+// and standard user sessions work against a single protected data directory.
+const isProgramFilesPath = dir => /(^|[\\/])program files( \(x86\))?([\\/]|$)/i.test(String(dir || ''));
+
+function resolveBaseDir(options = {}) {
+  const { execDir, programData, localAppData } = options;
+  let base = execDir || ((process.execPath && !process.execPath.toLowerCase().endsWith('node.exe'))
     ? path.dirname(process.execPath)
-    : path.join(__dirname, '..');
-  // The packaged exe may be dropped into a read-only location (Program Files,
-  // a network share, a locked-down kiosk image). SQLite must CREATE/WAL next
-  // to the data dir; a base that cannot do that fails at db-open time — the
-  // worst possible spot (process alive, nothing listening, no console). Fall
-  // back to a per-machine writable home instead of failing.
+    : path.join(__dirname, '..'));
+
+  if (isProgramFilesPath(base)) {
+    return path.join(programData || process.env.ProgramData || process.env.ALLUSERSPROFILE || 'C:\\ProgramData', 'TechPartsPOS');
+  }
+
+  // The packaged exe may be dropped into a read-only location (a network
+  // share, a locked-down kiosk image). SQLite must CREATE/WAL next to the data
+  // dir; a base that cannot do that fails at db-open time — the worst possible
+  // spot (process alive, nothing listening, no console). Fall back to a
+  // per-machine writable home instead of failing.
   if (isReleaseShaped(base) || !isDirWritable(base)) {
-    const fallback = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'TechPartsPOS');
+    const fallback = path.join(localAppData || process.env.LOCALAPPDATA || os.tmpdir(), 'TechPartsPOS');
     if (isDirWritable(fallback)) base = fallback;
   }
-  cachedBaseDir = base;
   return base;
+}
+
+function getBaseDir(options) {
+  if (options) return resolveBaseDir(options);
+  if (cachedBaseDir) return cachedBaseDir;
+  cachedBaseDir = resolveBaseDir();
+  return cachedBaseDir;
 }
 
 const DEFAULT_DB_PATH = path.join(getBaseDir(), 'data', 'shop.db');
@@ -455,4 +471,4 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
   }
 }
 
-module.exports = { initDb, DEFAULT_DB_PATH, getBaseDir, isReleaseShaped, setDbLogSink };
+module.exports = { initDb, DEFAULT_DB_PATH, getBaseDir, isReleaseShaped, setDbLogSink, isProgramFilesPath, resolveBaseDir };

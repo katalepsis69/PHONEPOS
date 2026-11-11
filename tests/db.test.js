@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { dbTest } = require('./helper');
-const { initDb, isReleaseShaped } = require('../src/db');
+const { initDb, isReleaseShaped, isProgramFilesPath, getBaseDir, resolveBaseDir } = require('../src/db');
 
 dbTest('initDb creates all required tables in SQLite', (db) => {
   assert.ok(db, 'Database instance should be returned');
@@ -231,5 +231,85 @@ test('startup repairs enqueue their rows into the sync outbox', () => {
       try { fs.rmSync(f, { force: true, maxRetries: 5, retryDelay: 25 }); } catch {}
     }
     try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 }); } catch {}
+  }
+});
+
+test('isProgramFilesPath detects Program Files directories case-insensitively', () => {
+  assert.equal(isProgramFilesPath('C:\\Program Files\\TechPartsPOS'), true);
+  assert.equal(isProgramFilesPath('C:\\Program Files (x86)\\TechPartsPOS'), true);
+  assert.equal(isProgramFilesPath('c:\\program files\\TechPartsPOS'), true);
+  assert.equal(isProgramFilesPath('/opt/program files/TechPartsPOS'), true);
+  assert.equal(isProgramFilesPath('C:\\Users\\sloth\\Desktop\\dist'), false);
+  assert.equal(isProgramFilesPath('C:\\TechPartsPOS'), false);
+  assert.equal(isProgramFilesPath('C:\\Program Files Extra\\TechPartsPOS'), false);
+  assert.equal(isProgramFilesPath(null), false);
+  assert.equal(isProgramFilesPath(''), false);
+});
+
+test('getBaseDir and resolveBaseDir route Program Files installs to ProgramData\\TechPartsPOS', () => {
+  const customProgramData = path.join(os.tmpdir(), 't_fake_program_data');
+  const expectedTarget = path.join(customProgramData, 'TechPartsPOS');
+
+  const resolved64 = resolveBaseDir({
+    execDir: 'C:\\Program Files\\TechPartsPOS',
+    programData: customProgramData
+  });
+  assert.equal(resolved64, expectedTarget);
+
+  const resolvedX86 = resolveBaseDir({
+    execDir: 'C:\\Program Files (x86)\\TechPartsPOS',
+    programData: customProgramData
+  });
+  assert.equal(resolvedX86, expectedTarget);
+
+  // Calling getBaseDir with options resolves cleanly without mutating cachedBaseDir
+  const viaGetBaseDir = getBaseDir({
+    execDir: 'C:\\Program Files\\TechPartsPOS',
+    programData: customProgramData
+  });
+  assert.equal(viaGetBaseDir, expectedTarget);
+
+  // Calling getBaseDir without options returns the unpolluted process cachedBaseDir
+  const defaultBase = getBaseDir();
+  assert.ok(typeof defaultBase === 'string' && defaultBase.length > 0);
+  assert.notEqual(defaultBase, expectedTarget);
+});
+
+test('mirror-backups script prefers ProgramData over LOCALAPPDATA when shop.db exists', () => {
+  const { spawnSync } = require('node:child_process');
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 't_mirror_routing_'));
+  const fakeProgramData = path.join(tmpRoot, 'ProgramData');
+  const fakeLocalAppData = path.join(tmpRoot, 'LocalAppData');
+  const mirrorDest = path.join(tmpRoot, 'mirror_dest');
+
+  try {
+    fs.mkdirSync(path.join(fakeProgramData, 'TechPartsPOS', 'data'), { recursive: true });
+    fs.mkdirSync(path.join(fakeProgramData, 'TechPartsPOS', 'backups'), { recursive: true });
+    fs.mkdirSync(path.join(fakeLocalAppData, 'TechPartsPOS', 'data'), { recursive: true });
+    fs.mkdirSync(path.join(fakeLocalAppData, 'TechPartsPOS', 'backups'), { recursive: true });
+    fs.mkdirSync(mirrorDest, { recursive: true });
+
+    // Put a dummy shop.db in both fake ProgramData and fake LocalAppData
+    fs.writeFileSync(path.join(fakeProgramData, 'TechPartsPOS', 'data', 'shop.db'), 'fake-program-data-db');
+    fs.writeFileSync(path.join(fakeLocalAppData, 'TechPartsPOS', 'data', 'shop.db'), 'fake-local-app-data-db');
+
+    // Run mirror-backups.js with ProgramData and LOCALAPPDATA pointing to temp dirs, POS_BACKUP_DIR unset
+    const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'mirror-backups.js')], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        POS_BACKUP_DIR: '',
+        POS_BACKUP_MIRROR: mirrorDest,
+        ProgramData: fakeProgramData,
+        ALLUSERSPROFILE: fakeProgramData,
+        LOCALAPPDATA: fakeLocalAppData
+      }
+    });
+
+    // The script should target fakeProgramData\TechPartsPOS\backups (which has no backups yet, so fails on max age)
+    const expectedSource = path.join(fakeProgramData, 'TechPartsPOS', 'backups');
+    assert.match(r.stderr, new RegExp(expectedSource.replace(/\\/g, '\\\\')));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
