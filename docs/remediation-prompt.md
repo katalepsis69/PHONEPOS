@@ -77,10 +77,10 @@ not cover; the approved list is exhausted; or the tree shows signs of concurrent
 interference (see baseline step 3). Report and stop.
 
 TREE STATE (measured 2026-11-12; refresh to observed state on every run)
-- HEAD: 533f07a (on main, 10 commits ahead of origin/main 94d1206; includes Universal POS,
-  Inno Setup 7 installer/SYSTEM service, Manager PIN Recovery, USB backup download, and
-  tests CRLF normalization). Full source is tracked in git (since 2026-11-07); the release
-  pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 610/610 pass, 0 fail, exit 0 across 49 test
-  files (all tracked).
+- HEAD: c8a2751 (on main, 12 commits ahead of origin/main 94d1206; 533f07a plus the v9
+  audit batch: report docs/audit-2026-11-12.md, cloud command taxonomy, installer ACLs,
+  fractional money display, API_REFERENCE coverage). Full source is tracked in git
+  (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
+- Gates: npm run build:css exit 0; npm test 614/614 pass, 0 fail, exit 0 across 49 test
+  files (all tracked; 610 baseline plus the four audit regression tests).
 - Working tree: clean at measurement (`git status --short` empty).

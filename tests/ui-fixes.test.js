@@ -1812,3 +1812,12 @@ test('Task 3: Forgot PIN flow opens recovery panel when configured and resets PI
 
 
 
+
+test('API_REFERENCE appendix covers every literal route in the router', () => {
+  const server = source('src/server.js');
+  const doc = source('docs/API_REFERENCE.md');
+  const routes = [...new Set([...server.matchAll(/pathname === '([^']+)'/g)].map(m => m[1]))];
+  assert.ok(routes.length >= 50, `router literal routes found: ${routes.length}`);
+  const missing = routes.filter(r => !doc.includes(r));
+  assert.deepStrictEqual(missing, [], `routes missing from API_REFERENCE.md: ${missing.join(', ')}`);
+});
