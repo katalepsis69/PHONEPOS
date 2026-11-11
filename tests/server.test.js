@@ -953,3 +953,239 @@ test('pair-cloud timeout names the stranded-pairing state, not a generic network
   assert.match(route, /pairing may have completed on the cloud side/, 'the error names the possibly-completed pairing');
   assert.match(route, /rotate this shop's credential/, 'the error names the recovery path');
 });
+
+test('resolveLaunchMode correctly distinguishes direct, launcher, and service modes', () => {
+  const { resolveLaunchMode } = require('../src/server');
+  assert.strictEqual(typeof resolveLaunchMode, 'function', 'resolveLaunchMode is exported');
+
+  // 1. Dev run (node.exe)
+  assert.strictEqual(
+    resolveLaunchMode({
+      execPath: 'C:\\Program Files\\nodejs\\node.exe',
+      argv: ['C:\\Program Files\\nodejs\\node.exe', 'src/server.js'],
+      env: {}
+    }),
+    'direct'
+  );
+  assert.strictEqual(
+    resolveLaunchMode({
+      execPath: '/usr/local/bin/node',
+      argv: ['node', 'src/server.js'],
+      env: {}
+    }),
+    'direct'
+  );
+
+  // 2. verify-exe.js run (dist/TechPartsPOS.exe + POS_DB_PATH)
+  assert.strictEqual(
+    resolveLaunchMode({
+      execPath: 'C:\\Users\\sloth\\Downloads\\phone-repair-pos\\dist\\TechPartsPOS.exe',
+      argv: ['C:\\Users\\sloth\\Downloads\\phone-repair-pos\\dist\\TechPartsPOS.exe'],
+      env: { POS_DB_PATH: 'C:\\Users\\sloth\\AppData\\Local\\Temp\\shop.db' }
+    }),
+    'direct'
+  );
+  // Portable run outside Program Files without POS_DB_PATH also resolves direct
+  assert.strictEqual(
+    resolveLaunchMode({
+      execPath: 'C:\\Users\\sloth\\Desktop\\TechPartsPOS.exe',
+      argv: ['C:\\Users\\sloth\\Desktop\\TechPartsPOS.exe'],
+      env: {}
+    }),
+    'direct'
+  );
+
+  // 3. Service mode (--service argument)
+  assert.strictEqual(
+    resolveLaunchMode({
+      execPath: 'C:\\Program Files\\TechPartsPOS\\TechPartsPOS.exe',
+      argv: ['C:\\Program Files\\TechPartsPOS\\TechPartsPOS.exe', '--service'],
+      env: {}
+    }),
+    'service'
+  );
+  assert.strictEqual(
+    resolveLaunchMode({
+      execPath: 'C:\\Program Files (x86)\\TechPartsPOS\\TechPartsPOS.exe',
+      argv: ['TechPartsPOS.exe', '--service'],
+      env: {}
+    }),
+    'service'
+  );
+
+  // 4. Installed desktop shortcut (Program Files exe with no --service and no POS_DB_PATH)
+  assert.strictEqual(
+    resolveLaunchMode({
+      execPath: 'C:\\Program Files\\TechPartsPOS\\TechPartsPOS.exe',
+      argv: ['C:\\Program Files\\TechPartsPOS\\TechPartsPOS.exe'],
+      env: {}
+    }),
+    'launcher'
+  );
+  assert.strictEqual(
+    resolveLaunchMode({
+      execPath: 'C:\\Program Files (x86)\\TechPartsPOS\\TechPartsPOS.exe',
+      argv: ['C:\\Program Files (x86)\\TechPartsPOS\\TechPartsPOS.exe'],
+      env: {}
+    }),
+    'launcher'
+  );
+});
+
+test('browserProfileDir respects LOCALAPPDATA or falls back to getBaseDir', () => {
+  const { browserProfileDir } = require('../src/server');
+  assert.strictEqual(typeof browserProfileDir, 'function', 'browserProfileDir is exported');
+
+  const customLocal = path.join('C:', 'Users', 'Cashier', 'AppData', 'Local');
+  assert.strictEqual(
+    browserProfileDir({ LOCALAPPDATA: customLocal }),
+    path.join(customLocal, 'TechPartsPOS', 'browser-profile')
+  );
+
+  const { getBaseDir } = require('../src/db');
+  assert.strictEqual(
+    browserProfileDir({}),
+    path.join(getBaseDir(), 'browser-profile')
+  );
+});
+
+test('runtimeStatePath resolves runtime/server.json under getBaseDir', () => {
+  const { runtimeStatePath } = require('../src/server');
+  assert.strictEqual(typeof runtimeStatePath, 'function', 'runtimeStatePath is exported');
+
+  const { getBaseDir } = require('../src/db');
+  assert.strictEqual(runtimeStatePath(), path.join(getBaseDir(), 'runtime', 'server.json'));
+  assert.strictEqual(runtimeStatePath('C:\\TestBase'), path.join('C:\\TestBase', 'runtime', 'server.json'));
+});
+
+test('runInstalledLauncher fast-path opens browser on port from server.json without starting server', async () => {
+  const { runInstalledLauncher } = require('../src/server');
+  assert.strictEqual(typeof runInstalledLauncher, 'function', 'runInstalledLauncher is exported');
+
+  const launchedUrls = [];
+  const probedUrls = [];
+  let taskRan = false;
+  let errorBoxShown = false;
+
+  const result = await runInstalledLauncher({
+    readRuntimeState: () => ({ pid: 9999, port: 3004 }),
+    fetchImpl: async (url) => {
+      probedUrls.push(url);
+      if (url === 'http://127.0.0.1:3004/api/license/status') {
+        return { ok: true, status: 200 };
+      }
+      return { ok: false, status: 404 };
+    },
+    launchBrowser: async (url) => { launchedUrls.push(url); },
+    runTask: () => { taskRan = true; },
+    showErrorBox: () => { errorBoxShown = true; }
+  });
+
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.port, 3004);
+  assert.strictEqual(result.exitCode, 0);
+  assert.deepStrictEqual(launchedUrls, ['http://localhost:3004']);
+  assert.strictEqual(taskRan, false, 'runTask should not be called on fast-path');
+  assert.strictEqual(errorBoxShown, false, 'showErrorBox should not be called on fast-path');
+  assert.ok(probedUrls.includes('http://127.0.0.1:3004/api/license/status'));
+});
+
+test('runInstalledLauncher recovers by triggering schtasks when server is unreachable initially', async () => {
+  const { runInstalledLauncher } = require('../src/server');
+
+  const launchedUrls = [];
+  let taskRan = false;
+  let taskNameCalled = '';
+  let errorBoxShown = false;
+
+  const result = await runInstalledLauncher({
+    initialWaitMs: 20,
+    totalTimeoutMs: 300,
+    sleep: (ms) => new Promise(r => setTimeout(r, 10)),
+    readRuntimeState: () => ({ pid: 8888, port: 3001 }),
+    fetchImpl: async (url) => {
+      // Unreachable until task has been kicked
+      if (!taskRan) throw new Error('ECONNREFUSED');
+      return { ok: true, status: 200 };
+    },
+    runTask: (taskName) => {
+      taskRan = true;
+      taskNameCalled = taskName;
+      return true;
+    },
+    launchBrowser: async (url) => { launchedUrls.push(url); },
+    showErrorBox: () => { errorBoxShown = true; }
+  });
+
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.port, 3001);
+  assert.strictEqual(result.exitCode, 0);
+  assert.strictEqual(taskRan, true);
+  assert.strictEqual(taskNameCalled, 'TechPartsPOS-Server');
+  assert.deepStrictEqual(launchedUrls, ['http://localhost:3001']);
+  assert.strictEqual(errorBoxShown, false);
+});
+
+test('runInstalledLauncher displays error box and exits 1 when server remains unreachable', async () => {
+  const { runInstalledLauncher } = require('../src/server');
+
+  const launchedUrls = [];
+  let taskRan = false;
+  let errorBoxShown = false;
+  let errorBoxMessage = '';
+
+  const result = await runInstalledLauncher({
+    initialWaitMs: 15,
+    totalTimeoutMs: 60,
+    sleep: (ms) => new Promise(r => setTimeout(r, 10)),
+    readRuntimeState: () => null,
+    fetchImpl: async () => { throw new Error('ECONNREFUSED'); },
+    runTask: () => { taskRan = true; return true; },
+    launchBrowser: async (url) => { launchedUrls.push(url); },
+    showErrorBox: (msg) => {
+      errorBoxShown = true;
+      errorBoxMessage = msg;
+    }
+  });
+
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.exitCode, 1);
+  assert.strictEqual(taskRan, true, 'attempts schtasks before giving up');
+  assert.strictEqual(errorBoxShown, true);
+  assert.match(errorBoxMessage, /Administrator|restart/i);
+  assert.strictEqual(launchedUrls.length, 0, 'never launches browser when unreachable');
+});
+
+test('--service sets loopback 127.0.0.1 default when HOST is unset', () => {
+  const serverPath = path.resolve(__dirname, '..', 'src', 'server.js');
+  const tmpScript = path.join(os.tmpdir(), `t_service_host_probe_${process.pid}_${Date.now()}.js`);
+  const code = `
+const net = require('node:net');
+net.Server.prototype.listen = function(...args) {
+  const host = typeof args[1] === 'string' ? args[1] : (args[0] && typeof args[0] === 'object' ? args[0].host : null);
+  process.stdout.write("BOUND_HOST=" + host + "\\n");
+  process.exit(0);
+};
+process.argv = [process.execPath, 'C:\\\\Program Files\\\\TechPartsPOS\\\\TechPartsPOS.exe', '--service'];
+require(${JSON.stringify(serverPath)});
+`;
+  fs.writeFileSync(tmpScript, code, 'utf8');
+
+  try {
+    const res = spawnSync(process.execPath, [tmpScript], {
+      env: {
+        ...process.env,
+        HOST: '', // unset HOST
+        NODE_ENV: 'test',
+        POS_DB_PATH: path.join(os.tmpdir(), `t_service_probe_${process.pid}.db`)
+      },
+      timeout: 10000
+    });
+    const out = (res.stdout || '').toString();
+    assert.match(out, /BOUND_HOST=127\.0\.0\.1/, `expected BOUND_HOST=127.0.0.1, got: ${out}`);
+  } finally {
+    try { fs.unlinkSync(tmpScript); } catch (_) {}
+    try { fs.unlinkSync(path.join(os.tmpdir(), `t_service_probe_${process.pid}.db`)); } catch (_) {}
+  }
+});
+

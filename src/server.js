@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
-const { initDb, DEFAULT_DB_PATH, getBaseDir } = require('./db');
+const { initDb, DEFAULT_DB_PATH, getBaseDir, isProgramFilesPath } = require('./db');
 const {
   listInventory,
   getInventoryItem,
@@ -1905,13 +1905,30 @@ let hasReceivedInitialHeartbeat = false;
 let autoExitWatchdog = null;
 let listenerUp = false;
 
+function resolveLaunchMode({ execPath = process.execPath, argv = process.argv, env = process.env } = {}) {
+  if ((argv || []).includes('--service')) return 'service';
+  if (!/^node(\.exe)?$/i.test(path.basename(execPath || '')) && isProgramFilesPath(path.dirname(execPath || '')) && !env?.POS_DB_PATH) {
+    return 'launcher';
+  }
+  return 'direct';
+}
+
+function browserProfileDir(env = process.env) {
+  return env?.LOCALAPPDATA
+    ? path.join(env.LOCALAPPDATA, 'TechPartsPOS', 'browser-profile')
+    : path.join(getBaseDir(), 'browser-profile');
+}
+
 // --- single-instance hand-off ---------------------------------------------
 // Two live servers cannot share port 3000: the second silently drifts to 3001
 // and the user edits a different database than their shortcut opens. A PID
 // lock next to the DB makes a second double-click hand off: it reopens the
 // browser on the running instance's port and exits. Tests (NODE_ENV=test) and
 // deliberate multi-instance runs (POS_ALLOW_MULTI=1) bypass the hand-off.
-function instanceLockPath() {
+function instanceLockPath(serviceMode = Boolean((process.argv && process.argv.includes('--service')) || process.env.POS_TEST_SERVICE_MODE === '1' || process.env.POS_SERVICE_MODE === '1')) {
+  if (serviceMode) {
+    return path.join(getBaseDir(), 'runtime', 'server.lock');
+  }
   // Machine-wide, not beside the DB: the packaged exe relocates data to
   // %LOCALAPPDATA%\TechPartsPOS while dev/start.bat runs use the project
   // data/ folder, and per-home locks meant exe and dev never saw each other
@@ -1933,11 +1950,106 @@ function writeInstanceLock(port) {
     fs.writeFileSync(instanceLockPath(), JSON.stringify({ pid: process.pid, port, started_at: new Date().toISOString() }));
   } catch (_) {}
 }
+function runtimeStatePath(baseDir = getBaseDir()) {
+  return path.join(baseDir, 'runtime', 'server.json');
+}
+function writeRuntimeState(port, baseDir = getBaseDir()) {
+  try {
+    const p = runtimeStatePath(baseDir);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({ pid: process.pid, port, started_at: new Date().toISOString() }));
+  } catch (_) {}
+}
 function releaseInstanceLock() {
   try {
     const lock = readInstanceLock();
     if (lock && lock.pid === process.pid) fs.unlinkSync(instanceLockPath());
   } catch (_) {}
+  try {
+    const statePath = runtimeStatePath();
+    if (fs.existsSync(statePath)) {
+      const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      if (state && state.pid === process.pid) fs.unlinkSync(statePath);
+    }
+  } catch (_) {}
+}
+
+async function runInstalledLauncher(hooks = {}) {
+  const fetchImpl = hooks.fetchImpl || globalThis.fetch;
+  const readRuntimeState = hooks.readRuntimeState || (() => {
+    try {
+      const p = runtimeStatePath();
+      if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
+    } catch (_) {}
+    return null;
+  });
+  const launchBrowserFn = hooks.launchBrowser || ((url) => new Promise(resolve => launchBrowser(url, resolve)));
+  const runTaskFn = hooks.runTask || ((taskName = 'TechPartsPOS-Server') => {
+    try {
+      const { execFileSync } = require('node:child_process');
+      execFileSync('schtasks.exe', ['/Run', '/TN', taskName], { stdio: 'ignore', windowsHide: true });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  });
+  const showErrorBoxFn = hooks.showErrorBox || ((message, title = 'TechParts POS') => {
+    try {
+      const { spawnSync } = require('node:child_process');
+      const psScript = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${String(message).replace(/'/g, "''")}', '${String(title).replace(/'/g, "''")}', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)`;
+      spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], { windowsHide: true });
+    } catch (_) {}
+  });
+  const sleepFn = hooks.sleep || ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
+  const initialWaitMs = typeof hooks.initialWaitMs === 'number' ? hooks.initialWaitMs : 1500;
+  const totalTimeoutMs = typeof hooks.totalTimeoutMs === 'number' ? hooks.totalTimeoutMs : 8000;
+
+  function getPortsToProbe() {
+    const state = readRuntimeState();
+    const savedPort = state && typeof state.port === 'number' ? state.port : (state && state.port ? parseInt(state.port, 10) : null);
+    const fallbackPorts = [3000, 3001, 3002, 3003, 3004, 3005];
+    const ports = [];
+    if (savedPort && Number.isInteger(savedPort)) {
+      ports.push(savedPort);
+    }
+    for (const p of fallbackPorts) {
+      if (!ports.includes(p)) ports.push(p);
+    }
+    return ports;
+  }
+
+  const startTime = Date.now();
+  let taskTriggered = false;
+
+  while (Date.now() - startTime < totalTimeoutMs) {
+    const ports = getPortsToProbe();
+    for (const port of ports) {
+      try {
+        const res = await fetchImpl(`http://127.0.0.1:${port}/api/license/status`, { signal: AbortSignal.timeout(500) });
+        if (res && (res.ok || res.status === 200)) {
+          await launchBrowserFn(`http://localhost:${port}`);
+          return { ok: true, port, exitCode: 0 };
+        }
+      } catch (_) {}
+    }
+
+    const elapsed = Date.now() - startTime;
+    if (elapsed >= initialWaitMs && !taskTriggered) {
+      taskTriggered = true;
+      try {
+        await runTaskFn('TechPartsPOS-Server');
+      } catch (_) {}
+    }
+
+    if (Date.now() - startTime >= totalTimeoutMs) break;
+    await sleepFn(150);
+  }
+
+  const errorMessage = 'TechParts POS could not connect to the background server.\n\nPlease restart Windows or ask your Windows Administrator to verify that the TechPartsPOS-Server scheduled task is running.';
+  try {
+    await showErrorBoxFn(errorMessage, 'TechParts POS');
+  } catch (_) {}
+  return { ok: false, exitCode: 1 };
 }
 
 // Hardens the dedicated browser profile so Edge / Chrome acts as a strictly
@@ -2038,7 +2150,7 @@ function launchBrowser(url, onResult) {
   // URL and silently drops --kiosk-printing, so every auto-print falls back
   // to the print dialog. Flags live on the process, so every window opened
   // from this profile keeps printing silently.
-  const profileDir = path.join(getBaseDir(), 'browser-profile');
+  const profileDir = browserProfileDir();
   prepareBrowserProfile(profileDir);
 
   const kioskFlags = `--kiosk-printing --no-first-run --no-default-browser-check --user-data-dir="${profileDir}" ` +
@@ -2179,7 +2291,13 @@ function startServer(preferredPort = process.env.PORT ? parseInt(process.env.POR
 
     // Tests never hand off (the read is NODE_ENV=test-gated), so they should
     // not write the machine lock either — keeps %LOCALAPPDATA% clean.
-    if (!isTestEnv()) writeInstanceLock(currentPort);
+    if (!isTestEnv()) {
+      writeInstanceLock(currentPort);
+      const isService = Boolean((process.argv && process.argv.includes('--service')) || process.env.POS_TEST_SERVICE_MODE === '1' || process.env.POS_SERVICE_MODE === '1');
+      if (isService) {
+        writeRuntimeState(currentPort);
+      }
+    }
   });
 
   // Lock cleanup on every exit path (Ctrl+C, shutdown endpoint, taskkill of
@@ -2244,9 +2362,39 @@ process.on('unhandledRejection', (reason) => {
 // browser. tests/server.test.js pins that requiring it as a non-main module
 // starts nothing, binds no port and opens no database.
 if (require.main === module || (process.argv[1] && process.argv[1].endsWith('.exe'))) {
-  if (!process.env.HOST) process.env.HOST = '0.0.0.0';
-  if (!process.env.POS_LAN_REPORT_ACK) process.env.POS_LAN_REPORT_ACK = '1';
-  startServer();
+  const mode = resolveLaunchMode();
+  if (mode === 'launcher') {
+    runInstalledLauncher().then((r) => {
+      process.exitCode = (r && typeof r.exitCode === 'number') ? r.exitCode : 0;
+    }).catch(() => {
+      process.exitCode = 1;
+    });
+  } else if (mode === 'service') {
+    if (!process.env.HOST) process.env.HOST = '127.0.0.1';
+    process.env.NO_AUTO_BROWSER = '1';
+    process.env.NO_AUTO_EXIT = '1';
+    startServer(undefined, process.env.HOST);
+  } else {
+    if (!process.env.HOST) process.env.HOST = '0.0.0.0';
+    if (!process.env.POS_LAN_REPORT_ACK) process.env.POS_LAN_REPORT_ACK = '1';
+    startServer();
+  }
 }
 
-module.exports = { createServer, startServer, createDbBackup, runDailyBackup, runBackupTick, verifyBackupFile, getBackupStatus, getShopSettings, updateShopSettings, prepareBrowserProfile, logFilePath };
+module.exports = {
+  createServer,
+  startServer,
+  createDbBackup,
+  runDailyBackup,
+  runBackupTick,
+  verifyBackupFile,
+  getBackupStatus,
+  getShopSettings,
+  updateShopSettings,
+  prepareBrowserProfile,
+  logFilePath,
+  resolveLaunchMode,
+  browserProfileDir,
+  runtimeStatePath,
+  runInstalledLauncher
+};
