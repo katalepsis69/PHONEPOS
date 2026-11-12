@@ -145,3 +145,23 @@ $$\text{Grand Total Collected Today} = \text{Total Cash Collected} + \text{Total
 ### 4.4 Inventory Valuation
 $$\text{Total Inventory Cost Value} = \sum_{\text{inventory}} (\text{stock\_quantity} \times \text{cost\_price})$$
 $$\text{Total Inventory Retail Value} = \sum_{\text{inventory}} (\text{stock\_quantity} \times \text{price\_retail})$$
+
+## 5. Repair Ticket Lifecycle
+
+The counter's intake flow (device, IMEI, job note, `RO-` reference) now lands in a
+server-side ticket (`repairs` table) instead of dying with the printed claim stub:
+
+1. **Intake.** Holding a job on the counter (or ringing a repair sale) upserts a
+   ticket keyed by its `RO-` reference, so hold, sale, and resume can happen in
+   any order and the same POST lands the truth.
+2. **Bench.** A billed repair moves its ticket to `in_repair` and stores the
+   `sale_id` that paid for it; unbilled intakes stay at `intake`.
+3. **Queue.** The Repairs tab lists active work (`intake`, `in_repair`, `ready`)
+   first by most recent touch, with `released`/`cancelled` sunk below. Status
+   changes write a `repair` audit event and mirror to the cloud.
+4. **Pickup.** `released` closes the loop; the ticket stays as history (no
+   deletion), and cancelled units keep their audit trail.
+
+Status set: `intake` → `in_repair` → `ready` → `released`, with `cancelled` as
+the exit ramp. Any logged-in session may write (technicians need the bench);
+no elevation is required because tickets carry no drawer money.

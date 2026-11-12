@@ -408,11 +408,12 @@ const ALLOWED_TABLES = new Map([
   // description is deliberately absent from the required fields: owner free
   // text, same posture as customer_profiles notes below.
   ['expenses', ['category', 'amount', 'created_at']],
+  ['repairs', ['ref_code', 'customer_name', 'device', 'status', 'created_at']],
   // notes is deliberately absent from the required fields: the shop redacts
   // owner free text before it ever leaves (privacy contract, 2026-09-27).
   ['customer_profiles', ['customer_name', 'credit_limit']],
 ]);
-const MANAGER_ROW_TABLES = new Set(['inventory', 'sales', 'credit_payments', 'warranty_returns', 'shifts', 'day_reconciliations', 'cash_adjustments', 'customer_profiles', 'expenses']);
+const MANAGER_ROW_TABLES = new Set(['inventory', 'sales', 'credit_payments', 'warranty_returns', 'shifts', 'day_reconciliations', 'cash_adjustments', 'customer_profiles', 'expenses', 'repairs']);
 
 function positiveId(value) {
   return Number.isSafeInteger(value) && value > 0;

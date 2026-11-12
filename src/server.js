@@ -56,6 +56,7 @@ const { audit, listAuditLog, verifyChain, txn } = require('./audit');
 const { openShift, closeShift, listShifts, getShiftBreakdown } = require('./shifts');
 const { getDayBuckets, closeDay, getDayReconciliation } = require('./reconcile');
 const { addExpense, listExpenses, deleteExpense } = require('./expenses');
+const { upsertRepair, updateRepair, listRepairs } = require('./repairs');
 const { getShopSettings, updateShopSettings, updateSyncSetting, getSettleElevationThreshold, validateSyncUrl, validateSyncUrlHost } = require('./settings');
 // The namespace is held, not destructured, and the print route reads sendRaw off
 // it at the call site. tests/helper.js replaces printer.sendRaw so no test can
@@ -1263,6 +1264,24 @@ function createServer(opts = {}) {
             total_shift_variance: totalShiftVariance,
             total_shift_counted: totalShiftCounted
           });
+        }
+
+        // Repair tickets: the counter upserts by job reference (hold, sale,
+        // resume in any order) and the queue tracks status. Every logged-in
+        // session may write: technicians need the bench list too.
+        if (pathname === '/api/repairs' && method === 'GET') {
+          return sendJson(res, 200, listRepairs(db, { status: url.searchParams.get('status'), search: url.searchParams.get('search') }));
+        }
+
+        if (pathname === '/api/repairs' && method === 'POST') {
+          const body = await parseBody(req);
+          return sendJson(res, 201, upsertRepair(db, session, body || {}));
+        }
+
+        const repairIdMatch = pathname.match(/^\/api\/repairs\/(\d+)$/);
+        if (repairIdMatch && method === 'PATCH') {
+          const body = await parseBody(req);
+          return sendJson(res, 200, updateRepair(db, Number(repairIdMatch[1]), body || {}, session));
         }
 
         // Operating expenses: elevation-gated like the other money routes.

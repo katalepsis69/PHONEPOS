@@ -258,7 +258,25 @@ Operating-expense bookkeeping records (rent, utilities, supplies...). P&L only: 
 | `actor_name` | `TEXT` | - | `''` | Who booked it |
 | `created_at` | `TEXT` | `NOT NULL` | - | ISO-Z timestamp; booked day = local date |
 
-### 3.9 Operational tables (abbreviated)
+### 3.9 `repairs`
+Repair tickets: the server-side lifecycle the intake flow never had. A hold job or claim stub used to be print-only; the POS now upserts a ticket keyed by its job reference (`RO-...`), the billed sale links back via `sale_id`, and the queue tracks the bench. Cloud-mirrored so the owner sees the queue remotely.
+
+| Column | Type | Constraints | Default | Description |
+|---|---|---|---|---|
+| `id` | `INTEGER` | `PRIMARY KEY AUTOINCREMENT` | - | Ticket ID |
+| `ref_code` | `TEXT` | `NOT NULL UNIQUE` | - | Job reference (`RO-YYMMDD-XXXX`), the counter-facing key |
+| `customer_name` | `TEXT` | - | `'Walk-in Customer'` | Who owns the unit |
+| `customer_phone` | `TEXT` | - | `''` | Contact number |
+| `device` | `TEXT` | - | `''` | Brand / model / fault as typed at intake, capped 120 |
+| `imei` | `TEXT` | - | `''` | Device identifier, capped 60 |
+| `issue_note` | `TEXT` | - | `''` | Intake note, capped 500 |
+| `estimate` | `REAL` | - | `0.0` | Quoted amount, >= 0 |
+| `status` | `TEXT` | `NOT NULL` | `'intake'` | `intake` / `in_repair` / `ready` / `released` / `cancelled` |
+| `sale_id` | `INTEGER` | - | `NULL` | Sale that billed the job |
+| `assigned_to` | `TEXT` | - | `''` | Technician name |
+| `created_at` / `updated_at` | `TEXT` | `NOT NULL` | - | ISO-Z timestamps |
+
+### 3.10 Operational tables (abbreviated)
 
 Defined in `src/db.js`; read `src/sync.js` and `src/server.js` for the write paths.
 
@@ -271,7 +289,7 @@ Defined in `src/db.js`; read `src/sync.js` and `src/server.js` for the write pat
 - `op_log` - write-dedup keys for inventory mutations (adjustments, CSV rows, part creation, bulk edits), pruned after 2 days.
 - `sync_outbox` - the push queue: `table_name`, `local_id`, `payload` (full row JSON), `created_at`, `synced_at` (null until the cloud acks). Partial index on unsynced rows; pruned 30 days after sync, and 30 days after creation while sync is off.
 
-### 3.10 Cloud mirror (`cloud-deploy/server.js`)
+### 3.11 Cloud mirror (`cloud-deploy/server.js`)
 
 The VPS holds its own SQLite database (`cloud.db`) with two tables:
 

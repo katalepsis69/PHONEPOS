@@ -302,6 +302,25 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
 
       CREATE INDEX IF NOT EXISTS idx_expenses_created_at ON expenses(created_at);
 
+      -- Repair tickets: the server-side lifecycle the intake flow never had
+      -- (hold job + claim stub were print-only; nothing survived the sale).
+      CREATE TABLE IF NOT EXISTS repairs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ref_code TEXT NOT NULL UNIQUE,
+        customer_name TEXT NOT NULL DEFAULT 'Walk-in Customer',
+        customer_phone TEXT DEFAULT '',
+        device TEXT DEFAULT '',
+        imei TEXT DEFAULT '',
+        issue_note TEXT DEFAULT '',
+        estimate REAL NOT NULL DEFAULT 0.0,
+        status TEXT NOT NULL DEFAULT 'intake',
+        sale_id INTEGER,
+        assigned_to TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_repairs_status ON repairs(status, updated_at);
+
       CREATE TABLE IF NOT EXISTS customer_profiles (
         customer_name TEXT PRIMARY KEY COLLATE NOCASE,
         credit_limit REAL NOT NULL DEFAULT 0.0,

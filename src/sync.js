@@ -61,7 +61,7 @@ function enqueue(db, table, localId, payload) {
 }
 
 // ponytail: whitelist — table name can't be bound param
-const ALLOWED_SYNC_TABLES = new Set(['inventory','sales','sale_items','stock_movements','credit_payments','warranty_returns','shop_settings','staff','audit_log','sync_outbox','shifts','day_reconciliations','cash_adjustments','customer_profiles','expenses']);
+const ALLOWED_SYNC_TABLES = new Set(['inventory','sales','sale_items','stock_movements','credit_payments','warranty_returns','shop_settings','staff','audit_log','sync_outbox','shifts','day_reconciliations','cash_adjustments','customer_profiles','expenses','repairs']);
 function enqueueDelete(db, table, localId) {
   if (!ALLOWED_SYNC_TABLES.has(table)) throw new Error(`Sync table not allowed: ${table}`);
   enqueue(db, table, localId, { _deleted: true });

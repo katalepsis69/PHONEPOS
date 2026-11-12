@@ -55,6 +55,10 @@
           <span data-i18n="nav.pos">Repair counter</span>
           <span class="rail-link__hint">F1</span>
         </button>
+        <button data-action="switch-tab" data-tab="repairs" id="tab-btn-repairs" class="rail-link tab-btn">
+          <i class="ph ph-wrench w-4 h-4"></i>
+          <span data-i18n="nav.repairs">Repairs</span>
+        </button>
         <button data-action="switch-tab" data-tab="credits" id="tab-btn-credits" class="rail-link tab-btn">
           <i class="ph ph-users w-4 h-4"></i>
           <span data-i18n="nav.customers">Customers</span>
@@ -480,6 +484,27 @@
           </aside>
         </div>
 
+
+        <!-- 1b. REPAIR TICKET QUEUE -->
+        <div id="view-repairs" class="tab-view h-full flex flex-col gap-4 hidden">
+          <div class="flex flex-wrap gap-2 items-center shrink-0">
+            <div class="seg" id="repairs-filter" role="group" aria-label="Filter tickets">
+              <button type="button" class="seg__btn is-active" data-status="">Open</button>
+              <button type="button" class="seg__btn" data-status="intake">Intake</button>
+              <button type="button" class="seg__btn" data-status="in_repair">In repair</button>
+              <button type="button" class="seg__btn" data-status="ready">Ready</button>
+              <button type="button" class="seg__btn" data-status="released">Released</button>
+              <button type="button" class="seg__btn" data-status="cancelled">Cancelled</button>
+            </div>
+            <span class="field-search">
+              <i class="ph ph-magnifying-glass w-4 h-4"></i>
+              <input type="text" id="repairs-search" autocomplete="off"
+                data-i18n-ph="repairs.search_ph"
+                placeholder="Ref, customer, device, IMEI">
+            </span>
+          </div>
+          <div id="repairs-list" class="panel__body space-y-2 flex-1 overflow-y-auto">Loading&hellip;</div>
+        </div>
 
         <!-- 2. CUSTOMER CREDITS (UTANG) VIEW -->
         <div id="view-credits" class="tab-view h-full flex flex-col gap-4 hidden">

@@ -367,6 +367,33 @@ Manager-gated. Signs one calendar day: counts the drawer against `expected_cash`
 **Response `201 Created`:** the buckets plus `counted_cash`, `variance` and `status` (`balanced` or `flagged`).
 **Response `400`:** missing count, negative amount, bad date, or a day that is already reconciled.
 
+### `POST /api/repairs`
+Session-gated (staff included: technicians run the bench). Create-or-update keyed by `ref_code`, so the counter can hold a job, ring it up, or resume a draft in any order and the same POST lands the truth. Only provided fields change; the clock is the tiebreaker.
+
+**Request Body:** `{ "ref": "RO-251113-A1B2", "customer_name": "Ana", "customer_phone": "0917...", "device": "iPhone 12", "imei": "3567...", "issue_note": "no display", "estimate": 1500, "status": "intake", "sale_id": null }` (`ref` required, 4-40 chars of letters/digits/dashes; `status` one of `intake`, `in_repair`, `ready`, `released`, `cancelled`; `estimate` >= 0.)
+
+**Response `201 Created`:** the stored ticket.
+**Response `400`:** bad reference, unknown status, negative estimate.
+
+### `PATCH /api/repairs/:id`
+Session-gated. Moves one ticket's status (or assignment, estimate, notes). Every change writes a `repair` audit event and mirrors to the cloud.
+
+**Request Body:** `{ "status": "ready", "assigned_to": "Ben" }` (at least one field; empty patches are a no-op returning the row.)
+
+**Response `200 OK`:** the updated ticket. **Response `404`:** unknown id. **Response `400`:** unknown status or negative estimate.
+
+### `GET /api/repairs?status=&search=`
+Session-gated. The bench list: active work (`intake`/`in_repair`/`ready`) first by most recent touch, `released`/`cancelled` sunk below; latest 200 rows. `counts` carries every status bucket so filter chips stay honest.
+
+**Response `200 OK`:**
+```json
+{
+  "repairs": [{ "id": 1, "ref_code": "RO-251113-A1B2", "customer_name": "Ana", "device": "iPhone 12", "status": "in_repair", "estimate": 1500.0, "sale_id": 88, "assigned_to": "", "created_at": "...", "updated_at": "..." }],
+  "counts": { "intake": 1, "in_repair": 1, "ready": 0, "released": 0, "cancelled": 0 },
+  "statuses": ["intake", "in_repair", "ready", "released", "cancelled"]
+}
+```
+
 ### `POST /api/inventory/receive`
 Elevation-gated. Batched supplier receive for the reorder flow: adds stock per line (reason `receive`) and optionally reprices `cost_price`. One bad line refuses the whole batch, so a partial receive never claims stock that never arrived. Audits and cloud outbox entries ride the per-line adjust/update paths.
 

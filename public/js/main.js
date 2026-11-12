@@ -3,6 +3,7 @@ import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirm
 import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, syncCloudUi, openForgotPinPanel, closeForgotPinPanel, submitRecoveryPinReset, submitRecoveryPasswordChange } from './auth.js';
 import { autoPrintEnabled, calculateChange, calculateCreditBalance, clearDeviceSelection, setPosBrandFilter, clearRepairOrder, completeSale, copyRepairRef, customerComboboxInit, editCartQtyPrompt, fillExactAmount, focusImeiForScan, loadCustomerSuggestions, loadPosCatalog, newRepairRef, onCustomerNameInput, onDeviceSelected, onPartSearchKeydown, onRepairIntakeInput, printClaimStub, quickAddPart, refreshDraftChip, removeCartItem, renderCartSummary, resetPosFilters, resetRepairCounter, restoreCartRecovery, saveRepairDraft, setPartCategory, setInStockOnly, setPaymentMethod, setPriceTier, toggleRepairNote, renderPartsTable, initScanListeners, resumeRepairDraft, clearRefusedScans, openScanRefusals } from './views/pos.js';
 import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, setAddItemTemplate, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
+import { loadRepairs, wireRepairsView } from './views/repairs.js';
 import { editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, dismissUpdateBanner, openUpdateModal, downloadBackup } from './views/backoffice.js';
 import { openShiftPrompt, closeShiftPrompt } from './views/pos.js';
 import { printModalSlip, printTestReceipt, printZReport, reprintLastReceipt } from './receipts.js';
@@ -15,11 +16,12 @@ import { applyLanguage, toggleLanguage, t } from './i18n.js';
 // -------------------------------------------------------------
 // NAVIGATION & MODALS
 // -------------------------------------------------------------
-const TAB_ORDER = ['pos', 'credits', 'inventory', 'returns', 'sales', 'dashboard', 'audit'];
+const TAB_ORDER = ['pos', 'repairs', 'credits', 'inventory', 'returns', 'sales', 'dashboard', 'audit'];
 
 // Workspace header titles per tab.
 const TAB_META = {
   pos: { title: 'Register' },
+  repairs: { title: 'Repairs' },
   credits: { title: 'Customers' },
   inventory: { title: 'Inventory' },
   returns: { title: 'Warranty & returns' },
@@ -34,7 +36,8 @@ const VIEW_SEARCH_TARGETS = {
   credits: { input: 'credit-search', load: () => loadCustomers() },
   inventory: { input: 'inv-search', load: () => loadInventoryTable() },
   returns: { input: 'returns-search', load: () => loadWarrantyReturnsTable() },
-  sales: { input: 'sales-search', load: () => loadSalesHistory() }
+  sales: { input: 'sales-search', load: () => loadSalesHistory() },
+  repairs: { input: 'repairs-search', load: () => loadRepairs() }
 };
 
 export function switchTab(tab) {
@@ -70,6 +73,7 @@ export function switchTab(tab) {
   if (globalSearch) globalSearch.value = '';
 
   if (tab === 'pos') loadPosCatalog();
+  if (tab === 'repairs') loadRepairs();
   if (tab === 'credits') loadCustomers();
   if (tab === 'inventory') loadInventoryTable();
   if (tab === 'returns') loadWarrantyReturnsTable();
@@ -630,6 +634,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initUxEnhancements();
   setupInventoryEnhancements();
   initScanListeners();
+  wireRepairsView();
 
   // Health probe before anything else touches the API: a dead or unreachable
   // server must be announced with a retry — not silently mistaken for a login

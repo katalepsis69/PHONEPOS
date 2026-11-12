@@ -980,6 +980,31 @@ export async function saveRepairDraft() {
     return;
   }
 
+  // The held job becomes a server-side ticket keyed by its reference, so the
+  // queue sees the intake even before the unit is billed. Best effort: the
+  // local hold still stands if the server is unreachable, and ringing the
+  // sale upserts the same reference again.
+  if (draft.deviceInput || draft.imei || draft.note) {
+    try {
+      const res = await fetch('/api/repairs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ref: draft.ref,
+          customer_name: draft.customer || 'Walk-in Customer',
+          customer_phone: draft.phone,
+          device: draft.deviceInput,
+          imei: draft.imei,
+          issue_note: draft.note,
+          status: 'intake'
+        })
+      });
+      if (!res.ok) throw new Error('ticket save failed');
+    } catch (_) {
+      showToast('Job held locally, but the repair ticket did not reach the server. It will attach when the sale is rung up.', 'warning');
+    }
+  }
+
   const ref = draft.ref;
   resetRepairCounter({ clearSaleOp: false });
   refreshDraftChip();
@@ -1525,6 +1550,31 @@ export async function completeSale() {
     }
 
     const sale = await res.json();
+
+    // A billed repair upserts its ticket (same reference the hold created) and
+    // moves it onto the bench. Read the intake BEFORE the reset clears it.
+    const repairIntake = {
+      ref: S.repairRefCode,
+      customer_name: customerName,
+      customer_phone: customerPhone,
+      device: document.getElementById('repair-device-input')?.value.trim() || '',
+      imei: document.getElementById('repair-imei')?.value.trim() || '',
+      issue_note: document.getElementById('repair-note')?.value.trim() || '',
+      status: 'in_repair',
+      sale_id: sale.id
+    };
+    if (repairIntake.device || repairIntake.imei || repairIntake.issue_note) {
+      try {
+        const rres = await fetch('/api/repairs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(repairIntake)
+        });
+        if (!rres.ok) throw new Error('ticket save failed');
+      } catch (_) {
+        showToast('Sale recorded, but the repair ticket did not save. Add it in the Repairs tab by reference ' + S.repairRefCode + '.', 'warning');
+      }
+    }
 
     // Blank job sheet and a fresh reference for the next customer.
     // The in-flight flag must drop BEFORE the reset: resetRepairCounter()
