@@ -666,7 +666,7 @@ export function applyBusinessModeUi() {
   }
 
   if (typeof setAddItemTemplate === 'function') {
-    setAddItemTemplate(mode === 'grocery' ? 'retail' : (mode === 'hybrid' ? 'retail' : mode));
+    setAddItemTemplate(mode === 'hybrid' ? 'retail' : mode);
   }
 
   const hasBench = S.shopSettings?.enable_service_bench !== 0 && S.shopSettings?.enable_service_bench !== '0';
@@ -1221,6 +1221,7 @@ export async function pairCloudWithCode() {
       tokenInput.placeholder = 'Configured via 6-digit code';
     }
     syncCloudUi();
+    if (typeof window.refreshSyncChip === 'function') window.refreshSyncChip();
     showToast('Register paired with Cloud successfully!', 'success');
   } catch (err) {
     showToast(`Pairing failed: ${err.message}`, 'error');
@@ -1252,6 +1253,7 @@ export async function disconnectCloud() {
     }
     S.shopSettings = await res.json();
     updateShopBrandUi();
+    if (typeof window.refreshSyncChip === 'function') window.refreshSyncChip();
     showToast('Cloud sync disconnected', 'info');
   } catch (err) {
     showToast(`Error: ${err.message}`, 'error');

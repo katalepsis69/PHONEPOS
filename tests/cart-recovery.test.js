@@ -43,7 +43,7 @@ async function harness(raw, cart = []) {
     populateDeviceDatalist() {}, renderBrandOptions() {}, renderPartTypeOptions() {},
     renderInvBrandFilter() {}, renderCategoryOptions() {}, renderRepairRef() {},
     renderSummaryDevice() {}, renderPartsTable() {},
-    loadShopSettings: async () => {}, loadCustomerSuggestions: async () => {}, refreshDraftChip() {}
+    loadShopSettings: async () => {}, loadCustomerSuggestions: async () => {}, refreshDraftChip() {}, refreshSyncChip() {}
   });
   // Execute actual rendering/recovery and catalog functions, avoiding circular UI imports.
   const rendering = pos.slice(pos.indexOf('export function renderOrderLines()'), pos.indexOf('export function setPaymentMethod('));

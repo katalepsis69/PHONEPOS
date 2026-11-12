@@ -1,11 +1,13 @@
-# What is New in TechParts POS (v2.8)
+# What is New in TechParts POS (v1.0)
 
-Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
+Welcome to the first official release of TechParts POS & Phone Repair Management System, written for shop owners and cashiers.
 
-### Highlights in this update:
-- Verified: license CLI rejects unknown arguments and invalid durations without a key
-- Verified: set-pin requires an explicit target and updates only that database transactionally
-- Verified: packaging scripts use staged outputs, pinned local postject, and scoped process cleanup
+### Highlights in this release:
+- Official Windows installer (`TechPartsPOS-Setup-1.0.exe`) running `TechPartsPOS-Server` as a protected background service with shop data stored safely under `C:\ProgramData\TechPartsPOS`.
+- Manager Recovery Password ("Forgot PIN?") for offline PIN resets, plus 1-click backup file downloads in Settings > Data.
+- Expanded Appearance settings with Dark, Dim (low-glare dark), Light, Paper (warm low-glare light), and Auto day/night themes.
+- Store-profile inventory forms tailored for Phone Repair, PC Components, General Retail, Services, Grocery, and Hybrid shops.
+- Fast POS counter checkout, Retail/Wholesale pricing, Customer Credit ("Utang") ledger, Warranty & RMA tracking, and SHA-256 verified in-app updates.
 
 ---
 
@@ -105,6 +107,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-Setup-2.8.exe` below.
-  2. Run the installer to set up TechParts POS as a protected background service.
+  1. Download `TechPartsPOS-Setup-1.0.exe` below.
+  2. Run the installer to install TechParts POS as a protected background service.
   3. Launch TechParts POS from the Start Menu or Desktop shortcut.

@@ -16,7 +16,7 @@
 ; Rewritten by scripts/publish-release.ps1 on every release; keep it equal to
 ; package.json's version and src/updater.js's CURRENT_VERSION.
 #ifndef MyAppVersion
-#define MyAppVersion "2.8"
+#define MyAppVersion "1.0"
 #endif
 #define MyAppPublisher "TechParts"
 #define MyAppExeName "TechPartsPOS.exe"
@@ -34,12 +34,27 @@ DefaultDirName={autopf}\TechPartsPOS
 DisableDirPage=yes
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
+DisableWelcomePage=no
 ; The exe carries its own icon; no extra files to ship.
 OutputDir=..\dist\installer
 OutputBaseFilename=TechPartsPOS-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; Brand art is committed static assets; source vector lives in brand/mark.svg.
+SetupIconFile=TechPartsPOS.ico
+WizardImageFile=wizard-large.bmp
+WizardSmallImageFile=wizard-small.bmp
+UninstallDisplayIcon={app}\TechPartsPOS.ico
+LicenseFile=license.txt
+; Setup.exe Properties > Details, so the installer reads as a published product.
+VersionInfoVersion={#MyAppVersion}
+VersionInfoCompany=TechParts
+VersionInfoDescription=TechParts POS & Repair System Setup
+VersionInfoProductName=TechParts POS & Repair System
+VersionInfoProductVersion={#MyAppVersion}
+VersionInfoCopyright=Copyright (c) 2026 TechParts
+VersionInfoOriginalFileName=TechPartsPOS-Setup-{#MyAppVersion}.exe
 ; Target: any Windows 10/11 x64 machine (Edge is preinstalled there).
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
@@ -58,25 +73,42 @@ Name: "{commonappdata}\TechPartsPOS\runtime"; Flags: uninsneveruninstall
 [Files]
 ; Ship the verified customer release exe (built by scripts/release-customer.js).
 Source: "..\release\customer\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion; AfterInstall: WriteServiceTaskXml
+Source: "TechPartsPOS.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\TechPartsPOS.ico"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\TechPartsPOS.ico"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[Messages]
+SetupAppTitle=TechParts POS Setup
+SetupWindowTitle=Setup - TechParts POS and Repair System
+UninstallAppTitle=Uninstall TechParts POS
+UninstallAppFullTitle=TechParts POS and Repair System Uninstall
+WelcomeLabel1=Welcome to TechParts POS
+WelcomeLabel2=This will install TechParts POS and Repair System [version] on this computer.%n%nTechParts POS runs offline as a local background service and opens in your web browser. Your shop records stay on this computer.%n%nIt is recommended that you close all other applications before continuing.
+WizardLicense=License and Usage Terms
+LicenseLabel=TechParts POS and Repair System, version [version].
+LicenseLabel3=You must accept these terms before installing.
+LicenseAccepted=I &accept the terms
+LicenseNotAccepted=I &do not accept the terms
+FinishedHeadingLabel=Completing TechParts POS Setup
+FinishedLabel=TechParts POS and Repair System has been installed on this computer.%n%nIt starts automatically with Windows and opens in your web browser. Your shop database and backups are kept on this computer.
+FinishedLabelNoIcons=TechParts POS and Repair System has been installed on this computer.%n%nIt starts automatically with Windows and opens in your web browser.
+
 [Run]
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"""; Flags: runhidden waituntilterminated
-; The three data subdirs above are created by [Dirs] BEFORE this section runs,
-; and icacls without /T does not re-ACL existing children, so each one needs
-; its own SYSTEM-only grant or it keeps ProgramData's Users read inheritance.
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\data"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"""; Flags: runhidden waituntilterminated
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\backups"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"""; Flags: runhidden waituntilterminated
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\updates"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"""; Flags: runhidden waituntilterminated
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\runtime"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" /grant ""*S-1-5-32-545:(OI)(CI)R"""; Flags: runhidden waituntilterminated
+; Lock child folders BEFORE the parent folder so the elevated installer retains
+; list/traverse access to ProgramData\TechPartsPOS while configuring children
+; and running attrib. Remove temporary Administrators grants from upgrades.
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\data"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" /remove ""*S-1-5-32-544"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\backups"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" /remove ""*S-1-5-32-544"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\updates"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" /remove ""*S-1-5-32-544"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\runtime"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" /grant ""*S-1-5-32-545:(OI)(CI)RX"" /remove ""*S-1-5-32-544"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\attrib.exe"; Parameters: "+h +s ""{commonappdata}\TechPartsPOS"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" /remove ""*S-1-5-32-544"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""TechPartsPOS-Server"" /XML ""{tmp}\TechPartsPOS-Server.xml"" /F"; Flags: runhidden waituntilterminated
 Filename: "{sys}\schtasks.exe"; Parameters: "/Run /TN ""TechPartsPOS-Server"""; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
@@ -126,7 +158,7 @@ begin
   AppDir := XmlEscape(ExpandConstant('{app}'));
 
   SetArrayLength(Lines, 42);
-  Lines[0] := '<?xml version="1.0" encoding="UTF-8"?>';
+  Lines[0] := '<?xml version="1.0"?>';
   Lines[1] := '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">';
   Lines[2] := '  <RegistrationInfo>';
   Lines[3] := '    <Description>TechParts POS Background Service</Description>';
@@ -169,7 +201,7 @@ begin
   Lines[40] := '  </Actions>';
   Lines[41] := '</Task>';
 
-  SaveStringsToUTF8File(XmlPath, Lines, False);
+  SaveStringsToUTF8FileWithoutBOM(XmlPath, Lines, False);
 end;
 
 procedure StopRunningServiceAndWait();
@@ -197,9 +229,41 @@ begin
   end;
 end;
 
+procedure GrantTempAdminsAccessIfPresent(const TargetDir: String);
+var
+  ResultCode: Integer;
+begin
+  if DirExists(TargetDir) then
+  begin
+    Exec(ExpandConstant('{sys}\takeown.exe'), '/F "' + TargetDir + '" /A', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec(ExpandConstant('{sys}\icacls.exe'), '"' + TargetDir + '" /grant "*S-1-5-32-544:F"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+end;
+
+procedure UnlockExistingDataDirForUpgrade();
+var
+  BaseDir: String;
+  ServerStateFile: String;
+begin
+  BaseDir := ExpandConstant('{commonappdata}\TechPartsPOS');
+  if not DirExists(BaseDir) then
+    Exit;
+
+  GrantTempAdminsAccessIfPresent(BaseDir);
+  GrantTempAdminsAccessIfPresent(BaseDir + '\data');
+  GrantTempAdminsAccessIfPresent(BaseDir + '\backups');
+  GrantTempAdminsAccessIfPresent(BaseDir + '\updates');
+  GrantTempAdminsAccessIfPresent(BaseDir + '\runtime');
+
+  ServerStateFile := BaseDir + '\runtime\server.json';
+  if FileExists(ServerStateFile) then
+    DeleteFile(ServerStateFile);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   StopRunningServiceAndWait();
+  UnlockExistingDataDirForUpgrade();
   Result := '';
 end;
 

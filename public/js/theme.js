@@ -16,11 +16,15 @@ const VALID_DENSITIES = ['compact', 'cozy', 'roomy'];
 
 const DEFAULTS = { mode: 'dark', accent: 'blue', fontScale: '1', density: 'cozy', numFont: 'mono', fontStyle: 'workstation' };
 
+// Dim and Paper are tones of dark and light: same layout classes, softer palette
+// (styles.css keys off data-tone). They stay saved as their own mode.
+const TONES = { dim: 'dark', paper: 'light' };
+
 export function readAppearance() {
   try {
     const saved = JSON.parse(localStorage.getItem('techparts_appearance') || '{}');
     const legacyTheme = localStorage.getItem('techparts_theme');
-    if (saved.mode !== 'auto' && (legacyTheme === 'light' || legacyTheme === 'dark')) {
+    if (saved.mode !== 'auto' && !TONES[saved.mode] && (legacyTheme === 'light' || legacyTheme === 'dark')) {
       saved.mode = legacyTheme;
     }
     const merged = { ...DEFAULTS, ...saved };
@@ -44,14 +48,19 @@ export function applyAppearance(app = readAppearance()) {
 
   if (app.mode === 'auto') {
     applyThemeVisual(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  } else if (TONES[app.mode]) {
+    applyThemeVisual(TONES[app.mode]);
   } else {
     applyTheme(app.mode === 'light' ? 'light' : 'dark');
   }
+  root.dataset.tone = TONES[app.mode] ? app.mode : '';
 
   const a = ACCENTS[app.accent] || ACCENTS.blue;
   const light = !root.classList.contains('dark');
+  // Dim panels are lighter than Dark's, so accent text is lifted to stay >= 4.5:1.
+  const hiDark = app.mode === 'dim' ? `color-mix(in srgb, ${a.hi} 65%, #fff)` : a.hi;
   root.style.setProperty('--accent', light ? a.lo : a.base);
-  root.style.setProperty('--accent-hi', light ? `color-mix(in oklab, ${a.lo} 80%, #000)` : a.hi);
+  root.style.setProperty('--accent-hi', light ? `color-mix(in oklab, ${a.lo} 80%, #000)` : hiDark);
   root.style.setProperty('--accent-lo', a.lo);
   root.style.setProperty('--accent-ink', light ? '#ffffff' : a.ink);
   root.style.setProperty('--accent-vivid', a.base);

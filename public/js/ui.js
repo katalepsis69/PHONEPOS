@@ -528,6 +528,8 @@ export function applyThemeVisual(theme) {
 // Explicit switch (header toggle, appearance settings): also persists.
 export function applyTheme(theme) {
   applyThemeVisual(theme);
+  // A plain light/dark switch leaves Dim/Paper; applyAppearance re-sets the tone after this.
+  if (document.documentElement.dataset) document.documentElement.dataset.tone = '';
   localStorage.setItem('techparts_theme', theme);
   try {
     const app = JSON.parse(localStorage.getItem('techparts_appearance') || '{}');

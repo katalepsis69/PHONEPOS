@@ -1844,3 +1844,165 @@ test('refused scans are captured, capped and reviewable from the POS toolbar', (
 test('the sales-history Wholesale tag marks both wholesale tiers', () => {
   assert.match(backoffice, /s\.customer_type === 'technician' \|\| s\.customer_type === 'wholesale'/, 'the tag must key on both tier values');
 });
+
+test('Settings modal is generously sized and recovery password inputs do not inherit lock-screen gate__input styling', () => {
+  const html = source('public/index.html');
+  const css = source('public/styles.css');
+
+  const newRecTag = html.match(/<input[^>]*id="settings-recovery-new"[^>]*>/)?.[0] || '';
+  const confirmRecTag = html.match(/<input[^>]*id="settings-recovery-confirm"[^>]*>/)?.[0] || '';
+  assert.ok(newRecTag && confirmRecTag, 'settings recovery password inputs must exist');
+  assert.doesNotMatch(newRecTag, /\bgate__input\b/, 'settings-recovery-new must not carry oversized gate__input styling');
+  assert.doesNotMatch(confirmRecTag, /\bgate__input\b/, 'settings-recovery-confirm must not carry oversized gate__input styling');
+
+  assert.match(css, /#login-gate-forgot-pin\s+\.gate__input\b/, 'forgot-pin inline recovery inputs must override lock-screen gate__input size');
+
+  const settingsRule = css.match(/\.modal-card--settings\s*\{([^}]*)\}/)?.[1] || '';
+  const widthRem = Number(settingsRule.match(/max-width:\s*([\d.]+)rem/)?.[1] || 0);
+  assert.ok(widthRem >= 56, `.modal-card--settings must be widened (got ${widthRem}rem)`);
+  assert.match(settingsRule, /height:\s*min\(/, '.modal-card--settings must use viewport-capped height');
+});
+
+test('Add Item form hides UOM/decimals/serial for profiles that do not use them and clears service prefill', () => {
+  const start = inventory.indexOf('export const TEMPLATE_BRANDS = {');
+  const end = inventory.indexOf('// Slow POST + a second Enter', start);
+  const code = inventory.slice(start, end).replace(/export /g, '');
+
+  const makeClassList = (initial = []) => {
+    const set = new Set(initial);
+    return {
+      toggle: (cls, force) => (force === undefined ? (set.has(cls) ? set.delete(cls) : set.add(cls)) : (force ? set.add(cls) : set.delete(cls))),
+      add: cls => set.add(cls),
+      remove: cls => set.delete(cls),
+      contains: cls => set.has(cls)
+    };
+  };
+  const makeEl = (extra = {}) => ({
+    value: '',
+    placeholder: '',
+    textContent: '',
+    innerHTML: '',
+    required: false,
+    checked: false,
+    dataset: {},
+    classList: makeClassList(),
+    focus() {},
+    closest() { return null; },
+    addEventListener() {},
+    ...extra
+  });
+
+  const uomField = makeEl();
+  const fracField = makeEl();
+  const serialField = makeEl();
+  const dom = {
+    'part-name': makeEl(),
+    'label-part-name': makeEl(),
+    'part-brand': makeEl(),
+    'part-model': makeEl(),
+    'part-type': makeEl(),
+    'part-cost': makeEl(),
+    'part-retail': makeEl(),
+    'part-tech': makeEl(),
+    'part-stock': makeEl({ value: '5' }),
+    'part-sku': makeEl(),
+    'part-sku-warn': makeEl(),
+    'part-uom': makeEl({ value: 'pcs', closest: s => (s === '.field' ? uomField : null) }),
+    'part-allow-fractional': makeEl({ closest: s => (s === '.field' ? fracField : null) }),
+    'part-track-serial': makeEl({ closest: s => (s === '.field' ? serialField : null) }),
+    'field-wrap-item-attrs': makeEl(),
+    'item-template-bar': makeEl(),
+    'form-add-part': {
+      reset() {
+        dom['part-name'].value = '';
+        dom['part-model'].value = '';
+        dom['part-type'].value = '';
+        dom['part-cost'].value = '';
+        dom['part-retail'].value = '';
+        dom['part-tech'].value = '';
+        dom['part-stock'].value = '5';
+        dom['part-uom'].value = 'pcs';
+        dom['part-allow-fractional'].checked = false;
+        dom['part-track-serial'].checked = false;
+      }
+    }
+  };
+  const labels = { 'part-model': makeEl(), 'part-type': makeEl() };
+  const S = { shopSettings: { business_type: 'hybrid', enable_fractional_qty: '1', enable_serial_tracking: '1' } };
+
+  const ctx = vm.createContext({
+    S,
+    escHtml: s => String(s ?? ''),
+    t: (_k, d) => d,
+    hasElevation: () => true,
+    requireManagerPin: () => {},
+    openModal: () => {},
+    document: {
+      getElementById: id => dom[id] || null,
+      querySelector: sel => {
+        if (sel === 'label[for="part-model"]') return labels['part-model'];
+        if (sel === 'label[for="part-type"]') return labels['part-type'];
+        return null;
+      }
+    }
+  });
+  vm.runInContext(code, ctx);
+
+  // Switching to service sets Labor/Service/999; leaving it must wipe those defaults clean.
+  ctx.setAddItemTemplate('service');
+  assert.equal(dom['part-model'].value, 'Labor');
+  assert.equal(dom['part-type'].value, 'Service');
+  assert.equal(dom['part-stock'].value, '999');
+  assert.equal(dom['field-wrap-item-attrs'].classList.contains('hidden'), true);
+
+  ctx.setAddItemTemplate('phone');
+  assert.equal(dom['part-model'].value, '');
+  assert.equal(dom['part-type'].value, '');
+  assert.equal(dom['part-cost'].value, '');
+  assert.equal(dom['part-retail'].value, '');
+  assert.equal(dom['part-tech'].value, '');
+  assert.equal(dom['part-stock'].value, '5');
+  assert.equal(dom['field-wrap-item-attrs'].classList.contains('hidden'), true, 'hybrid phone template hides UOM/decimals/serial');
+
+  // Reopening in dedicated profiles respects profile settings & clears service leftovers.
+  S.shopSettings = { business_type: 'phone', enable_fractional_qty: '0', enable_serial_tracking: '0' };
+  dom['part-model'].value = 'Labor';
+  dom['part-type'].value = 'Service';
+  ctx.openAddPartModal();
+  assert.equal(dom['part-model'].value, '');
+  assert.equal(dom['field-wrap-item-attrs'].classList.contains('hidden'), true, 'phone profile hides UOM box');
+
+  S.shopSettings = { business_type: 'retail', enable_fractional_qty: '0', enable_serial_tracking: '0' };
+  ctx.openAddPartModal();
+  assert.equal(dom['field-wrap-item-attrs'].classList.contains('hidden'), true, 'retail profile hides UOM box');
+
+  S.shopSettings = { business_type: 'pc', enable_fractional_qty: '0', enable_serial_tracking: '1' };
+  ctx.openAddPartModal();
+  assert.equal(dom['field-wrap-item-attrs'].classList.contains('hidden'), false, 'pc profile keeps container for serial tracking');
+  assert.equal(uomField.classList.contains('hidden'), true, 'pc profile hides Unit of Measure');
+  assert.equal(fracField.classList.contains('hidden'), true, 'pc profile hides Allow decimals');
+  assert.equal(serialField.classList.contains('hidden'), false, 'pc profile shows Track serial #');
+
+  S.shopSettings = { business_type: 'grocery', enable_fractional_qty: '1', enable_serial_tracking: '0' };
+  ctx.openAddPartModal();
+  assert.equal(uomField.classList.contains('hidden'), false, 'grocery profile shows Unit of Measure');
+  assert.equal(fracField.classList.contains('hidden'), false, 'grocery profile shows Allow decimals');
+  assert.equal(serialField.classList.contains('hidden'), true, 'grocery profile hides Track serial #');
+  assert.ok(dom['part-brand'].innerHTML.includes('Nestle'), 'grocery profile loads grocery brands');
+
+  // Post-login and pairing refresh the top-nav Cloud Sync chip without waiting 30s.
+  assert.match(main, /await loadShopSettings\(\);\n\s*refreshSyncChip\(\);/);
+  assert.doesNotMatch(main, /^refreshSyncChip\(\);$/m);
+  assert.match(auth, /pairCloudWithCode[\s\S]*refreshSyncChip/);
+});
+
+test('Add/Edit item attribute rows line the checkboxes up with the Unit of Measure select', () => {
+  const html = source('public/index.html');
+  for (const id of ['field-wrap-item-attrs', 'field-wrap-edit-attrs']) {
+    const row = html.match(new RegExp(`<div class="[^"]*"\\s+id="${id}">`))[0];
+    assert.match(row, /\bitems-end\b/, `${id} must bottom-align its cells`);
+  }
+  assert.doesNotMatch(html, /sm:mt-3/, 'no hand-tuned margin to fake the alignment');
+  const boxes = html.match(/<label class="check [^"]*px-2 py-1 border border-transparent[^"]*">/g) || [];
+  assert.equal(boxes.length, 4, 'both checkboxes in both rows share the select box height');
+});

@@ -244,11 +244,11 @@ function inspectCodebaseChanges(modifiedFiles) {
   return highlights;
 }
 
-function generateReleaseHighlights({ version, prevTag, customNote } = {}) {
+function generateReleaseHighlights({ version, prevTag, customNote, changelogPath } = {}) {
   const ver = (version || getPackageVersion()).replace(/^v/i, '');
   const previous = prevTag || getPreviousTag(ver);
   const prevDate = getTagDate(previous);
-  const priorBullets = getPriorReleaseBullets(ver);
+  const priorBullets = getPriorReleaseBullets(ver, changelogPath);
 
   const bullets = [];
 

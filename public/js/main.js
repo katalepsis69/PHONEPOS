@@ -645,6 +645,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   applyRoleVisibility();
 
   await loadShopSettings();
+  refreshSyncChip();
   // Recover before catalog rendering persists the initially empty cart.
   restoreCartRecovery();
   await loadPosCatalog();
@@ -1022,8 +1023,7 @@ export async function refreshSyncChip() {
   }
 }
 window.refreshSyncChip = refreshSyncChip;
-refreshSyncChip();
-setInterval(refreshSyncChip, 30000);
+setInterval(() => { if (S.sessionToken) refreshSyncChip(); }, 30000);
 checkForAppUpdates(true);
 
 try {

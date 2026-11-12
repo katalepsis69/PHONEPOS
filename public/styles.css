@@ -275,6 +275,66 @@ body.light {
   --accent-line: rgba(17,17,17,0.14);
 }
 
+/* Dim: a softer dark for tired eyes. Same hues as Dark, but body text sits near
+   9:1 instead of 16:1 (less glare), and the canvas, panels and lines are spaced
+   far enough apart that layers stay readable without bright borders. */
+html.dark[data-tone="dim"] {
+  --app-bg: #22252A;
+  --rail-top: #272A30;
+  --rail-bottom: #24272C;
+  --surface: #2C3037;
+  --surface-2: #31353C;
+  --surface-3: #3A3F47;
+  --field: #31353C;
+  --line: #444A53;
+  --line-soft: #3B4048;
+  --line-strong: #555C67;
+
+  --txt: #DCDAD3;
+  --txt-2: #C3C2BC;
+  --txt-3: #B2B2AE;
+  --txt-4: #AAABA7;
+
+  --color-slate-300: #B2B2AE;
+  --color-slate-400: #AAABA7;
+  --color-slate-500: #B2B2AE;
+  --color-slate-600: #C3C2BC;
+  --color-slate-700: #D3D1CA;
+  --color-slate-800: #DCDAD3;
+  --color-slate-900: var(--surface);
+  --color-slate-950: var(--app-bg);
+  --color-emerald-300: #DCDAD3;
+  --color-emerald-400: #DCDAD3;
+  --color-emerald-500: #DCDAD3;
+  --color-emerald-600: #D3D1CA;
+}
+
+/* Paper: a warm, low-glare light. Cream panels on a sand canvas instead of
+   white on grey, with the same ink strength as Light. */
+html.light[data-tone="paper"] {
+  --app-bg: #E9E4D8;
+  --rail-top: #F6F2E8;
+  --rail-bottom: #EFEADD;
+  --surface: #F6F2E8;
+  --surface-2: #EFEADD;
+  --surface-3: #E5DFD0;
+  --field: #FBF8F0;
+  --line: #D6CFBD;
+  --line-soft: #E0DACA;
+  --line-strong: #C4BCA7;
+
+  --txt: #2B2822;
+  --txt-2: #3D3A32;
+  --txt-3: #5A554B;
+  --txt-4: #655F54;
+
+  --color-slate-50: #FBF8F0;
+  --color-slate-100: #F6F2E8;
+  --color-slate-200: #E5DFD0;
+  --color-slate-900: var(--surface);
+  --color-slate-950: var(--surface-2);
+}
+
 /* -------------------------------------------------------------- 2. base ink */
 * {
   box-sizing: border-box;
@@ -3290,7 +3350,8 @@ input[type="password"]::-ms-clear {
 #pin-setup-overlay .text-slate-400,
 #pin-setup-overlay .text-slate-500 { color: var(--txt-3); }
 
-#pin-setup-overlay .gate__input {
+#pin-setup-overlay .gate__input,
+#login-gate-forgot-pin .gate__input {
   height: 38px;
   padding: 0 10px;
   font-size: 0.8125rem;
@@ -3300,13 +3361,16 @@ input[type="password"]::-ms-clear {
   border-radius: 6px;
 }
 
-#pin-setup-overlay .gate__input::placeholder {
+#pin-setup-overlay .gate__input::placeholder,
+#login-gate-forgot-pin .gate__input::placeholder {
   font-size: 0.8125rem;
   letter-spacing: normal;
 }
 
 #pin-setup-overlay #pin-setup-new,
-#pin-setup-overlay #pin-setup-confirm {
+#pin-setup-overlay #pin-setup-confirm,
+#login-gate-forgot-pin #recover-new-pin,
+#login-gate-forgot-pin #recover-confirm-pin {
   text-align: center;
   font-family: var(--font-numeric);
   letter-spacing: 0.25em;
@@ -4913,6 +4977,17 @@ html[data-density='roomy'] .ptable th {
   color: #8b8a86;
 }
 
+.apmock--dim {
+  background: #2C3037;
+  border-color: #2C3037;
+  color: #B2B2AE;
+}
+
+.apmock--paper {
+  background: #EFEADD;
+  color: #655F54;
+}
+
 .apmock--auto {
   background: linear-gradient(90deg, #14161c 50%, #f4f3ef 50%);
   color: #8b8a86;
@@ -5399,13 +5474,13 @@ html[data-density='roomy'] .ptable th {
    strip on the tablet breakpoint.
    ------------------------------------------------------------- */
 .modal-card--settings {
-  max-width: 46rem;
-  height: 32rem;
+  max-width: 60rem;
+  height: min(44rem, 86vh);
 }
 
 .settings-layout {
   display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
+  grid-template-columns: 196px minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -5484,7 +5559,7 @@ html[data-density='roomy'] .ptable th {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 14px 16px;
+  padding: 18px 22px;
 }
 
 .settings-pane__foot {
@@ -5492,7 +5567,7 @@ html[data-density='roomy'] .ptable th {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 11px 16px;
+  padding: 12px 22px;
   border-top: 1px solid var(--line-soft);
   background: color-mix(in oklab, var(--surface-2) 45%, transparent);
 }

@@ -1,0 +1,26 @@
+TechParts POS & Repair System
+License and Usage Terms
+
+Please read these terms before installing. By installing or using TechParts POS & Repair System ("the Software"), you agree to them.
+
+1. License grant. The Software is licensed, not sold. Subject to a valid activation for this computer, TechParts grants you a non-exclusive, non-transferable license to install and run one copy of the Software on this computer for your own business use.
+
+2. Activation. The Software requires a valid license key for this computer. Keep your key safe and do not share it except as your license agreement with TechParts allows.
+
+3. Your data. The Software stores your shop records (sales, inventory, repairs, customer balances) locally on this computer. Your data remains yours. Installing, updating, or uninstalling the Software does not delete your shop database or your backups. You are responsible for keeping your own copies of your business records.
+
+4. Offline operation. Day-to-day use does not require an internet connection. The Software starts a local background service on this computer and opens in your web browser.
+
+5. Restrictions. You may not copy, redistribute, resell, sublicense, rent, or lease the Software except as expressly permitted. You may not reverse engineer, decompile, or disassemble the Software except to the extent applicable law permits. You may not remove or alter copyright or license notices.
+
+6. Updates. The Software may install verified updates to itself. Updates are part of the Software and are covered by these terms.
+
+7. No warranty. The Software is provided "as is", without warranty of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, and non-infringement. You use it at your own risk. Always keep backups of your business records.
+
+8. Limitation of liability. To the maximum extent permitted by law, TechParts shall not be liable for any indirect, incidental, special, or consequential damages, or for loss of data, profits, or business, arising from the use or inability to use the Software.
+
+9. Termination. These terms end automatically if you breach them. On termination you must stop using the Software and uninstall it. The sections that by their nature should survive (your data ownership, no warranty, limitation of liability) survive.
+
+10. General. These terms are the entire agreement between you and TechParts regarding the Software. If any part is held unenforceable, the rest remains in effect.
+
+Copyright (c) 2026 TechParts. All rights reserved.

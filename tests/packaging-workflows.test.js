@@ -250,7 +250,7 @@ test('Inno Setup installer script configures SYSTEM service, ACLs, and preserves
     assert.match(iss, new RegExp(`TechPartsPOS\\\\${sub}"" \\/inheritance:r \\/grant:r ""\\*S-1-5-18:\\(OI\\)\\(CI\\)F`),
       `installer must grant SYSTEM-only access to the ${sub} directory (pre-created children do not inherit the root grant)`);
   }
-  assert.match(iss, /\*S-1-5-32-545:\(OI\)\(CI\)R/, 'installer must grant standard users read access to runtime via S-1-5-32-545:(OI)(CI)R');
+  assert.match(iss, /\*S-1-5-32-545:\(OI\)\(CI\)RX/, 'installer must grant standard users read+traverse (RX) access to runtime via S-1-5-32-545:(OI)(CI)RX');
   assert.match(iss, /DeveloperToolsAvailability"; ValueData: "0"/, 'installer must refuse DevTools in the kiosk browser, not allow them');
   assert.match(iss, /<BootTrigger>/, 'service task XML must include BootTrigger');
   assert.match(iss, /<LogonTrigger>/, 'service task XML must include LogonTrigger');
@@ -258,10 +258,27 @@ test('Inno Setup installer script configures SYSTEM service, ACLs, and preserves
   assert.match(iss, /IgnoreNew/, 'service task XML must set MultipleInstancesPolicy to IgnoreNew');
   assert.match(iss, /TechPartsPOS-Server/, 'scheduled task name must be TechPartsPOS-Server');
   assert.match(iss, /PrepareToInstall/, 'installer must implement PrepareToInstall to stop service');
+  assert.match(iss, /UnlockExistingDataDirForUpgrade/, 'PrepareToInstall must unlock existing ProgramData\\TechPartsPOS before [Dirs] runs');
+  assert.match(iss, /takeown\.exe[\s\S]*icacls\.exe/, 'upgrade unlock helper must take ownership and temporarily grant Administrators');
   assert.match(iss, /InitializeUninstall/, 'installer must implement InitializeUninstall to stop service');
-  assert.match(iss, /<\?xml version="1\.0" encoding="UTF-8"\?>/, 'task XML must include UTF-8 XML declaration');
+  assert.match(iss, /<\?xml version="1\.0"\?>/, 'task XML must declare version="1.0" without encoding="UTF-8"');
+  assert.doesNotMatch(iss, /<\?xml[^>]*encoding=/i, 'task XML must not specify encoding= (schtasks rejects encoding="UTF-8" on UTF-8 files)');
+  assert.match(iss, /SaveStringsToUTF8FileWithoutBOM\s*\(/, 'installer must write task XML without a UTF-8 BOM for schtasks');
+  assert.doesNotMatch(iss, /\bSaveStringsToUTF8File\s*\(/, 'must not call SaveStringsToUTF8File (UTF-8 BOM causes schtasks syntax error)');
   assert.doesNotMatch(iss, /ssPostInstall[\s\S]*?DeleteFile\s*\(\s*XmlFile\s*\)/i, 'must not delete temporary task XML during ssPostInstall before [Run]');
   assert.match(iss, /CurStep\s*=\s*ssDone[\s\S]*?DeleteFile\s*\(\s*XmlFile\s*\)/i, 'must delete temporary task XML during ssDone after [Run]');
+
+  // Parent TechPartsPOS lock and attrib must happen AFTER locking children, or
+  // elevated setup immediately loses access to ProgramData\TechPartsPOS children.
+  const runSection = iss.split(/\[Run\]/i)[1]?.split(/\r?\n\[/)[0] || '';
+  const parentLockIdx = runSection.search(/TechPartsPOS"" \/inheritance:r/);
+  assert.ok(parentLockIdx !== -1, '[Run] must lock parent TechPartsPOS folder');
+  for (const sub of ['data', 'backups', 'updates', 'runtime']) {
+    const childIdx = runSection.indexOf(`TechPartsPOS\\${sub}"" /inheritance:r`);
+    assert.ok(childIdx !== -1 && childIdx < parentLockIdx, `[Run] must ACL child ${sub} before locking parent TechPartsPOS`);
+  }
+  const attribIdx = runSection.indexOf('attrib.exe');
+  assert.ok(attribIdx !== -1 && attribIdx < parentLockIdx, '[Run] must apply attrib +h +s before locking parent TechPartsPOS');
 
   const uninstallDeleteSection = iss.split(/\[UninstallDelete\]/i)[1]?.split(/\[/)[0] || '';
   assert.doesNotMatch(uninstallDeleteSection, /\{commonappdata\}\\TechPartsPOS|ProgramData\\TechPartsPOS/i, 'UninstallDelete must never delete ProgramData/TechPartsPOS');

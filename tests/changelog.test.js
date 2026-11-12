@@ -17,7 +17,9 @@ const {
 const ROOT_DIR = path.resolve(__dirname, '..');
 
 test('generateReleaseHighlights discovers actual codebase changes with zero em dashes', () => {
-  const highlights = generateReleaseHighlights({ version: '2.2' });
+  // Isolate from live CHANGELOG.md so resetting repo version below 2.2 never suppresses 2.2's own check.
+  const isolatedChangelog = path.join(os.tmpdir(), `changelog-isolated-${process.pid}.md`);
+  const highlights = generateReleaseHighlights({ version: '2.2', changelogPath: isolatedChangelog });
   assert.ok(Array.isArray(highlights), 'highlights must be an array');
   assert.ok(highlights.length > 0, 'highlights must not be empty');
 

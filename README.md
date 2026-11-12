@@ -19,7 +19,7 @@ A commercial-grade Point of Sale and inventory management workstation built for 
 
 Download the latest pre-built Windows release from the [Releases](https://github.com/katalepsis69/PHONEPOS/releases) page.
 
-1. Download `TechPartsPOS-Setup-2.8.exe`.
+1. Download `TechPartsPOS-Setup-1.0.exe`.
 2. Run the installer (Administrator permissions required). TechParts POS installs to `C:\Program Files\TechPartsPOS` and automatically registers and starts `TechPartsPOS-Server` as a protected Windows background service.
 3. Open the desktop shortcut or Start Menu entry to launch the POS workstation interface (automatically connects to the local service and opens your browser).
 

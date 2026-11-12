@@ -758,6 +758,33 @@ export const TEMPLATE_BRANDS = {
 };
 
 let currentAddTemplate = 'retail';
+let servicePrefillApplied = false;
+
+// Show only the attribute controls relevant to the active store profile and template:
+// phone repair & general retail count whole pieces (all hidden), PC tracks serials,
+// and grocery/hybrid retail track unit of measure & decimals.
+function syncItemAttrVisibility(prefix, { showUom, showSerial, resetHidden = false }) {
+  const wrapId = prefix === 'edit' ? 'field-wrap-edit-attrs' : 'field-wrap-item-attrs';
+  const uomId = prefix === 'edit' ? 'edit-part-uom' : 'part-uom';
+  const fracId = prefix === 'edit' ? 'edit-part-allow-fractional' : 'part-allow-fractional';
+  const serialId = prefix === 'edit' ? 'edit-part-track-serial' : 'part-track-serial';
+
+  const uomEl = document.getElementById(uomId);
+  const fracEl = document.getElementById(fracId);
+  const serialEl = document.getElementById(serialId);
+  const wrapEl = document.getElementById(wrapId);
+
+  if (resetHidden && !showUom) {
+    if (uomEl) uomEl.value = 'pcs';
+    if (fracEl) fracEl.checked = false;
+  }
+  if (resetHidden && !showSerial && serialEl) serialEl.checked = false;
+
+  uomEl?.closest?.('.field')?.classList?.toggle?.('hidden', !showUom);
+  fracEl?.closest?.('.field')?.classList?.toggle?.('hidden', !showUom);
+  serialEl?.closest?.('.field')?.classList?.toggle?.('hidden', !showSerial);
+  wrapEl?.classList?.toggle?.('hidden', !showUom && !showSerial);
+}
 
 export function setAddItemTemplate(tpl) {
   currentAddTemplate = tpl || 'retail';
@@ -789,16 +816,46 @@ export function setAddItemTemplate(tpl) {
   const fracCb = document.getElementById('part-allow-fractional');
   const serialCb = document.getElementById('part-track-serial');
 
-  if (tpl === 'retail') {
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const fracEnabled = S.shopSettings?.enable_fractional_qty === '1';
+  const serialEnabled = S.shopSettings?.enable_serial_tracking === '1';
+
+  // Clear service preset values whenever switching to a non-service item so
+  // "Labor" / "Service" / 999 never leak into phone, PC, grocery, or retail forms.
+  if (tpl !== 'service' && (servicePrefillApplied || (modelInput?.value === 'Labor' && typeInput?.value === 'Service'))) {
+    if (modelInput && modelInput.value === 'Labor') modelInput.value = '';
+    if (typeInput && typeInput.value === 'Service') typeInput.value = '';
+    if (costInput && costInput.value === '0') costInput.value = '';
+    if (retailInput && retailInput.value === '350') retailInput.value = '';
+    if (techInput && techInput.value === '300') techInput.value = '';
+    if (stockInput && stockInput.value === '999') stockInput.value = '5';
+    servicePrefillApplied = false;
+  }
+
+  let showUom = false;
+  let showSerial = false;
+
+  if (tpl === 'retail' || tpl === 'grocery') {
     if (nameLabel) nameLabel.innerHTML = 'Product / Item Name *';
-    if (nameInput) { nameInput.placeholder = 'e.g. San Miguel Pale Pilsen 330ml, Alaska Evaporated Milk'; nameInput.required = true; }
+    if (nameInput) {
+      nameInput.placeholder = tpl === 'grocery'
+        ? 'e.g. San Miguel Pale Pilsen 330ml, Alaska Evaporated Milk'
+        : 'e.g. Cotton T-Shirt, Wireless Mouse, Canvas Tote Bag';
+      nameInput.required = true;
+    }
     if (modelLabel) modelLabel.textContent = 'Variant / Size';
     if (modelInput) { modelInput.placeholder = 'e.g. 1.5L, 330ml, Pack of 6'; modelInput.required = false; }
     if (typeLabel) typeLabel.textContent = 'Category / Department *';
-    if (typeInput) typeInput.placeholder = 'e.g. Beverages, Canned Goods, Snacks, Condiments';
+    if (typeInput) {
+      typeInput.placeholder = tpl === 'grocery'
+        ? 'e.g. Beverages, Canned Goods, Snacks, Condiments'
+        : 'e.g. Apparel, Accessories, Stationery, Home & Living';
+    }
     if (skuInput) skuInput.placeholder = 'e.g. 4800016644408 (Scan Barcode)';
+    showUom = fracEnabled;
+    showSerial = mode === 'hybrid' ? false : serialEnabled;
     if (uomSel) uomSel.value = 'pcs';
-    if (fracCb) fracCb.checked = S.shopSettings?.enable_fractional_qty === '1';
+    if (fracCb) fracCb.checked = showUom;
     if (serialCb) serialCb.checked = false;
     nameInput?.focus();
   } else if (tpl === 'pc') {
@@ -809,9 +866,11 @@ export function setAddItemTemplate(tpl) {
     if (typeLabel) typeLabel.textContent = 'Component Category *';
     if (typeInput) typeInput.placeholder = 'e.g. GPU, CPU, Motherboard, RAM, SSD, Power Supply, Case';
     if (skuInput) skuInput.placeholder = 'e.g. Serial / Barcode';
+    showUom = mode === 'hybrid' ? false : fracEnabled;
+    showSerial = serialEnabled;
     if (uomSel) uomSel.value = 'pcs';
     if (fracCb) fracCb.checked = false;
-    if (serialCb) serialCb.checked = S.shopSettings?.enable_serial_tracking !== '0';
+    if (serialCb) serialCb.checked = showSerial;
     nameInput?.focus();
   } else if (tpl === 'phone') {
     if (nameLabel) nameLabel.innerHTML = 'Part Name <span class="field__opt">optional alias</span>';
@@ -821,6 +880,8 @@ export function setAddItemTemplate(tpl) {
     if (typeLabel) typeLabel.textContent = 'Part Type / Screen Spec *';
     if (typeInput) typeInput.placeholder = 'e.g. LCD (OLED), LCD (Incell), Battery 5000mAh, Port Flex';
     if (skuInput) skuInput.placeholder = 'e.g. AP-LCD-11';
+    showUom = mode === 'hybrid' ? false : fracEnabled;
+    showSerial = mode === 'hybrid' ? false : serialEnabled;
     if (uomSel) uomSel.value = 'pcs';
     if (fracCb) fracCb.checked = false;
     if (serialCb) serialCb.checked = false;
@@ -836,15 +897,21 @@ export function setAddItemTemplate(tpl) {
     if (retailInput && (!retailInput.value || retailInput.value === '1100')) retailInput.value = '350';
     if (techInput && (!techInput.value || techInput.value === '850')) techInput.value = '300';
     if (stockInput) stockInput.value = '999';
+    servicePrefillApplied = true;
+    showUom = false;
+    showSerial = false;
     if (uomSel) uomSel.value = 'pcs';
     if (fracCb) fracCb.checked = false;
     if (serialCb) serialCb.checked = false;
     nameInput?.focus();
   }
 
+  syncItemAttrVisibility('add', { showUom, showSerial, resetHidden: true });
+
   const titleSpan = document.querySelector('#add-part-title [data-i18n="part.add_title"]');
   if (titleSpan) {
     const titles = {
+      grocery: 'Add Grocery Item',
       retail: 'Add Product',
       pc: 'Add PC Component',
       phone: 'Add Phone Part',
@@ -859,6 +926,10 @@ export function openAddPartModal() {
     requireManagerPin('Enter manager PIN to add parts to the catalog', () => openAddPartModal());
     return;
   }
+  document.getElementById('form-add-part')?.reset?.();
+  document.getElementById('part-sku-warn')?.classList.add('hidden');
+  servicePrefillApplied = false;
+
   const mode = S.shopSettings?.business_type || 'hybrid';
   const isHybrid = mode === 'hybrid';
   const templateBar = document.getElementById('item-template-bar');
@@ -867,15 +938,15 @@ export function openAddPartModal() {
   }
 
   let initialTemplate = 'retail';
-  if (mode === 'phone') initialTemplate = 'phone';
-  else if (mode === 'pc') initialTemplate = 'pc';
-  else if (mode === 'grocery' || mode === 'retail') initialTemplate = 'retail';
+  if (mode === 'phone' || mode === 'pc' || mode === 'grocery' || mode === 'retail') initialTemplate = mode;
   else if (mode === 'hybrid') initialTemplate = currentAddTemplate || 'retail';
   setAddItemTemplate(initialTemplate);
 
   const costEl = document.getElementById('part-cost');
   const retailEl = document.getElementById('part-retail');
   const techEl = document.getElementById('part-tech');
+  if (retailEl) delete retailEl.dataset.autoMarkup;
+  if (techEl) delete techEl.dataset.autoMarkup;
   if (costEl && retailEl && techEl && !costEl.dataset.markupBound) {
     costEl.dataset.markupBound = '1';
     retailEl.addEventListener('input', () => { delete retailEl.dataset.autoMarkup; });
@@ -1448,6 +1519,23 @@ export function openEditPartModal(id) {
   if (document.getElementById('edit-part-track-serial')) {
     document.getElementById('edit-part-track-serial').checked = Number(item.track_serial) === 1;
   }
+
+  const fracEnabled = S.shopSettings?.enable_fractional_qty === '1';
+  const serialEnabled = S.shopSettings?.enable_serial_tracking === '1';
+  const itemHasUom = Number(item.allow_fractional) === 1 || (item.uom && item.uom !== 'pcs');
+  const itemHasSerial = Number(item.track_serial) === 1;
+  const showUom = tpl === 'service'
+    ? itemHasUom
+    : (mode === 'hybrid'
+      ? ((tpl === 'retail' || tpl === 'grocery') ? fracEnabled || itemHasUom : itemHasUom)
+      : fracEnabled || itemHasUom);
+  const showSerial = tpl === 'service'
+    ? itemHasSerial
+    : (mode === 'hybrid'
+      ? (tpl === 'pc' ? serialEnabled || itemHasSerial : itemHasSerial)
+      : serialEnabled || itemHasSerial);
+  syncItemAttrVisibility('edit', { showUom, showSerial });
+
   document.getElementById('edit-part-sku-warn')?.classList.add('hidden');
   // Stamped at open: the PUT sends it back and the server refuses the save if
   // a sale moved the shelf since this form was filled (stale-form overwrite).
