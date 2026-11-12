@@ -286,9 +286,21 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
         created_at TEXT NOT NULL
       );
 
+      -- Operating expenses (P&L records; never touch the cash drawer).
+      CREATE TABLE IF NOT EXISTS expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        amount REAL NOT NULL,
+        actor_name TEXT DEFAULT '',
+        created_at TEXT NOT NULL
+      );
+
       -- "units received today" on the manager report scans stock_movements by
       -- created_at; same daily-aggregate pattern as the sales indexes above.
       CREATE INDEX IF NOT EXISTS idx_movements_created_at ON stock_movements(created_at);
+
+      CREATE INDEX IF NOT EXISTS idx_expenses_created_at ON expenses(created_at);
 
       CREATE TABLE IF NOT EXISTS customer_profiles (
         customer_name TEXT PRIMARY KEY COLLATE NOCASE,
