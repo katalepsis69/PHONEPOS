@@ -3,8 +3,9 @@
 [v9, 2026-11-12, measured refresh 2026-11-13, supersedes v8 of 2026-11-09 (which superseded
 v7 of 2026-11-05, v6 of 2026-11-02, v5 of 2026-10-14, v4 and v3 of 2026-10-02; a frozen v3
 sits at backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). THIS EDITION IS
-MEASURED ON 2026-11-13 at HEAD cf06069 (branch main, tag v1.1, in sync with origin/main):
-npm test reports 638 tests across 51 tracked files (638/638 pass in about 28 s; the rerun
+MEASURED ON 2026-11-13 at HEAD b55f517 (branch main, tag v1.1, 4 unpushed commits ahead of
+origin/main):
+npm test reports 642 tests across 52 tracked files (642/642 pass in about 30 s; the rerun
 rule in GATES stands), and npm run build:css exits 0. Version is 1.1 across package.json:3,
 CURRENT_VERSION (src/updater.js:11), and MyAppVersion (installer/TechPartsPOS.iss).]
 POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..cf06069, first-look audit targets):
@@ -134,7 +135,7 @@ measurement time; the manager app), scripts/ (generate-license.js 421, set-pin.j
 mirror-backups.js 70, build-artifacts.js 90, build-exe.js 123, build-common.js 193,
 build-license-exe.js 89, build-installer.js 60, verify-exe.js 275, release-customer.js 58,
 check-repair-ui.js 110, deploy-cloud.js 82, generate-changelog.js 669, publish-release.ps1
-662), installer/TechPartsPOS.iss (379 lines), tests/ (51 tracked *.test.js files plus
+662), installer/TechPartsPOS.iss (379 lines), tests/ (52 tracked *.test.js files plus
 helper.js and cloud-hardening-harness.js), and the docs:
 README.md, RELEASE_NOTES.md, ARCHITECTURE.md,
 DATABASE_SCHEMA.md, API_REFERENCE.md, BUSINESS_LOGIC_AND_WORKFLOWS.md,
@@ -371,8 +372,8 @@ that the implementation still matches, then move on)
   license surface (machine id, trial seal, anti-rollback) is NEW and unaudited, see below.
 
 GATES (recount and rerun at audit time; report the current numbers)
-- npm test (node --test tests/*.test.js). Measured 2026-11-13 at cf06069: 638 tests across
-  51 tracked files; 638/638 on a parallel run, about 28 s (tests/ui-fixes.test.js
+- npm test (node --test tests/*.test.js). Measured 2026-11-13 at b55f517: 642 tests across
+  52 tracked files; 642/642 on a parallel run, about 30 s (tests/ui-fixes.test.js
   normalizes CRLF line endings inside source()). The 11-05 history stands: one parallel run that
   day produced no output for over ten minutes and was killed; the immediate rerun was
   green, so a HANG is also a rerun, not a regression. The v6
@@ -938,7 +939,8 @@ AUDIT CATEGORIES (cover all ten; report per category)
    gitignored files is visible anywhere but a git tag.
 
 8. TEST QUALITY
-   638 tests across 51 tracked files (measured 2026-11-13 at cf06069; v9 counted 610 across
+   642 tests across 52 tracked files (measured 2026-11-13 at b55f517; the cf06069 same-day
+   refresh counted 638 across 51, v9 counted 610 across
    49 at 533f07a, v8 counted 568 across 49 files including untracked universal-pos, v7
    counted 505 in 44), with mix of
    behavioral, hybrid vm-slice, and static greps. Recount per file, keep the

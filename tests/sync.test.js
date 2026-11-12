@@ -534,3 +534,30 @@ test('a SQL constraint failure from a cloud command acks instead of retrying for
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a transient failure from a cloud command stays pending and retries', () => {
+  // The other half of the audit-2026-11-13 finding 1 fix: SQLITE_BUSY and
+  // disk-full messages match none of the refused alternatives, so the command
+  // must stay un-acked and be served again on the next drain.
+  const { db, dir } = tmpDb();
+  ensureSyncTables(db);
+  const inv = require('../src/inventory');
+  const realAdjustStock = inv.adjustStock;
+  inv.adjustStock = () => {
+    throw new Error('SQLITE_BUSY: database is locked');
+  };
+  const logLines = [];
+  setSyncLogSink((m) => logLines.push(m));
+  try {
+    const acked = applyCloudCommands(db, [
+      { id: 88, kind: 'adjust_stock', payload: { id: 1, delta: 2 } },
+    ]);
+    assert.ok(!acked.includes(88), 'a transient failure must not be acked');
+    assert.ok(logLines.some((l) => l.includes('will retry')), 'the drain log names the retry');
+  } finally {
+    setSyncLogSink(null);
+    inv.adjustStock = realAdjustStock;
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
