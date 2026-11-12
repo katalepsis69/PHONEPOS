@@ -660,6 +660,35 @@ function renderClaimStubSlip(job, settings) {
   return slip;
 }
 
+// The pickup-ready notice, mirroring renderClaimStubSlip's field order but
+// money-free on purpose: it is notice paper that brings the customer back,
+// and the balance settles at the counter against the sale, not against a
+// number printed a day earlier. The ticket row comes from the server, so the
+// slip always states the queue's current truth.
+function renderPickupReadySlip(ticket, settings) {
+  const cols = colsFor(settings.receipt_paper_width);
+  const slip = [];
+  const push = (text, opts) => slip.push({ text, ...opts });
+  const lines = (v, wide) => wrap(v, wide ? Math.floor(cols / 2) : cols).forEach((t) => push(t, wide ? { wide: true, centered: true } : {}));
+  for (const line of nameLines(settings.gcash_name, Math.floor(cols / 2))) push(line, { wide: true, centered: true });
+  lines(settings.shop_address || defaultShopSubtitle(settings));
+  lines('Tel/GCash: ' + (settings.gcash_number || ''));
+  push(rule(cols));
+  push('READY FOR PICKUP', { wide: true, centered: true });
+  for (const line of wrap('Ref: ' + plain(ticket.ref_code || ''), cols)) push(line);
+  push('Date: ' + localStamp(ticket.updated_at || new Date().toISOString()));
+  for (const line of labelled('Customer:', ticket.customer_name || 'Walk-in Customer', cols)) push(line);
+  if (ticket.customer_phone) for (const line of labelled('Phone:', ticket.customer_phone, cols)) push(line);
+  if (ticket.device) for (const line of labelled('Device:', ticket.device, cols)) push(line);
+  if (ticket.imei) for (const line of labelled('IMEI/SN:', ticket.imei, cols)) push(line);
+  if (ticket.issue_note) for (const line of labelled('Job Note:', ticket.issue_note, cols)) push(line);
+  push(rule(cols));
+  for (const line of wrap('Your unit is repaired and ready for pickup.', cols)) push(line, { centered: true });
+  for (const line of wrap('Please present this notice and settle any balance at the counter.', cols)) push(line, { centered: true });
+  push(rule(cols));
+  return slip;
+}
+
 // The credit settlement slip, mirroring public/js/receipts.js's
 // renderSettlementReceipt in the same order: which collection came in and what
 // is still owed. It is shorter than the sale receipt on purpose -- there is no
@@ -971,4 +1000,4 @@ async function listPrinters() {
   return parsePrinterLookup(out, error);
 }
 
-module.exports = { colsFor, plain, localStamp, localDate, wrap, nameLines, row, labelled, rule, ruler, encode, DRAWER_KICK, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, calculateWarrantyExpiry, warrantyDays, money, isAmountRefusal, DEVICE_LINE_PREFIX, buildSendJob, parseSendResult, parsePrinters, parsePrinterLookup, defaultPrinter, runCommand, POWER_SHELL_TIMEOUT_MS, sendRaw, listPrinters };
+module.exports = { colsFor, plain, localStamp, localDate, wrap, nameLines, row, labelled, rule, ruler, encode, DRAWER_KICK, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, renderPickupReadySlip, calculateWarrantyExpiry, warrantyDays, money, isAmountRefusal, DEVICE_LINE_PREFIX, buildSendJob, parseSendResult, parsePrinters, parsePrinterLookup, defaultPrinter, runCommand, POWER_SHELL_TIMEOUT_MS, sendRaw, listPrinters };

@@ -4,6 +4,7 @@
 // tracks status, assignment, and pickup.
 import { t } from '../i18n.js';
 import { escHtml, fmtMoney, formatDateTime, showToast } from '../ui.js';
+import { autoPrintSlip, renderPickupReadyNotice, shopIdentityIsPlaceholder } from '../receipts.js';
 
 const STATUSES = ['intake', 'in_repair', 'ready', 'released', 'cancelled'];
 const statusLabel = s => t(`repairs.status_${s}`, s);
@@ -57,6 +58,7 @@ function renderRepairs(data) {
         <div class="text-right shrink-0 flex flex-col items-end gap-1">
           ${r.estimate > 0 ? `<span class="font-mono font-bold">${fmtMoney(r.estimate)}</span>` : ''}
           ${statusChip(r.status)}
+          <button type="button" class="btn-mini" data-action="print-pickup" data-repair-id="${r.id}" data-repair-ref="${escHtml(r.ref_code)}"><i class="ph ph-printer w-3.5 h-3.5"></i> ${t('repairs.print_pickup', 'Pickup slip')}</button>
           <label class="sr-only" for="repair-status-${r.id}">${t('repairs.set_status', 'Set status')}</label>
           <select id="repair-status-${r.id}" class="select-sm" data-repair-status="${r.id}" data-prev="${escHtml(r.status)}">
             ${STATUSES.map(s => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${escHtml(statusLabel(s))}</option>`).join('')}
@@ -85,6 +87,27 @@ export function wireRepairsView() {
     }, 250);
   });
   const list = document.getElementById('repairs-list');
+  if (list) list.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-action="print-pickup"]');
+    if (!btn) return;
+    if (shopIdentityIsPlaceholder()) {
+      showToast('Shop identity is still the placeholder. Save real shop details in Settings before printing.', 'error');
+      return;
+    }
+    // The slip states the queue's truth, so only the id rides the request;
+    // the server reads the ticket row itself.
+    await autoPrintSlip(
+      { kind: 'pickup_ready', repair_id: Number(btn.dataset.repairId) },
+      async () => {
+        try {
+          const res = await fetch('/api/repairs?' + new URLSearchParams({ search: btn.dataset.repairRef }));
+          const body = await res.json();
+          const ticket = (body.repairs || []).find(x => String(x.id) === btn.dataset.repairId);
+          if (ticket) renderPickupReadyNotice(ticket);
+        } catch (_) {}
+      }
+    );
+  });
   if (list) list.addEventListener('change', async e => {
     const select = e.target.closest('[data-repair-status]');
     if (!select) return;

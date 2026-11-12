@@ -977,6 +977,36 @@ export function renderPeriodSummary(s) {
   applyPrintPageSize();
 }
 
+// Browser fallback for the pickup-ready notice: same field order as
+// renderPickupReadySlip in src/printer.js, money-free on purpose.
+export function renderPickupReadyNotice(ticket) {
+  const printable = document.getElementById('printable-receipt');
+  if (!printable) return;
+  const paperClass = S.shopSettings.receipt_paper_width === '58mm' ? 'thermal-58mm' : 'thermal-80mm';
+  printable.className = `${paperClass} hidden`;
+  printable.innerHTML = `
+    <div style="text-align:center;">
+      ${brandHeaderHtml(true)}
+      <div class="rcp-rule"></div>
+      <div style="font-size:14px;font-weight:bold;">READY FOR PICKUP</div>
+      <div style="font-size:12px;font-weight:bold;">Ref: ${escHtml(ticket.ref_code || '')}</div>
+      <div style="font-size:11px;">${escHtml(formatDateTime(ticket.updated_at || new Date().toISOString()))}</div>
+    </div>
+    <div class="rcp-rule"></div>
+    <div style="font-size:12px;line-height:1.45;">
+      <div><strong>Customer:</strong> ${escHtml(ticket.customer_name || 'Walk-in Customer')}</div>
+      ${ticket.customer_phone ? `<div><strong>Phone:</strong> ${escHtml(ticket.customer_phone)}</div>` : ''}
+      ${ticket.device ? `<div><strong>Device:</strong> ${escHtml(ticket.device)}</div>` : ''}
+      ${ticket.imei ? `<div><strong>IMEI/SN:</strong> ${escHtml(ticket.imei)}</div>` : ''}
+      ${ticket.issue_note ? `<div><strong>Job Note:</strong> ${escHtml(ticket.issue_note)}</div>` : ''}
+    </div>
+    <div class="rcp-rule"></div>
+    <div style="font-size:12px;line-height:1.45;text-align:center;">
+      Your unit is repaired and ready for pickup.<br>
+      Please present this notice and settle any balance at the counter.
+    </div>`;
+}
+
 export function renderClaimStub(job) {
   const printable = document.getElementById('printable-receipt');
   if (!printable) return;

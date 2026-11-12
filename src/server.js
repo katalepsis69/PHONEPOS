@@ -87,7 +87,7 @@ function samplePreviewSale() {
     returns: [],
   };
 }
-const { listPrinters, defaultPrinter, encode, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, DEVICE_LINE_PREFIX } = printer;
+const { listPrinters, defaultPrinter, encode, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, renderPickupReadySlip, DEVICE_LINE_PREFIX } = printer;
 const { resetDemoData, seedInitialParts } = require('./seed');
 const { checkForUpdates, applyUpdate, getUpdateProgress, consumeHandoffStatus, setUpdateLogSink, defaultUpdateStagingDir, CURRENT_VERSION } = require('./updater');
 // [update] lines belong in pos-server.log, which console.log cannot reach in the packaged exe.
@@ -1069,7 +1069,7 @@ function createServer(opts = {}) {
           const kind = String(body.kind || '');
           // audit_log.action is append-only and /api/audit re-reads every row,
           // so the fixed vocabulary is stored, never the client's raw string.
-          const job = kind === 'test' || kind === 'sale' || kind === 'settlement' || kind === 'claim_stub' ? kind : 'unknown';
+          const job = kind === 'test' || kind === 'sale' || kind === 'settlement' || kind === 'claim_stub' || kind === 'pickup_ready' ? kind : 'unknown';
           // A lost response or a double-fire must not hand the customer a second
           // slip: a successful send for the same job is answered from this map
           // for a short window instead of printing again. Failures are never
@@ -1104,6 +1104,13 @@ function createServer(opts = {}) {
               const payment = (customer?.payments || []).find((p) => p.id === Number(body.payment_id));
               if (!payment) throw new Error('Settlement payment not found');
               slip = renderSettlementSlip(payment, customer, settings);
+            } else if (kind === 'pickup_ready') {
+              // The slip states the queue's truth, so the ticket row is read
+              // from the database, not from the tab's payload. Notice paper,
+              // not money paper: the same no-dedup rule as the claim stub.
+              const ticket = db.prepare('SELECT * FROM repairs WHERE id = ?').get(Number(body.repair_id));
+              if (!ticket) throw new Error('Repair ticket not found');
+              slip = renderPickupReadySlip(ticket, settings);
             } else if (kind === 'claim_stub') {
               // Estimate paper from the POS tab's cart: the tab renders the
               // same fields on the browser path, so the payload rides the body.
