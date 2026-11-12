@@ -159,8 +159,15 @@ server-side ticket (`repairs` table) instead of dying with the printed claim stu
 3. **Queue.** The Repairs tab lists active work (`intake`, `in_repair`, `ready`)
    first by most recent touch, with `released`/`cancelled` sunk below. Status
    changes write a `repair` audit event and mirror to the cloud.
-4. **Pickup.** `released` closes the loop; the ticket stays as history (no
-   deletion), and cancelled units keep their audit trail.
+4. **Pickup.** When a ticket reaches `ready`, the Repairs queue offers a
+   **Pickup slip** button: it prints a money-free notice (shop header, READY
+   FOR PICKUP, the ticket's `RO-` reference, customer, device and job note)
+   that brings the customer back. The slip always states the queue's current
+   truth because the server reads the ticket row before printing, it never
+   opens the drawer, and it can be reprinted freely (no dedup window, same as
+   the claim stub); the browser print dialog is the fallback when no thermal
+   queue answers. `released` then closes the loop; the ticket stays as history
+   (no deletion), and cancelled units keep their audit trail.
 
 Status set: `intake` → `in_repair` → `ready` → `released`, with `cancelled` as
 the exit ramp. Any logged-in session may write (technicians need the bench);
