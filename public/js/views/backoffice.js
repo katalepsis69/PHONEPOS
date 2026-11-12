@@ -1226,6 +1226,15 @@ function renderDashboard(s) {
   renderTopProducts();
   renderDeadStock(s.dead_stock || []);
   renderReorder(s.reorder || []);
+
+  // Rail badge mirrors the standing KPI: the owner sees low stock without
+  // opening the inventory tab, and the count always matches the panel above.
+  const lowStockBadge = document.getElementById('nav-lowstock-badge');
+  if (lowStockBadge) {
+    const low = Number(st.low_stock_count) || 0;
+    lowStockBadge.textContent = low;
+    lowStockBadge.classList.toggle('hidden', !(low > 0));
+  }
 }
 
 // Trend chart: revenue or net profit (refunds and expenses land on the day
