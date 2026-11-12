@@ -139,9 +139,16 @@ function getDashboardStats(db) {
       )
   `).get();
 
+  const todayExpenses = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0.0) AS expenses
+    FROM expenses
+    WHERE date(created_at,'localtime') = date('now','localtime')
+      AND created_at >= datetime('now','-2 days')
+  `).get();
+
   // Every query above is a bare aggregate with COALESCE: exactly one non-null row, always.
   const grossProfit = todaySales.revenue - todayItems.cost;
-  const netProfit = grossProfit - todayReturns.total_refunded - todayReturns.replacement_cost;
+  const netProfit = grossProfit - todayReturns.total_refunded - todayReturns.replacement_cost - todayExpenses.expenses;
   const netRevenue = todaySales.revenue - todayReturns.total_refunded;
   // Credit downpayments join cash: they sit in the drawer the same day the
   // sale is rung up, so drawer reconciliation needs them in this bucket.
@@ -159,6 +166,7 @@ function getDashboardStats(db) {
     today_labor_revenue: money(todayItems.labor_revenue),
     today_gross_profit: money(grossProfit),
     today_sales_profit: money(netProfit),
+    today_expenses: money(todayExpenses.expenses),
     today_cash_collected: money(cashCollected),
     today_gcash_collected: money(gcashCollected),
     today_transfer_collected: money(transferCollected),
@@ -288,9 +296,15 @@ function windowKpis(db, w) {
         WHERE ca.source_kind = 'sale_void' AND s.id = ca.source_id AND ${WI.sql}
       )
   `).get(...WA.params, ...WI.params);
+  // expenses.created_at is ISO like the other windows, so W applies directly.
+  const expenses = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0.0) AS total
+    FROM expenses
+    WHERE ${W.sql}
+  `).get(...W.params);
 
   const grossProfit = sales.revenue - items.cost;
-  const netProfit = grossProfit - returns.refunded - returns.replacement_cost;
+  const netProfit = grossProfit - returns.refunded - returns.replacement_cost - expenses.total;
   const netRevenue = sales.revenue - returns.refunded;
   const cashCollected = (sales.cash_collected + sales.credit_downpayments + settles.cash + adjustments.cash_adjusted) - returns.cash_refunded;
   const gcashCollected = sales.gcash_collected + settles.gcash;
@@ -303,6 +317,7 @@ function windowKpis(db, w) {
     avg_ticket: money(sales.sale_count ? sales.revenue / sales.sale_count : 0),
     gross_profit: money(grossProfit),
     net_profit: money(netProfit),
+    expenses_total: money(expenses.total),
     net_revenue: money(netRevenue),
     parts_revenue: money(items.parts_revenue),
     labor_revenue: money(items.labor_revenue),
@@ -373,14 +388,21 @@ function getPeriodStats(db, period = 'day', refDate = null, fromDate = null) {
     WHERE ${WR.sql}
     GROUP BY bucket ORDER BY bucket
   `).all(...WR.params).map(r => [r.bucket, r.refunded]));
+  // Expenses share the sale bucket expression, so a rent-heavy day shows its
+  // dip in the trend exactly where the KPI net_profit books it.
+  const expByBucket = new Map(db.prepare(`
+    SELECT ${bucketExpr} AS bucket, COALESCE(SUM(amount), 0.0) AS total
+    FROM expenses WHERE ${W.sql}
+    GROUP BY bucket ORDER BY bucket
+  `).all(...W.params).map(r => [r.bucket, r.total]));
   const trendMap = new Map(trendRows.map(t => [t.bucket, t]));
-  const trend = [...new Set([...trendMap.keys(), ...costs.keys(), ...refunds.keys()])].sort().map(b => {
+  const trend = [...new Set([...trendMap.keys(), ...costs.keys(), ...refunds.keys(), ...expByBucket.keys()])].sort().map(b => {
     const t = trendMap.get(b) || { count: 0, revenue: 0.0 };
     return {
       bucket: b,
       count: t.count,
       revenue: money(t.revenue),
-      profit: money(t.revenue - (costs.get(b) || 0) - (refunds.get(b) || 0))
+      profit: money(t.revenue - (costs.get(b) || 0) - (refunds.get(b) || 0) - (expByBucket.get(b) || 0))
     };
   });
 

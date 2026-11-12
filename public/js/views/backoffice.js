@@ -1160,6 +1160,7 @@ function renderDashboard(s) {
   let profitMeta = c.replacement_cost > 0
     ? `${t('dash.net', 'Net')} ${fmtMoney(c.net_profit)} ${t('dash.after_refunds_replacements', 'after refunds & replacements')}`
     : `${t('dash.net', 'Net')} ${fmtMoney(c.net_profit)} ${t('dash.after_refunds', 'after refunds')}`;
+  if (c.expenses_total > 0) profitMeta += ` · ${t('dash.expenses', 'Expenses')} ${fmtMoney(c.expenses_total)}`;
   if (typeof s.drawer_variance === 'number' && Math.abs(s.drawer_variance) >= 0.01) {
     const adjNet = c.net_profit + s.drawer_variance;
     const varText = s.drawer_variance < 0 ? `${t('dash.shortage', 'shortage')} -${fmtMoney(Math.abs(s.drawer_variance))}` : `${t('dash.overage', 'overage')} +${fmtMoney(s.drawer_variance)}`;
@@ -1227,18 +1228,18 @@ function renderDashboard(s) {
   renderReorder(s.reorder || []);
 }
 
-// Trend chart: revenue or gross profit (refunds land on the day they were
-// given back), driven by the seg control in the panel header.
+// Trend chart: revenue or net profit (refunds and expenses land on the day
+// they happened), driven by the seg control in the panel header.
 function renderTrend(s) {
   const profit = dashState.trendMode === 'profit';
   renderTrendChart($id('dash-trend'), (s.trend || []).map(t => ({
     label: s.days >= 365 ? fmonth(t.bucket) : fday(t.bucket),
     value: profit ? t.profit : t.revenue,
     sub: `${t.count} sale${t.count === 1 ? '' : 's'}`
-  })), { fmt: fmtMoney, title: profit ? 'Profit after refunds' : 'Revenue trend' });
-  $id('dash-trend-title').textContent = profit ? 'Profit after refunds' : 'Revenue trend';
+  })), { fmt: fmtMoney, title: profit ? 'Profit after refunds & expenses' : 'Revenue trend' });
+  $id('dash-trend-title').textContent = profit ? 'Profit after refunds & expenses' : 'Revenue trend';
   $id('dash-trend-hint').textContent = (profit
-    ? 'Profit after refunds and replacement parts; deductions land on the return date. Excludes operating expenses.'
+    ? 'Profit after refunds, replacement parts, and operating expenses; each lands on the date it happened.'
     : 'Revenue per bucket.')
     + (s.period === '365d' ? ' Monthly buckets.' : '');
 }
@@ -1399,6 +1400,54 @@ function wireDashboardControls() {
     dashState.from = e.target.value || null;
     loadDashboardData();
   });
+  const expenseForm = $id('dash-expense-form');
+  if (expenseForm) expenseForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = {
+      category: $id('expense-category').value,
+      description: $id('expense-description').value,
+      amount: $id('expense-amount').value
+    };
+    if (!body.category.trim() || !(Number(body.amount) > 0)) {
+      showToast('Category and a positive amount are required.', 'error');
+      return;
+    }
+    try {
+      const res = await fetch('/api/expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (res.status === 403) {
+        requireManagerPin('Enter manager PIN to record an expense', () => loadDashboardData());
+        return;
+      }
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not save the expense');
+      expenseForm.reset();
+      showToast('Expense recorded.', 'pos');
+      loadDashboardData();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+  const expenseList = $id('dash-expenses-list');
+  if (expenseList) expenseList.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-action="delete-expense"]');
+    if (!btn) return;
+    if (!await confirmModal('Remove this expense from the record? The audit log keeps the entry.', { title: 'Remove expense?', yes: 'Remove', danger: true })) return;
+    try {
+      const res = await fetch(`/api/expenses/${btn.dataset.expenseId}`, { method: 'DELETE' });
+      if (res.status === 403) {
+        requireManagerPin('Enter manager PIN to remove an expense', () => loadDashboardData());
+        return;
+      }
+      if (!res.ok) throw new Error('Could not remove the expense');
+      showToast('Expense removed.', 'pos');
+      loadDashboardData();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
   const canPoll = () => typeof document !== 'undefined' && !document.hidden && S.currentTab === 'dashboard' && hasElevation()
     && (!dashState.date || dashState.date === localToday());
   if (typeof setInterval !== 'undefined') {
@@ -1443,6 +1492,7 @@ export async function loadDashboardData(opts = {}) {
     if (request !== dashboardRequest) return;
     lastDash = stats;
     renderDashboard(stats);
+    loadExpenses(stats.range?.from, stats.range?.to);
     setDashFreshness(true);
     if (!silent) {
       // Custom ranges carry their own length; /api/exceptions caps days at 365.
@@ -1605,6 +1655,43 @@ export async function loadDayClose() {
   } catch (err) {
     if (request !== dayCloseRequest) return;
     body.textContent = 'The day could not be read. Refresh the reports to try again.';
+  }
+}
+
+// Operating expenses: window-scoped list + quick add. Bookkeeping only, the
+// drawer never moves; the P&L panels above already subtract the total.
+function renderExpenses(data) {
+  const box = $id('dash-expenses-list');
+  if (!box || !data) return;
+  const total = $id('dash-expenses-total');
+  if (total) total.textContent = `${t('dash.expenses_total_label', 'Total')} ${fmtMoney(data.total)}`;
+  const rows = data.expenses || [];
+  box.innerHTML = rows.length
+    ? rows.map(r => `
+      <div class="flex items-center justify-between gap-2 py-1">
+        <span class="min-w-0 flex-1 truncate">
+          <strong class="font-semibold">${escHtml(r.category)}</strong>${r.description ? `<span class="text-[var(--txt-3)]"> · ${escHtml(r.description)}</span>` : ''}
+          <span class="foot-note font-mono"> ${escHtml(formatDateTime(r.created_at))}${r.actor_name ? ` · ${escHtml(r.actor_name)}` : ''}</span>
+        </span>
+        <span class="font-mono whitespace-nowrap">${fmtMoney(r.amount)}</span>
+        <button type="button" class="btn-mini" data-action="delete-expense" data-expense-id="${r.id}" aria-label="Remove expense"><i class="ph ph-trash w-3.5 h-3.5"></i></button>
+      </div>`).join('')
+    : emptyPanel('receipt', 'No expenses booked in this window', 'Rent, utilities, supplies; anything the shop pays for.');
+}
+
+async function loadExpenses(from, to) {
+  const box = $id('dash-expenses-list');
+  if (!box) return;
+  try {
+    const qs = new URLSearchParams();
+    if (from) qs.set('from', from);
+    if (to) qs.set('to', to);
+    const res = await fetch('/api/expenses?' + qs);
+    if (!res.ok) throw new Error('unavailable');
+    renderExpenses(await res.json());
+  } catch (_) {
+    // Static zeros read as real numbers; say the load failed instead.
+    box.innerHTML = emptyPanel('wifi-slash', 'Expenses unavailable', 'Load failed; check the server and retry.');
   }
 }
 

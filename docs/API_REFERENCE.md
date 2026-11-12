@@ -367,6 +367,33 @@ Manager-gated. Signs one calendar day: counts the drawer against `expected_cash`
 **Response `201 Created`:** the buckets plus `counted_cash`, `variance` and `status` (`balanced` or `flagged`).
 **Response `400`:** missing count, negative amount, bad date, or a day that is already reconciled.
 
+### `GET /api/expenses?from=YYYY-MM-DD&to=YYYY-MM-DD`
+Elevation-gated. Operating-expense bookkeeping records for the window (defaults to today in shop time). The `total` and `by_category` cover the whole window; `expenses` is the newest-first display list, capped at 200 rows.
+
+**Response `200 OK`:**
+```json
+{
+  "from": "2026-11-13", "to": "2026-11-13",
+  "count": 2, "total": 1350.5,
+  "by_category": [{ "category": "Rent", "total": 1100.0 }],
+  "expenses": [{ "id": 3, "category": "Utilities", "description": "", "amount": 250.5, "actor_name": "Manager", "created_at": "2026-11-13T09:12:00.000Z", "expense_date": "2026-11-13" }]
+}
+```
+
+### `POST /api/expenses`
+Elevation-gated; refused while the factory PIN is live. Books one operating expense. Bookkeeping only: an expense never moves the cash drawer, but it subtracts from `net_profit` in the dashboard, period analytics, and the mirror.
+
+**Request Body:** `{ "category": "Rent", "amount": 1500.01, "description": "Stall 12" }` (category required, trimmed to 40 chars; amount required, `> 0`, rounded to the cent; description optional, trimmed to 200 chars.)
+
+**Response `201 Created`:** the stored row.
+**Response `400`:** empty category, non-positive or non-numeric amount.
+
+### `DELETE /api/expenses/:id`
+Elevation-gated. Removes the record; the audit log keeps the entry and the mirror receives a tombstone.
+
+**Response `200 OK`:** `{ "success": true }`
+**Response `403`:** no valid elevation token. **Response `404`:** unknown id.
+
 ### `GET /api/shifts/:id/breakdown`
 Manager-gated. Rolls one drawer's takings up per cashier, so a signed variance can be attributed to who rang the sales rather than to whoever opened the drawer.
 

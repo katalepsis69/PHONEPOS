@@ -405,11 +405,14 @@ const ALLOWED_TABLES = new Map([
   ['shifts', ['opened_at', 'status']],
   ['day_reconciliations', ['day', 'counted_cash', 'expected_cash', 'variance', 'buckets', 'status', 'created_at']],
   ['cash_adjustments', ['amount', 'reason', 'created_at']],
+  // description is deliberately absent from the required fields: owner free
+  // text, same posture as customer_profiles notes below.
+  ['expenses', ['category', 'amount', 'created_at']],
   // notes is deliberately absent from the required fields: the shop redacts
   // owner free text before it ever leaves (privacy contract, 2026-09-27).
   ['customer_profiles', ['customer_name', 'credit_limit']],
 ]);
-const MANAGER_ROW_TABLES = new Set(['inventory', 'sales', 'credit_payments', 'warranty_returns', 'shifts', 'day_reconciliations', 'cash_adjustments', 'customer_profiles']);
+const MANAGER_ROW_TABLES = new Set(['inventory', 'sales', 'credit_payments', 'warranty_returns', 'shifts', 'day_reconciliations', 'cash_adjustments', 'customer_profiles', 'expenses']);
 
 function positiveId(value) {
   return Number.isSafeInteger(value) && value > 0;
@@ -1191,8 +1194,15 @@ const server = http.createServer(async (req, res) => {
               )
           `).get(...filterR.params);
 
+          const expenses = db.prepare(`
+            SELECT COALESCE(SUM(${num('r','amount')}), 0) AS total
+            FROM shop_rows r
+            WHERE r.table_name = 'expenses'${filterR.clause}
+              AND ${inWindow('r', wFrom, wTo)}
+          `).get(...filterR.params);
+
           const grossProfit = sales.revenue - items.cost;
-          const netProfit = grossProfit - refunds.total - refunds.replacement_cost;
+          const netProfit = grossProfit - refunds.total - refunds.replacement_cost - expenses.total;
           const netRevenue = sales.revenue - refunds.total;
           const cashCollected = sales.cash_collected + sales.credit_downpayments + settlements.cash + adjustments.total - refunds.cash;
           const gcashCollected = sales.gcash_collected + settlements.gcash;
@@ -1204,6 +1214,7 @@ const server = http.createServer(async (req, res) => {
             avg_ticket: r2(sales.sale_count ? sales.revenue / sales.sale_count : 0),
             gross_profit: r2(grossProfit),
             net_profit: r2(netProfit),
+            expenses_total: r2(expenses.total),
             net_revenue: r2(netRevenue),
             parts_revenue: r2(items.parts_revenue),
             labor_revenue: r2(items.labor_revenue),
@@ -1271,14 +1282,22 @@ const server = http.createServer(async (req, res) => {
             AND ${inWindow('r', from, to)}
           GROUP BY bucket ORDER BY bucket
         `).all(...filterR.params).map(t => [t.bucket, t.refunded]));
+        const expenseBuckets = new Map(db.prepare(`
+          SELECT date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) AS bucket,
+                 COALESCE(SUM(${num('r','amount')}), 0) AS total
+          FROM shop_rows r
+          WHERE r.table_name = 'expenses'${filterR.clause}
+            AND ${inWindow('r', from, to)}
+          GROUP BY bucket ORDER BY bucket
+        `).all(...filterR.params).map(t => [t.bucket, t.total]));
         const trendMap = new Map(trendSales.map(t => [t.bucket, t]));
-        const trend = [...new Set([...trendMap.keys(), ...costs.keys(), ...refundBuckets.keys()])].sort().map(b => {
+        const trend = [...new Set([...trendMap.keys(), ...costs.keys(), ...refundBuckets.keys(), ...expenseBuckets.keys()])].sort().map(b => {
           const t = trendMap.get(b) || { count: 0, revenue: 0 };
           return {
             bucket: b,
             count: t.count,
             revenue: r2(t.revenue),
-            profit: r2(t.revenue - (costs.get(b) || 0) - (refundBuckets.get(b) || 0))
+            profit: r2(t.revenue - (costs.get(b) || 0) - (refundBuckets.get(b) || 0) - (expenseBuckets.get(b) || 0))
           };
         });
 

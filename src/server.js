@@ -54,6 +54,7 @@ const {
 const { audit, listAuditLog, verifyChain, txn } = require('./audit');
 const { openShift, closeShift, listShifts, getShiftBreakdown } = require('./shifts');
 const { getDayBuckets, closeDay, getDayReconciliation } = require('./reconcile');
+const { addExpense, listExpenses, deleteExpense } = require('./expenses');
 const { getShopSettings, updateShopSettings, updateSyncSetting, getSettleElevationThreshold, validateSyncUrl, validateSyncUrlHost } = require('./settings');
 // The namespace is held, not destructured, and the print route reads sendRaw off
 // it at the call site. tests/helper.js replaces printer.sendRaw so no test can
@@ -1253,6 +1254,25 @@ function createServer(opts = {}) {
             total_shift_variance: totalShiftVariance,
             total_shift_counted: totalShiftCounted
           });
+        }
+
+        // Operating expenses: elevation-gated like the other money routes.
+        if (pathname === '/api/expenses' && method === 'GET') {
+          if (!elevated) return elevationDenied();
+          return sendJson(res, 200, listExpenses(db, { from: url.searchParams.get('from'), to: url.searchParams.get('to') }));
+        }
+
+        if (pathname === '/api/expenses' && method === 'POST') {
+          if (!elevated) return elevationDenied();
+          if (isDefaultPin(db)) return factoryPinDenied();
+          const body = await parseBody(req);
+          return sendJson(res, 201, addExpense(db, session, body || {}));
+        }
+
+        const expenseIdMatch = pathname.match(/^\/api\/expenses\/(\d+)$/);
+        if (expenseIdMatch && method === 'DELETE') {
+          if (!elevated) return elevationDenied();
+          return sendJson(res, 200, deleteExpense(db, Number(expenseIdMatch[1]), session, ctx));
         }
 
         if (pathname === '/api/reconcile/close-day' && method === 'POST') {

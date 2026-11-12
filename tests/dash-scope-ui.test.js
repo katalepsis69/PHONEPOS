@@ -33,7 +33,7 @@ test('trend chart toggles revenue / gross profit with honest caption', () => {
   const trend = backoffice.slice(backoffice.indexOf('function renderTrend(s) {'), backoffice.indexOf('function renderTopProducts'));
   assert.match(trend, /dashState\.trendMode === 'profit'/);
   assert.match(trend, /value: profit \? t\.profit : t\.revenue/);
-  assert.match(trend, /deductions land on the return date/);
+  assert.match(trend, /operating expenses/);
   assert.match(backoffice, /dash-trend-mode'\)\.addEventListener\('click'/);
 });
 

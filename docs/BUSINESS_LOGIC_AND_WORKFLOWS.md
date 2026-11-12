@@ -130,11 +130,18 @@ $$\text{Today's Gross Sales Profit} = \text{Today's Sales Revenue} - \text{Parts
 
 *(Note: Service labor has zero COGS, contributing 100% margin to gross profit).*
 
-### 4.2 Cash Reconciliation
+### 4.2 Operating Expenses & Net Profit
+Operating expenses (`expenses` table, booked on the Reports & profit tab) are the P&L leg the sales ledger cannot see. They are **bookkeeping only**: an expense never moves the cash drawer, and day-close reconciliation is untouched.
+
+$$	ext{Net Profit} = 	ext{Gross Profit} - 	ext{Refunds} - 	ext{Replacement Cost} - 	ext{Operating Expenses}$$
+
+Every deduction lands on the date it happened (refunds on the return date, expenses on the booking date), and the trend chart, Z-report, and the cloud mirror all subtract the same window total, so the KPI net, the trend buckets, and the printed report always reconcile to one number.
+
+### 4.3 Cash Reconciliation
 $$\text{Total Cash Collected} = \text{Counter Cash Paid Today} + \text{Credit Payments Settled in Cash Today}$$
 $$\text{Total GCash Collected} = \text{Counter GCash Paid Today} + \text{Credit Payments Settled in GCash Today}$$
 $$\text{Grand Total Collected Today} = \text{Total Cash Collected} + \text{Total GCash Collected} + \text{Transfers}$$
 
-### 4.3 Inventory Valuation
+### 4.4 Inventory Valuation
 $$\text{Total Inventory Cost Value} = \sum_{\text{inventory}} (\text{stock\_quantity} \times \text{cost\_price})$$
 $$\text{Total Inventory Retail Value} = \sum_{\text{inventory}} (\text{stock\_quantity} \times \text{price\_retail})$$

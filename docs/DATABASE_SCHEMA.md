@@ -246,7 +246,19 @@ Money that moves today against a period somebody already signed: a void of a sal
 | `pin_lockout_until` | `0` | Epoch timestamp of anti-brute-force lockout |
 | `pin_failed_attempts` | `0` | Counter of sequential failed PIN entries |
 
-### 3.8 Operational tables (abbreviated)
+### 3.8 `expenses`
+Operating-expense bookkeeping records (rent, utilities, supplies...). P&L only: an expense subtracts from `net_profit` in the dashboard, period analytics, and the cloud mirror, but never moves the cash drawer. Categories are free text so any business type tracks what it actually spends on; deletes are elevation-gated and tombstoned to the mirror.
+
+| Column | Type | Constraints | Default | Description |
+|---|---|---|---|---|
+| `id` | `INTEGER` | `PRIMARY KEY AUTOINCREMENT` | - | Expense ID |
+| `category` | `TEXT` | `NOT NULL` | - | Free-text category, trimmed to 40 chars |
+| `description` | `TEXT` | - | `''` | Optional note, trimmed to 200 chars |
+| `amount` | `REAL` | `NOT NULL` | - | Positive, rounded half away from zero to the cent |
+| `actor_name` | `TEXT` | - | `''` | Who booked it |
+| `created_at` | `TEXT` | `NOT NULL` | - | ISO-Z timestamp; booked day = local date |
+
+### 3.9 Operational tables (abbreviated)
 
 Defined in `src/db.js`; read `src/sync.js` and `src/server.js` for the write paths.
 
@@ -259,7 +271,7 @@ Defined in `src/db.js`; read `src/sync.js` and `src/server.js` for the write pat
 - `op_log` - write-dedup keys for inventory mutations (adjustments, CSV rows, part creation, bulk edits), pruned after 2 days.
 - `sync_outbox` - the push queue: `table_name`, `local_id`, `payload` (full row JSON), `created_at`, `synced_at` (null until the cloud acks). Partial index on unsynced rows; pruned 30 days after sync, and 30 days after creation while sync is off.
 
-### 3.9 Cloud mirror (`cloud-deploy/server.js`)
+### 3.10 Cloud mirror (`cloud-deploy/server.js`)
 
 The VPS holds its own SQLite database (`cloud.db`) with two tables:
 

@@ -21,6 +21,7 @@ function context(extra = {}) {
     fmtMoney:n=>Number(n).toFixed(2), escHtml:s=>String(s), t:(k,fb)=>fb||k,
     windowLabel:()=> 'Jan 9–15', deltaTag(){}, renderTrend(){},
     renderTopProducts(){},renderDeadStock(){},renderReorder(){},
+    emptyPanel:(i,t2,b)=>'', formatDateTime:()=>'',
     ...extra
   }) };
 }
@@ -42,8 +43,11 @@ test('dashboard and exceptions requests send the chosen multi-day end date', asy
   evaluate(ctx,'export async function loadDashboardData(', 'export async function triggerBackup(');
   await ctx.loadDashboardData();
   await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(new URLSearchParams(urls[0].split('?')[1]).get('date'),'2024-01-15');
-  assert.equal(new URLSearchParams(urls[1].split('?')[1]).get('date'),'2024-01-15');
+  const pick = prefix => urls.find(u => u.startsWith(prefix));
+  assert.equal(new URLSearchParams(pick('/api/dashboard').split('?')[1]).get('date'),'2024-01-15');
+  assert.equal(new URLSearchParams(pick('/api/exceptions').split('?')[1]).get('date'),'2024-01-15');
+  // The expenses panel reads the same window as the KPIs it feeds.
+  assert.equal(new URLSearchParams(pick('/api/expenses').split('?')[1]).get('from'),'2024-01-09');
   assert.match(elements.get('exceptions-panel').innerHTML,/RMA-1 utang 50.00/);
   assert.match(elements.get('dash-exceptions-hint').textContent,/2024-01-09 to 2024-01-15/);
 });
@@ -73,8 +77,8 @@ test('profit toggle forwards negative profit and truthful series name', () => {
   evaluate(ctx,'function renderTrend(s)', 'function renderTopProducts(');
   ctx.renderTrend({days:7,period:'7d',trend:[{bucket:'2024-01-15',revenue:0,profit:-50,count:0}]});
   assert.equal(captured.series[0].value,-50);
-  assert.equal(captured.options.title,'Profit after refunds');
-  assert.match(elements.get('dash-trend-hint').textContent,/return date/);
+  assert.equal(captured.options.title,'Profit after refunds & expenses');
+  assert.match(elements.get('dash-trend-hint').textContent,/operating expenses/);
   ctx.dashState.trendMode='revenue';
   ctx.renderTrend({days:7,period:'7d',trend:[{bucket:'2024-01-15',revenue:0,profit:-50,count:0}]});
   assert.equal(captured.series[0].value,0);
@@ -99,7 +103,9 @@ test('silent dashboard poll updates KPIs and freshness chip without re-fetching 
 
   await ctx.loadDashboardData({ silent: true });
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(urls.length, 1, 'silent poll only fetches /api/dashboard');
+  // Silent poll refreshes the KPI payload and the expenses panel only; the
+  // day-close and exceptions panels keep their own fetch discipline.
+  assert.deepEqual(urls.map(u => u.split('?')[0]), ['/api/dashboard', '/api/expenses']);
   assert.match(urls[0], /^\/api\/dashboard\?/);
   assert.match(elements.get('dash-freshness').textContent, /^Live · /);
   assert.match(elements.get('dash-freshness').className, /tag--pos/);

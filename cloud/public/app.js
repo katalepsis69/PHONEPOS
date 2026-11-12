@@ -690,7 +690,8 @@ async function refresh() {
     const revenue = c.revenue || 1;
     const marginPct = ((grossProfit / revenue) * 100).toFixed(1);
     document.getElementById('card-profit').textContent = fmtMoney(netProfit);
-    document.getElementById('card-margin').textContent = `Gross ${fmtMoney(grossProfit)} · ${marginPct}% margin`;
+    document.getElementById('card-margin').textContent = `Gross ${fmtMoney(grossProfit)} · ${marginPct}% margin`
+      + ((c.expenses_total || 0) > 0 ? ` · Exp ${fmtMoney(c.expenses_total)}` : '');
 
     const retailVal = Number(standing.inventory_retail_value) || 0;
     const costVal = Number(standing.inventory_cost_value) || 0;

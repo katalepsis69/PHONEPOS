@@ -824,7 +824,7 @@ export async function printTestReceipt() {
 const Z_REQUIRED_KEYS = [
   'revenue', 'parts_revenue', 'labor_revenue', 'sale_count', 'gross_profit',
   'cash_collected', 'gcash_collected', 'transfer_collected',
-  'credit_settled', 'warranty_returns', 'refunded_total'
+  'credit_settled', 'warranty_returns', 'refunded_total', 'expenses_total'
 ];
 const Z_REQUIRED_STANDING_KEYS = [
   'total_credit_outstanding', 'total_debtors_count',
@@ -881,6 +881,8 @@ export function renderZReport(stats) {
       ${moneyRow('Labor', c.labor_revenue ?? c.today_labor_revenue)}
       ${countRow('Sales completed', c.sale_count ?? c.today_sales_count)}
       ${moneyRow('Gross profit', c.gross_profit ?? c.today_sales_profit)}
+      ${moneyRow('Operating expenses', c.expenses_total ?? c.today_expenses)}
+      ${moneyRow('Net after refunds & expenses', c.net_profit ?? c.today_sales_profit)}
       <div style="border-top:1px dashed #000;margin:3px 0;"></div>
       <div style="font-weight:bold;">COLLECTIONS</div>
       ${moneyRow('Cash', c.cash_collected ?? c.today_cash_collected)}
@@ -951,7 +953,8 @@ export function renderPeriodSummary(s) {
       ${countRow('Sales completed', c.sale_count)}
       ${moneyRow('Average ticket', c.avg_ticket)}
       ${moneyRow('Gross profit', c.gross_profit)}
-      ${moneyRow('Net after refunds', c.net_profit)}
+      ${moneyRow('Operating expenses', c.expenses_total)}
+      ${moneyRow('Net after refunds & expenses', c.net_profit)}
       <div style="border-top:1px dashed #000;margin:3px 0;"></div>
       <div style="font-weight:bold;">COLLECTIONS</div>
       ${moneyRow('Cash', c.cash_collected)}
