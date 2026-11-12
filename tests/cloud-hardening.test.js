@@ -569,6 +569,45 @@ test('cloud standing carries the whole open-debtor list, folded, beyond the row 
   }
 });
 
+test('cloud standing buckets open utang by sale age on the shop clock', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pos-cloud-aging-'));
+  fs.writeFileSync(path.join(dir, 'manager-pin.txt'), '2468\n');
+  let child;
+  try {
+    const running = await startCloud(dir, { DEPLOY_DIR: dir, SHOP_TZ_OFFSET_MINUTES: '480' });
+    child = running.child;
+    const base = running.base;
+    const daysAgo = k => new Date(Date.now() - k * 86400000).toISOString();
+    const debtRow = (id, balance, ageDays, voided = 0) => ({
+      id, sale_code: `A-${id}`, customer_name: `Debtor ${id}`, payment_method: 'credit',
+      total_amount: balance, amount_paid: 0, change_amount: 0, credit_balance: balance,
+      created_at: daysAgo(ageDays), voided
+    });
+    // Ages sit well inside their buckets so a clock offset cannot tip one
+    // across a 7/30/60 boundary. Two debts share the youngest bucket.
+    const rows = [
+      debtRow(1, 100, 2), debtRow(2, 50, 3),
+      debtRow(3, 200, 15), debtRow(4, 300, 45), debtRow(5, 400, 90),
+      debtRow(6, 999, 120, 1), // voided debt never ages into the list
+      debtRow(7, 0, 200)       // settled sale carries no balance
+    ];
+    let outbox = 1;
+    const events = rows.map(r => event(outbox++, 'sales', r.id, r));
+    assert.strictEqual((await sync(base, TOKEN_A, 'north', events)).status, 200);
+
+    const { cookie } = await login(base);
+    const standing = await (await fetch(`${base}/api/standing`, { headers: { cookie } })).json();
+    assert.strictEqual(standing.aging.length, 4, 'aging always reports all four buckets');
+    assert.deepStrictEqual(standing.aging.map(a => a.amount), [150, 200, 300, 400]);
+    assert.deepStrictEqual(standing.aging.map(a => a.count), [2, 1, 1, 1]);
+    assert.strictEqual(standing.outstanding_credit, 1050, 'aging must partition the same debt the card shows');
+    assert.strictEqual(standing.aging.reduce((s, a) => s + a.amount, 0), standing.outstanding_credit);
+  } finally {
+    if (child) await stopCloud(child);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('cloud analytics buckets by the declared shop offset, not the server clock', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pos-cloud-tz-'));
   fs.writeFileSync(path.join(dir, 'manager-pin.txt'), '2468\n');

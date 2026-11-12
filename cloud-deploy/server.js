@@ -959,6 +959,26 @@ const server = http.createServer(async (req, res) => {
           ORDER BY balance DESC
           LIMIT 300
         `).all(...filter.params);
+        // Utang aging: FIFO settlement pays the oldest sale first, so each
+        // unpaid sale's own age is the age of that debt. Bucketed on the
+        // shop's clock, same as the analytics day windows.
+        const agingRows = db.prepare(`
+          SELECT CASE WHEN age <= 7 THEN 0 WHEN age <= 30 THEN 1 WHEN age <= 60 THEN 2 ELSE 3 END AS bucket,
+                 COALESCE(SUM(balance), 0) AS amount, COUNT(*) AS count
+          FROM (
+            SELECT CAST(json_extract(r.row_json,'$.credit_balance') AS REAL) AS balance,
+                   julianday(date('now',${TZ_MODIFIER})) - julianday(date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER})) AS age
+            FROM shop_rows r
+            WHERE r.table_name = 'sales'${filter.clause}
+              AND COALESCE(CAST(json_extract(r.row_json,'$.voided') AS INTEGER), 0) = 0
+              AND CAST(json_extract(r.row_json,'$.credit_balance') AS REAL) > 0.001
+          )
+          GROUP BY bucket ORDER BY bucket
+        `).all(...filter.params);
+        const aging = ['0–7 days', '8–30 days', '31–60 days', '60+ days'].map((label, i) => {
+          const row = agingRows.find(a => a.bucket === i);
+          return { label, amount: Math.round((Number(row && row.amount) || 0) * 100) / 100, count: row ? row.count : 0 };
+        });
         const inventory = db.prepare(`
           SELECT COALESCE(SUM(CAST(json_extract(r.row_json,'$.price_retail') AS REAL)
             * CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)), 0) AS retail_value,
@@ -991,6 +1011,7 @@ const server = http.createServer(async (req, res) => {
             last_at: d.last_at || '',
             phone: d.phone || ''
           })),
+          aging,
           inventory_retail_value: Math.round(inventory.retail_value * 100) / 100,
           inventory_cost_value: Math.round(inventory.cost_value * 100) / 100,
           inventory_types: invCounts.types,

@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { copyExeWithRetry, generateLoaderBundle, setWindowsGuiSubsystem, writeBuildManifest } = require('./build-common');
+const { copyExeWithRetry, generateLoaderBundle, setWindowsGuiSubsystem, setExeIcon, writeBuildManifest } = require('./build-common');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const DIST_DIR = process.env.BUILD_OUTPUT_DIR || path.join(ROOT_DIR, 'dist', '.staging-pos');
@@ -95,6 +95,10 @@ console.log('Setting TechPartsPOS.exe to Windows GUI subsystem (no console windo
 if (!setWindowsGuiSubsystem(targetExePath)) {
   throw new Error('Failed to set TechPartsPOS.exe Windows GUI subsystem');
 }
+// The SEA base is node.exe, so Explorer/taskbar would show the Node hexagon.
+console.log('Embedding TechParts brand icon into exe resources...');
+const iconSizes = setExeIcon(targetExePath, path.join(ROOT_DIR, 'installer', 'TechPartsPOS.ico'));
+console.log(`Brand icon embedded at ${iconSizes} sizes.`);
 writeBuildManifest(DIST_DIR, 'TechPartsPOS.exe', [
   path.join(ROOT_DIR, 'package.json'),
   path.join(ROOT_DIR, 'package-lock.json'),
@@ -103,6 +107,7 @@ writeBuildManifest(DIST_DIR, 'TechPartsPOS.exe', [
   POSTJECT_CLI,
   path.join(__dirname, 'build-common.js'),
   path.join(__dirname, 'build-exe.js'),
+  path.join(ROOT_DIR, 'installer', 'TechPartsPOS.ico'),
   ...publicInputFiles,
   ...srcFileNames.map(file => path.join(srcDir, file))
 ]);

@@ -96,8 +96,8 @@ LicenseLabel3=You must accept these terms before installing.
 LicenseAccepted=I &accept the terms
 LicenseNotAccepted=I &do not accept the terms
 FinishedHeadingLabel=Completing TechParts POS Setup
-FinishedLabel=TechParts POS and Repair System has been installed on this computer.%n%nIt starts automatically with Windows and opens in your web browser. Your shop database and backups are kept on this computer.
-FinishedLabelNoIcons=TechParts POS and Repair System has been installed on this computer.%n%nIt starts automatically with Windows and opens in your web browser.
+FinishedLabel=TechParts POS is installed once for every Windows account on this computer. Do not install it again on a cashier's Windows profile.%n%nIt starts automatically with Windows and opens in your web browser. Your shop database and backups stay on this computer.
+FinishedLabelNoIcons=TechParts POS is installed once for every Windows account on this computer. Do not install it again on a cashier's Windows profile.%n%nIt starts automatically with Windows and opens in your web browser. Your shop database and backups stay on this computer.
 
 [Run]
 ; Lock child folders BEFORE the parent folder so the elevated installer retains
@@ -112,6 +112,7 @@ Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS"" /inh
 Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""TechPartsPOS-Server"" /XML ""{tmp}\TechPartsPOS-Server.xml"" /F"; Flags: runhidden waituntilterminated
 Filename: "{sys}\schtasks.exe"; Parameters: "/Run /TN ""TechPartsPOS-Server"""; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{win}\explorer.exe"; Parameters: "ms-settings:otherusers"; Description: "Open Windows Account Settings (to add a Cashier Standard User)"; Flags: nowait postinstall skipifsilent unchecked runasoriginaluser; Check: NeedsStandardUserSetup
 
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""TechPartsPOS-Server"""; Flags: runhidden; RunOnceId: "EndServerTask"
@@ -271,6 +272,71 @@ function InitializeUninstall(): Boolean;
 begin
   StopRunningServiceAndWait();
   Result := True;
+end;
+
+var
+  StandardUserChecked: Boolean;
+  StandardUserExists: Boolean;
+
+function NeedsStandardUserSetup(): Boolean;
+var
+  PsExe: String;
+  Params: String;
+  ResultCode: Integer;
+begin
+  if WizardSilent() then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  if not StandardUserChecked then
+  begin
+    StandardUserChecked := True;
+    StandardUserExists := False;
+    PsExe := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+    if FileExists(PsExe) then
+    begin
+      Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' +
+        'try { ' +
+          '$admins = @((Get-LocalGroupMember -SID ''S-1-5-32-544'' -ErrorAction Stop | Where-Object { $_.SID } | ForEach-Object { $_.SID.Value })); ' +
+          '$std = @(Get-LocalUser -ErrorAction Stop | Where-Object { $_.Enabled -and $_.SID -and ($admins -notcontains $_.SID.Value) -and ($_.SID.Value -notmatch ''-(500|501|503|504)$'') }); ' +
+          'if ($std.Count -gt 0) { exit 0 } else { exit 1 } ' +
+        '} catch { exit 2 }"';
+      if Exec(PsExe, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
+        StandardUserExists := True;
+    end;
+  end;
+
+  Result := not StandardUserExists;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and (not WizardSilent()) then
+  begin
+    if NeedsStandardUserSetup() then
+    begin
+      WizardForm.FinishedLabel.Caption :=
+        'TechParts POS is installed once for every Windows account on this computer. Do not install it again on another Windows profile.' + #13#10 + #13#10 +
+        'No Standard (non-admin) Windows account was found on this PC. Set one up for cashiers so staff cannot change Windows settings or delete shop files:' + #13#10 +
+        '1. Check "Open Windows Account Settings" below, then click Finish (or open Start > Settings > Accounts > Other users).' + #13#10 +
+        '2. Add a local account named "Cashier" with account type Standard User.' + #13#10 +
+        '3. Sign cashiers into that account and open TechParts POS from the Start menu or Desktop.';
+    end
+    else
+    begin
+      WizardForm.FinishedLabel.Caption :=
+        'TechParts POS is installed once for every Windows account on this computer. Do not install it again on another Windows profile.' + #13#10 + #13#10 +
+        'A Standard (non-admin) Windows account is already on this PC. Cashiers can sign into that account and open TechParts POS from the Start menu or Desktop.' + #13#10 + #13#10 +
+        'It starts automatically with Windows, and your shop database and backups stay on this computer.';
+    end;
+
+    WizardForm.FinishedLabel.AdjustHeight;
+    WizardForm.RunList.Top := WizardForm.FinishedLabel.Top + WizardForm.FinishedLabel.Height + ScaleY(12);
+    if WizardForm.FinishedPage.ClientHeight - WizardForm.RunList.Top > ScaleY(44) then
+      WizardForm.RunList.Height := WizardForm.FinishedPage.ClientHeight - WizardForm.RunList.Top;
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

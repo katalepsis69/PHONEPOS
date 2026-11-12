@@ -447,6 +447,30 @@ function renderTrendAndMix(analytics) {
   const peakEl = document.getElementById('trend-peak-label');
   if (!barsEl) return;
 
+  const profitEl = document.getElementById('profit-bars');
+  const profitLbl = document.getElementById('profit-window-label');
+  if (profitEl) {
+    if (!trend.length) {
+      profitEl.innerHTML = '';
+      if (profitLbl) profitLbl.textContent = '';
+    } else {
+      const vis = trend.slice(-14);
+      const maxAbs = Math.max(...vis.map(t => Math.abs(Number(t.profit) || 0)), 1);
+      const windowTotal = vis.reduce((sum, t) => sum + (Number(t.profit) || 0), 0);
+      if (profitLbl) profitLbl.textContent = `Visible total ${fmtMoney(windowTotal)}`;
+      profitEl.innerHTML = vis.map(t => {
+        const p = Number(t.profit) || 0;
+        const hPct = Math.max(6, Math.round((Math.abs(p) / maxAbs) * 100));
+        return `
+          <div class="trend-col" title="${esc(t.bucket)}: profit ${fmtMoney(p)}">
+            <div class="trend-bar profit${p < 0 ? ' neg' : ''}" style="height: ${hPct}%;"></div>
+            <span class="trend-lbl">${esc(String(t.bucket || '').slice(5))}</span>
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
   if (!trend.length) {
     if (peakEl) peakEl.textContent = 'No sales in window';
     barsEl.innerHTML = '<div style="width:100%;text-align:center;color:var(--text-dim);font-size:11px;padding-bottom:14px;">Daily revenue bars appear as sales sync</div>';
@@ -475,6 +499,56 @@ function renderTrendAndMix(analytics) {
       </div>
     `;
   }).join('');
+}
+
+function renderPaymentSplit(c) {
+  const cash = Number(c.cash_collected) || 0;
+  const gcash = Number(c.gcash_collected) || 0;
+  const transfer = Number(c.transfer_collected) || 0;
+  const total = cash + gcash + transfer;
+  const setSeg = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.style.width = total > 0 ? `${(val / total) * 100}%` : '0%';
+  };
+  setSeg('pay-bar-cash', cash);
+  setSeg('pay-bar-gcash', gcash);
+  setSeg('pay-bar-transfer', transfer);
+  const legend = document.getElementById('pay-legend');
+  if (legend) {
+    const pct = v => total > 0 ? Math.round((v / total) * 100) : 0;
+    legend.innerHTML = [
+      ['var(--cash)', 'Cash', cash],
+      ['var(--gcash)', 'GCash', gcash],
+      ['var(--warn)', 'Transfer', transfer]
+    ].map(([color, name, v]) => `<span><i class="mix-dot" style="background: ${color};"></i>${name} ${fmtMoney(v)} (${pct(v)}%)</span>`).join('');
+  }
+  const note = document.getElementById('pay-credit-note');
+  if (note) note.textContent = `New utang issued ${fmtMoney(c.credit_issued)} · Utang paid ${fmtMoney(c.credit_settled)}`;
+}
+
+function agingBlockHtml(aging) {
+  const rows = Array.isArray(aging) ? aging : [];
+  const total = rows.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  if (total <= 0.001) return '';
+  const maxAmt = Math.max(...rows.map(a => Number(a.amount) || 0), 1);
+  const colors = ['var(--accent)', 'var(--warn)', 'var(--alert)', 'var(--alert)'];
+  return `
+    <div class="aging-block" role="img" aria-label="Utang aging: outstanding balance by age of the unpaid sale">
+      <div class="aging-title">Aging — how old the unpaid sales are</div>
+      ${rows.map((a, i) => {
+        const amt = Number(a.amount) || 0;
+        const wPct = Math.round((amt / maxAmt) * 100);
+        const count = Number(a.count) || 0;
+        return `
+          <div class="aging-row" title="${esc(a.label)}: ${fmtMoney(amt)} across ${count} unpaid sale${count === 1 ? '' : 's'}">
+            <span class="aging-lbl">${esc(a.label)}</span>
+            <div class="aging-track"><div class="aging-fill" style="width: ${wPct}%; background: ${colors[i] || 'var(--alert)'};"></div></div>
+            <span class="aging-amt">${fmtMoney(amt)} · ${count}</span>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
 }
 
 function updateAuditBanner({ sales, rets, reconciliations, adjustments }) {
@@ -595,6 +669,7 @@ async function refresh() {
     if (unitsEl) unitsEl.textContent = `Delivered ${analytics.current.units_received || 0} units`;
 
     renderTrendAndMix(analytics);
+    renderPaymentSplit(c);
 
     document.getElementById('card-utang').textContent = fmtMoney(standing.outstanding_credit);
     document.getElementById('card-utang-sub').textContent = `${standing.debtors || 0} open debtors`;
@@ -644,7 +719,8 @@ async function refresh() {
       adjustments,
       shifts,
       deadStock,
-      debtors: standing.debtor_list
+      debtors: standing.debtor_list,
+      aging: Array.isArray(standing.aging) ? standing.aging : []
     };
     renderTab(lastLoadedData);
   } catch (e) {
@@ -866,12 +942,13 @@ function renderTab(data) {
       if (feedChip === 'high' && (Number(d.balance) || 0) < 1000) return false;
       return matchesQuery(d.name);
     });
+    const agingHtml = agingBlockHtml(data.aging);
     if (countEl) countEl.textContent = `${sorted.length} debtors`;
     if (!sorted.length) {
-      box.innerHTML = '<div class="empty-state">No open utang balances found.</div>';
+      box.innerHTML = agingHtml + '<div class="empty-state">No open utang balances found.</div>';
       return;
     }
-    box.innerHTML = sorted.map(d => `
+    box.innerHTML = agingHtml + sorted.map(d => `
       <div class="feed-item">
         <div class="feed-left">
           <span class="feed-code">${esc(d.name || 'Walk-in')}</span>

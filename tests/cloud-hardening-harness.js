@@ -41,7 +41,7 @@ function waitForServer(child) {
         // one first POST die with a connection reset). Prove readiness with a
         // real request instead of trusting the line.
         base = `http://127.0.0.1:${m[1]}`;
-        probe(base, 20, output).then(
+        probe(base, 40, output).then(
           () => { clearTimeout(timer); resolve(base); },
           err => { clearTimeout(timer); reject(err); }
         );
@@ -86,7 +86,12 @@ async function startCloud(dataDir, extraEnv = {}) {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  return { child, base: await waitForServer(child) };
+  try {
+    return { child, base: await waitForServer(child) };
+  } catch (err) {
+    await stopCloud(child);
+    throw err;
+  }
 }
 
 function stopCloud(child) {

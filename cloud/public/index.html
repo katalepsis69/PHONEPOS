@@ -432,6 +432,81 @@
       max-width: 100%;
       font-variant-numeric: tabular-nums;
     }
+    .trend-caption {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-top: 10px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .trend-bars.profit-row { border-top: none; padding-top: 4px; height: 56px; }
+    .trend-bar.profit { background: var(--cash); opacity: 0.85; }
+    .trend-bar.profit.neg { background: var(--alert); opacity: 0.9; }
+
+    /* Collections by method (hero card) */
+    .pay-split { margin-top: 12px; }
+    .pay-bar { height: 100%; }
+    .pay-cash { background: var(--cash); }
+    .pay-gcash { background: var(--gcash); }
+    .pay-transfer { background: var(--warn); }
+    .pay-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 14px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .pay-credit-note {
+      margin-top: 6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Utang aging (Utang tab) */
+    .aging-block { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .aging-title {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+    .aging-row {
+      display: grid;
+      grid-template-columns: 74px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .aging-row:last-child { margin-bottom: 0; }
+    .aging-lbl {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .aging-track {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .aging-fill { height: 100%; }
+    .aging-amt {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      white-space: nowrap;
+    }
 
     /* 2x2 Secondary KPI Matrix */
     .metric-grid {
@@ -1247,6 +1322,15 @@
               <div class="split-sub" id="hero-gcash-sub">₱0.00 transfers</div>
             </div>
           </div>
+          <div class="pay-split">
+            <div class="mix-bar-track" aria-hidden="true">
+              <div class="pay-bar pay-cash" id="pay-bar-cash" style="width: 0%;"></div>
+              <div class="pay-bar pay-gcash" id="pay-bar-gcash" style="width: 0%;"></div>
+              <div class="pay-bar pay-transfer" id="pay-bar-transfer" style="width: 0%;"></div>
+            </div>
+            <div class="pay-legend" id="pay-legend"></div>
+            <div class="pay-credit-note" id="pay-credit-note"></div>
+          </div>
         </div>
 
         <!-- Revenue Mix & Daily Trend Card -->
@@ -1264,6 +1348,11 @@
             <span id="mix-labor-label"><i class="mix-dot" style="background: var(--cash);"></i>Repair Labor ₱0.00 (0%)</span>
           </div>
           <div class="trend-bars" id="trend-bars" role="img" aria-label="Daily revenue trend"></div>
+          <div class="trend-caption">
+            <span>Profit per day</span>
+            <span class="section-sub" id="profit-window-label"></span>
+          </div>
+          <div class="trend-bars profit-row" id="profit-bars" role="img" aria-label="Daily profit trend"></div>
         </div>
 
         <!-- Secondary Metrics 2x2 -->

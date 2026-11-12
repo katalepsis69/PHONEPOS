@@ -284,6 +284,22 @@ test('Inno Setup installer script configures SYSTEM service, ACLs, and preserves
   assert.doesNotMatch(uninstallDeleteSection, /\{commonappdata\}\\TechPartsPOS|ProgramData\\TechPartsPOS/i, 'UninstallDelete must never delete ProgramData/TechPartsPOS');
 });
 
+test('Inno Setup installer checks for Standard Windows user and guides finish page', () => {
+  const issPath = path.join(ROOT_DIR, 'installer', 'TechPartsPOS.iss');
+  const iss = fs.readFileSync(issPath, 'utf8');
+
+  assert.match(iss, /function\s+NeedsStandardUserSetup\s*\(\s*\)\s*:\s*Boolean/i);
+  assert.match(iss, /if\s+WizardSilent\s*\(\s*\)\s+then/i, 'silent/updater runs must skip PowerShell user probe');
+  assert.match(iss, /Get-LocalGroupMember\s+-SID\s+''S-1-5-32-544''\s+-ErrorAction\s+Stop/, 'must use locale-independent Administrators SID and fail safe on errors');
+  assert.match(iss, /Get-LocalUser\s+-ErrorAction\s+Stop/, 'must require clean Get-LocalUser completion before hiding setup guide');
+  assert.match(iss, /-\(500\|501\|503\|504\)\$/, 'must ignore built-in system RIDs (Admin/Guest/DefaultAccount/WDAG)');
+  assert.match(iss, /procedure\s+CurPageChanged\s*\(\s*CurPageID:\s*Integer\s*\)/i);
+  assert.match(iss, /Do not install it again/i, 'finish screen must tell owner not to reinstall on cashier Windows profiles');
+  assert.match(iss, /ms-settings:otherusers/, 'finish screen must wire a shortcut to Windows Account Settings > Other users');
+  assert.match(iss, /\{win\}\\explorer\.exe";\s*Parameters:\s*"ms-settings:otherusers";[^\r\n]*unchecked[^\r\n]*runasoriginaluser;\s*Check:\s*NeedsStandardUserSetup/i);
+  assert.doesNotMatch(iss, /—/, 'installer script must contain zero em dashes');
+});
+
 test('build-installer.js checks Inno Setup 7 locations and reads package.json version', () => {
   const scriptPath = path.join(ROOT_DIR, 'scripts', 'build-installer.js');
   assert.ok(fs.existsSync(scriptPath), 'scripts/build-installer.js must exist');
