@@ -1323,6 +1323,7 @@ function renderReorder(rows) {
       <div class="text-right shrink-0">
         <span class="block font-mono font-bold ${r.stock_quantity === 0 ? 'stock--out' : 'stock--low'}">${r.stock_quantity} left</span>
         <span class="block foot-note font-mono">${r.units_sold} sold this window</span>
+        ${r.suggested_qty > 0 ? `<button type="button" class="btn-mini mt-1" data-action="receive-part" data-part-id="${r.id}" data-suggested="${r.suggested_qty}" data-cost="${r.cost_price || 0}"><i class="ph ph-package w-3.5 h-3.5"></i> Receive ${r.suggested_qty}</button>` : ''}
       </div>
     </div>`).join('');
 }
@@ -1377,6 +1378,38 @@ function wireDashboardControls() {
     if (!button) return;
     dashState.topExpanded = !dashState.topExpanded;
     renderTopProducts();
+  });
+  // Receive-from-reorder: two Enter-driven prompts (qty, then unit cost that
+  // defaults to the current cost). One batch line per part; the server applies
+  // the whole request or nothing.
+  $id('dash-reorder').addEventListener('click', async e => {
+    const btn = e.target.closest('[data-action="receive-part"]');
+    if (!btn) return;
+    if (!hasElevation()) {
+      requireManagerPin('Enter manager PIN to receive stock', () => loadDashboardData());
+      return;
+    }
+    const qty = Number(await inputModal('Quantity received', { inputType: 'number', step: 'any', defaultValue: btn.dataset.suggested, yes: 'Next' }));
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    const line = { id: Number(btn.dataset.partId), quantity: qty };
+    const cost = await inputModal('Unit cost, blank keeps the current cost', { inputType: 'number', step: 'any', defaultValue: btn.dataset.cost, yes: 'Receive' });
+    if (cost !== null && String(cost).trim() !== '' && Number(cost) >= 0) line.unit_cost = Number(cost);
+    try {
+      const res = await fetch('/api/inventory/receive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [line] })
+      });
+      if (res.status === 403) {
+        requireManagerPin('Enter manager PIN to receive stock', () => loadDashboardData());
+        return;
+      }
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not receive the stock');
+      showToast('Stock received.', 'pos');
+      loadDashboardData();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   });
   $id('dash-top-sort').addEventListener('click', e => {
     const b = e.target.closest('[data-sort]');

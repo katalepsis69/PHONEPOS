@@ -18,7 +18,8 @@ const {
   archiveInventoryItem,
   importInventory,
   bulkEditInventory,
-  listReorderSuggestions
+  listReorderSuggestions,
+  receiveInventory
 } = require('./inventory');
 const { createSale, listSales, getSaleDetails, voidSale } = require('./sales');
 const {
@@ -610,6 +611,14 @@ function createServer(opts = {}) {
           const body = await parseBody(req);
           const item = adjustStock(db, Number(invStockMatch[1]), Number(body.delta), { reason: body.reason, note: body.note, op_id: body.op_id }, ctx);
           return item ? sendJson(res, 200, item) : sendJson(res, 404, { error: 'Not found' });
+        }
+
+        // Supplier receive: batched reorder fulfillment, elevation-gated like
+        // every other stock-changing route.
+        if (pathname === '/api/inventory/receive' && method === 'POST') {
+          if (!elevated) return elevationDenied();
+          const body = await parseBody(req);
+          return sendJson(res, 200, receiveInventory(db, body?.items, ctx));
         }
 
         const invMovementsMatch = pathname.match(/^\/api\/inventory\/(\d+)\/movements$/);

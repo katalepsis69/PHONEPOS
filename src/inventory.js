@@ -592,6 +592,50 @@ function listReorderSuggestions(db, { days = 3 } = {}) {
   return { days: windowDays, rows };
 }
 
+// Receiving converts a reorder decision into stock: quantity in, optional new
+// unit cost on the item. Per-line audits and outbox entries ride the existing
+// adjustStock/updateInventoryItem paths; one bad line fails the whole batch,
+// so a partial receive never claims stock that never arrived.
+function receiveInventory(db, items, ctx = {}) {
+  if (!Array.isArray(items) || !items.length || items.length > 100) {
+    const e = new Error('items must be an array of 1 to 100 lines');
+    e.statusCode = 400;
+    throw e;
+  }
+  return txn(db, () => items.map((line, i) => {
+    const n = i + 1;
+    const qty = Number(line?.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      const e = new Error(`Line ${n}: quantity must be greater than zero`);
+      e.statusCode = 400;
+      throw e;
+    }
+    const rawCost = line?.unit_cost;
+    const cost = rawCost === undefined || rawCost === null || rawCost === '' ? null : money(Number(rawCost));
+    if (cost !== null && cost < 0) {
+      const e = new Error(`Line ${n}: unit cost must be zero or more`);
+      e.statusCode = 400;
+      throw e;
+    }
+    const item = getInventoryItem(db, Number(line?.id));
+    if (!item || item.archived) {
+      const e = new Error(`Line ${n}: part not found`);
+      e.statusCode = 404;
+      throw e;
+    }
+    const updated = adjustStock(db, item.id, qty, { reason: 'receive', note: 'Supplier receive' }, ctx);
+    if (!updated) {
+      const e = new Error(`Line ${n}: part not found`);
+      e.statusCode = 404;
+      throw e;
+    }
+    if (cost !== null) {
+      updateInventoryItem(db, item.id, { cost_price: cost }, { reason: 'receive', note: 'Supplier receive' }, ctx);
+    }
+    return { id: item.id, name: partLabel(item), received: qty, unit_cost: cost ?? item.cost_price };
+  }));
+}
+
 module.exports = {
   partLabel,
   listInventory,
@@ -606,5 +650,6 @@ module.exports = {
   importInventory,
   deleteInventoryItem,
   bulkEditInventory,
-  listReorderSuggestions
+  listReorderSuggestions,
+  receiveInventory
 };

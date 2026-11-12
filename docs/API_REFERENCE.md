@@ -367,6 +367,14 @@ Manager-gated. Signs one calendar day: counts the drawer against `expected_cash`
 **Response `201 Created`:** the buckets plus `counted_cash`, `variance` and `status` (`balanced` or `flagged`).
 **Response `400`:** missing count, negative amount, bad date, or a day that is already reconciled.
 
+### `POST /api/inventory/receive`
+Elevation-gated. Batched supplier receive for the reorder flow: adds stock per line (reason `receive`) and optionally reprices `cost_price`. One bad line refuses the whole batch, so a partial receive never claims stock that never arrived. Audits and cloud outbox entries ride the per-line adjust/update paths.
+
+**Request Body:** `{ "items": [{ "id": 12, "quantity": 5, "unit_cost": 95 }] }` (1-100 lines; `quantity` > 0; `unit_cost` optional, >= 0, omitted keeps the current cost.)
+
+**Response `200 OK`:** `[{ "id": 12, "name": "Samsung S21 OLED", "received": 5, "unit_cost": 95 }]`
+**Response `400`:** empty/oversized batch, non-positive quantity, negative cost. **Response `404`:** unknown or archived part.
+
 ### `GET /api/expenses?from=YYYY-MM-DD&to=YYYY-MM-DD`
 Elevation-gated. Operating-expense bookkeeping records for the window (defaults to today in shop time). The `total` and `by_category` cover the whole window; `expenses` is the newest-first display list, capped at 200 rows.
 

@@ -4,13 +4,14 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test').test;
-const { dbTest, serverTest } = require('./helper');
+const { dbTest, serverTest, ensurePinChanged } = require('./helper');
 const {
   createInventoryItem,
   archiveInventoryItem,
   listReorderSuggestions,
   importInventory,
-  getInventoryItem
+  getInventoryItem,
+  receiveInventory
 } = require('../src/inventory');
 const { createSale, voidSale } = require('../src/sales');
 const { createStaff } = require('../src/auth');
@@ -368,4 +369,57 @@ test('Cloud UI: Reorder toolbar, Stock catalog/import/export actions, and CSV pa
   assert.match(appJs, /function getPendingDeltaForItem/);
   assert.match(appJs, /\/api\/inventory\/adjust-stock/);
   assert.match(appJs, /\/api\/inventory\/import/);
+});
+
+// Receiving closes the loop the reorder sheet opens: one call per supplier
+// batch, quantity in, optional new cost, whole batch or nothing.
+dbTest('receiveInventory adds stock, can reprice, and rejects bad lines atomically', (db) => {
+  const a = createInventoryItem(db, { brand: 'Samsung', model_name: 'S21', part_type: 'OLED', cost_price: 100, price_retail: 200, price_technician: 150, stock_quantity: 7, supplier: 'ABC Parts' });
+  const b = createInventoryItem(db, { brand: 'Infinix', model_name: 'Hot 10', part_type: 'Battery', cost_price: 50, price_retail: 120, price_technician: 90, stock_quantity: 4, supplier: 'XYZ' });
+
+  const rows = receiveInventory(db, [
+    { id: a.id, quantity: 5, unit_cost: 95 },
+    { id: b.id, quantity: 2 }
+  ], ctxMgr);
+  assert.equal(rows[0].received, 5);
+  assert.equal(rows[0].unit_cost, 95);
+  assert.equal(rows[1].unit_cost, 50, 'no unit_cost keeps the old cost');
+  assert.equal(getInventoryItem(db, a.id).stock_quantity, 12);
+  assert.equal(getInventoryItem(db, a.id).cost_price, 95);
+  assert.equal(getInventoryItem(db, b.id).stock_quantity, 6);
+  assert.equal(getInventoryItem(db, b.id).cost_price, 50);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM stock_movements WHERE reason = 'receive' AND note = 'Supplier receive'").get().n, 2);
+  assert.ok(db.prepare("SELECT id FROM audit_log WHERE action = 'adjust_stock'").get(), 'per-line audit rides adjustStock');
+
+  assert.throws(() => receiveInventory(db, [{ id: a.id, quantity: 1 }, { id: b.id, quantity: 0 }], ctxMgr), /quantity must be greater/);
+  assert.equal(getInventoryItem(db, a.id).stock_quantity, 12, 'batch atomic: first line not applied');
+  assert.throws(() => receiveInventory(db, [{ id: 99999, quantity: 1 }], ctxMgr), /part not found/);
+  assert.throws(() => receiveInventory(db, [{ id: a.id, quantity: 1, unit_cost: -3 }], ctxMgr), /unit cost must be zero or more/);
+  assert.throws(() => receiveInventory(db, [], ctxMgr), /1 to 100/);
+});
+
+serverTest('/api/inventory/receive is elevation-gated and receives stock', async (base, db, auth) => {
+  auth = await ensurePinChanged(base, auth);
+  const item = createInventoryItem(db, { brand: 'Test', model_name: 'R', part_type: 'X', cost_price: 10, price_retail: 20, price_technician: 15, stock_quantity: 1 });
+  const denied = await fetch(`${base}/api/inventory/receive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: auth.Authorization },
+    body: JSON.stringify({ items: [{ id: item.id, quantity: 1 }] })
+  });
+  assert.equal(denied.status, 403);
+  const ok = await fetch(`${base}/api/inventory/receive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...auth },
+    body: JSON.stringify({ items: [{ id: item.id, quantity: 3, unit_cost: 9 }] })
+  });
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json())[0].received, 3);
+  assert.equal(getInventoryItem(db, item.id).stock_quantity, 4);
+  assert.equal(getInventoryItem(db, item.id).cost_price, 9);
+  const bad = await fetch(`${base}/api/inventory/receive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...auth },
+    body: JSON.stringify({ items: [] })
+  });
+  assert.equal(bad.status, 400);
 });
