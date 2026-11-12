@@ -3,9 +3,9 @@
 [v9, 2026-11-12, measured refresh 2026-11-13, supersedes v8 of 2026-11-09 (which superseded
 v7 of 2026-11-05, v6 of 2026-11-02, v5 of 2026-10-14, v4 and v3 of 2026-10-02; a frozen v3
 sits at backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). THIS EDITION IS
-MEASURED ON 2026-11-13 at HEAD b55f517 (branch main, tag v1.1, 4 unpushed commits ahead of
+MEASURED ON 2026-11-13 at HEAD e86e347 (branch main, tag v1.1, 4 unpushed commits ahead of
 origin/main):
-npm test reports 642 tests across 52 tracked files (642/642 pass in about 30 s; the rerun
+npm test reports 661 tests across 55 tracked files (661/661 pass in about 30 s; the rerun
 rule in GATES stands), and npm run build:css exits 0. Version is 1.1 across package.json:3,
 CURRENT_VERSION (src/updater.js:11), and MyAppVersion (installer/TechPartsPOS.iss).]
 POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..cf06069, first-look audit targets):
@@ -46,6 +46,15 @@ POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..cf06069, first-look audit ta
    inventory UI batch (public/js/views/inventory.js), and the version renumber 2.8 -> 1.1
    across package.json, CURRENT_VERSION, and MyAppVersion; new tests appearance-tones
    .test.js and build-exe-icon.test.js.
+4) Night batch 2026-11-13 (887647b..e86e347): operating expenses (P&L leg: src/expenses.js,
+   /api/expenses CRUD, net profit subtracts them in dashboard/period/trend/Z-report/printed
+   summary and the cloud mirror), reorder-to-receiving (POST /api/inventory/receive, batched,
+   op_id-deduped, cost reprice), repair tickets (repairs table, upsert-by-ref lifecycle,
+   /api/repairs, Repairs tab, POS hold/sale integration, pickup-ready slip kind=pickup_ready),
+   low-stock rail badge, market analysis doc (docs/market-analysis-2026-11-13.md), self-audit
+   fixes (docs/self-audit-2026-11-13-night.md: expense op_id, receive op_id, toast tones,
+   empty customer_name). Suite 661/661 at e86e347, pushed.
+
 GIT IS THE HISTORY NOW: 6834474 (2026-11-07) brought the full source tree under version
 control. git log, git diff, and git blame are primary history; git status is the
 interference detector (hazard (f) below survives on that point); never git --amend because
@@ -135,7 +144,7 @@ measurement time; the manager app), scripts/ (generate-license.js 421, set-pin.j
 mirror-backups.js 70, build-artifacts.js 90, build-exe.js 123, build-common.js 193,
 build-license-exe.js 89, build-installer.js 60, verify-exe.js 275, release-customer.js 58,
 check-repair-ui.js 110, deploy-cloud.js 82, generate-changelog.js 669, publish-release.ps1
-662), installer/TechPartsPOS.iss (379 lines), tests/ (52 tracked *.test.js files plus
+662), installer/TechPartsPOS.iss (379 lines), tests/ (55 tracked *.test.js files plus
 helper.js and cloud-hardening-harness.js), and the docs:
 README.md, RELEASE_NOTES.md, ARCHITECTURE.md,
 DATABASE_SCHEMA.md, API_REFERENCE.md, BUSINESS_LOGIC_AND_WORKFLOWS.md,
@@ -372,8 +381,8 @@ that the implementation still matches, then move on)
   license surface (machine id, trial seal, anti-rollback) is NEW and unaudited, see below.
 
 GATES (recount and rerun at audit time; report the current numbers)
-- npm test (node --test tests/*.test.js). Measured 2026-11-13 at b55f517: 642 tests across
-  52 tracked files; 642/642 on a parallel run, about 30 s (tests/ui-fixes.test.js
+- npm test (node --test tests/*.test.js). Measured 2026-11-13 at e86e347: 661 tests across
+  55 tracked files; 661/661 on a parallel run, about 30 s (tests/ui-fixes.test.js
   normalizes CRLF line endings inside source()). The 11-05 history stands: one parallel run that
   day produced no output for over ten minutes and was killed; the immediate rerun was
   green, so a HANG is also a rerun, not a regression. The v6
@@ -939,7 +948,7 @@ AUDIT CATEGORIES (cover all ten; report per category)
    gitignored files is visible anywhere but a git tag.
 
 8. TEST QUALITY
-   642 tests across 52 tracked files (measured 2026-11-13 at b55f517; the cf06069 same-day
+   661 tests across 55 tracked files (measured 2026-11-13 at e86e347; the cf06069 same-day
    refresh counted 638 across 51, v9 counted 610 across
    49 at 533f07a, v8 counted 568 across 49 files including untracked universal-pos, v7
    counted 505 in 44), with mix of

@@ -44,8 +44,8 @@ pass.
 
 BASELINE RITUAL (first, no exceptions)
 1. The gates are fixed for this project; do not re-detect them:
-   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-13 at b55f517: 642 tests,
-     642 pass, 0 fail, about 30 seconds across 52 tracked test files (640/640 at ab5de08 the same
+   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-13 at e86e347: 661 tests,
+     661 pass, 0 fail, about 30 seconds across 55 tracked test files (640/640 at ab5de08 the same
      night, 638/638 at cf06069 on 2026-11-13,
      610/610 on 2026-11-12,
      568/568 on 2026-11-11,
@@ -57,7 +57,7 @@ BASELINE RITUAL (first, no exceptions)
      covers publish-release.ps1, batch entry points, and installer/TechPartsPOS.iss.
 2. Run the gate. Record the exact result INCLUDING failures. IDENTICAL before and
    after means the same set of pass and fail, not all-green. Pre-existing reds:
-   none known (642/642 on 2026-11-13 at b55f517; 640/640 at ab5de08 and 638/638 at cf06069
+   none known (661/661 on 2026-11-13 at e86e347; 640/640 at ab5de08 and 638/638 at cf06069
      the same day; 610/610 on 2026-11-12). A new red is a
    stop condition, not a baseline entry. A hung run is a rerun, not a regression.
    always take helper.js's serverTest, because the default dbPath resolves to the real
