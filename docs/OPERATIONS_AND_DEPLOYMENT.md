@@ -321,3 +321,22 @@ To ensure counter security in multi-staff retail environments:
    - While hourly snapshots are stored automatically in `C:\ProgramData\TechPartsPOS\backups\`, shop owners can plug a USB flash drive into the register, open **Settings > Data**, and click **Download copy** next to any backup file.
    - The verified database snapshot downloads immediately through the browser to the chosen USB folder, providing a complete offsite disaster recovery backup with zero command-line interaction.
 
+
+### 6.5 Upgrading a seat that still shows version 2.x
+Before the official v1.0 release, internal builds carried version numbers like
+2.6, 2.7 and 2.8. Those builds were never published on GitHub, but if a copy was
+handed out directly (a test register or a friend's shop), its Update Now button
+will report "You are up to date (v2.8)" forever, because the updater compares
+version numbers and 1.1 sorts lower than 2.8 even though v1.1 is much newer
+code.
+
+The fix on such a machine is a one-time manual reinstall, not an update:
+1. Download the current `TechPartsPOS-Setup-<version>.exe` from the GitHub
+   Releases page (v1.1 or later).
+2. Run the installer over the old install. It keeps `C:\ProgramData\TechPartsPOS`
+   (the shop database, backups and settings) completely untouched.
+3. Open the app, confirm the version badge shows 1.1 or later, then press
+   Update Now once to confirm the channel answers again.
+
+A future release that resumes 2.x numbering would also clear this, but the
+manual reinstall is the immediate and safe path.
