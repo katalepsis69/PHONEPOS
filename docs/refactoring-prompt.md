@@ -44,8 +44,9 @@ pass.
 
 BASELINE RITUAL (first, no exceptions)
 1. The gates are fixed for this project; do not re-detect them:
-   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-12 at 533f07a: 610 tests,
-     610 pass, 0 fail, about 24 seconds across 49 tracked test files (568/568 on 2026-11-11,
+   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-13 at cf06069: 638 tests,
+     638 pass, 0 fail, about 28 seconds across 51 tracked test files (610/610 on 2026-11-12,
+     568/568 on 2026-11-11,
      560/560 on 2026-11-10, 536/536 on 2026-11-09, 505/505 on 2026-11-05, 423/423 on
      2026-10-14). There is no JS compile step in dev; npm run build:css rebuilds
      public/tailwind.build.css after Tailwind changes, and the suite is the main automated
@@ -54,7 +55,7 @@ BASELINE RITUAL (first, no exceptions)
      covers publish-release.ps1, batch entry points, and installer/TechPartsPOS.iss.
 2. Run the gate. Record the exact result INCLUDING failures. IDENTICAL before and
    after means the same set of pass and fail, not all-green. Pre-existing reds:
-   none known (610/610 on 2026-11-12 at 533f07a; 568/568 on 2026-11-11). A new red is a
+   none known (638/638 on 2026-11-13 at cf06069; 610/610 on 2026-11-12). A new red is a
    stop condition, not a baseline entry. A hung run is a rerun, not a regression.
    always take helper.js's serverTest, because the default dbPath resolves to the real
    data/shop.db (src/server.js:278) and sendRaw is only patched by the harness. If you find a
@@ -69,7 +70,7 @@ BASELINE RITUAL (first, no exceptions)
    backups/code-pre-refactor-YYYY-MM-DD/ convention as belt-and-braces for
    multi-file steps, preserving relative paths (the established code-pre-* pattern).
    To find what is new and therefore where the structure is still soft: git log
-   --stat and git diff 94d1206..533f07a instead of guessing.
+   --stat and git diff 94d1206..cf06069 instead of guessing.
 4. The suite must never print paper: tests/helper.js enforces the sentinel printer
    queue and a sendRaw patch that refuses every other queue. A refactor step that
    makes any test open a real queue is a stop condition.
@@ -191,16 +192,16 @@ MUST-PRESERVE INVARIANTS
   survives; when in doubt, report instead of restructure.
 
 PRIORITY INSPECTION ORDER
-1. God files: src/server.js (2401 lines: about 75 routes, lifecycle, launcher IPC, print
+1. God files: src/server.js (2477 lines: about 75 routes, lifecycle, launcher IPC, print
    wiring, static serving, the instance lock and the update routes in one file) and
-   cloud-deploy/server.js (1903 lines, byte-identical to cloud/server.js at
+   cloud-deploy/server.js (1929 lines, byte-identical to cloud/server.js at
    measurement). Assess honestly; extract cohesive route groups or lifecycle seams
    only when it does not create parallel structures. The largest single block inside
    src/server.js is the route chain itself: split by resource (inventory, sales, auth,
    system), never by arbitrary line number, and remember that the session and license
    exempt lists must travel with their routes. In public/, the four biggest files are
-   auth.js (2589), backoffice.js (2213), views/inventory.js (1700) and pos.js (1630):
-   out of scope, but report them as the honest candidates they are. src/printer.js (970)
+   auth.js (2591), backoffice.js (2213), views/inventory.js (1822) and pos.js (1689):
+   out of scope, but report them as the honest candidates they are. src/printer.js (974)
    and src/updater.js (728) are newer and cohesive; expect few candidates there. src/db.js
    (474) is out of scope, and src/auth.js (398) is small and clean.
 2. Long functions (>40 lines, deep nesting), exempting mechanical blocks as above.

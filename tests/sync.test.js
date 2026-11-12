@@ -510,3 +510,27 @@ test('an unknown command kind acks and logs instead of sitting pending forever',
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a SQL constraint failure from a cloud command acks instead of retrying forever', () => {
+  // audit-2026-11-13 finding 1: NOT NULL / FOREIGN KEY constraint errors are
+  // deterministic refusals, so they must land in the refused classifier, not
+  // stay pending and get re-served on every drain.
+  const { db, dir } = tmpDb();
+  ensureSyncTables(db);
+  const inv = require('../src/inventory');
+  const realAdjustStock = inv.adjustStock;
+  inv.adjustStock = () => {
+    const err = new Error('NOT NULL constraint failed: inventory.sku');
+    throw err;
+  };
+  try {
+    const acked = applyCloudCommands(db, [
+      { id: 77, kind: 'adjust_stock', payload: { id: 1, delta: 2 } },
+    ]);
+    assert.ok(acked.includes(77), 'constraint-failed command acked, not left pending');
+  } finally {
+    inv.adjustStock = realAdjustStock;
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

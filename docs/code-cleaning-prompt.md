@@ -15,8 +15,8 @@ BASELINE RITUAL (first, no exceptions)
    differ from observed), refresh the block to today's observed state and say so in
    one line. Re-measure, do not copy a number you did not see.
 2. Run the gates and record exact results BEFORE the first change:
-   - npm test (node --test tests/*.test.js): all pass, exit 0 (610/610 on 2026-11-12,
-     about 24 s; today's count becomes the run baseline).
+   - npm test (node --test tests/*.test.js): all pass, exit 0 (638/638 on 2026-11-13,
+     about 28 s; today's count becomes the run baseline).
    - npm run build:css: exit 0.
    A hung run is a rerun, not a regression; rerun once before concluding anything.
 3. git status is the interference detector: files edited mid-session have been found
@@ -87,9 +87,9 @@ STOP CONDITIONS
 A gate goes red after a deletion and stays red on rerun (restore the item, report);
 the user declines an item; the tree shows concurrent interference. Report and stop.
 
-TREE STATE (measured 2026-11-12; refresh to observed state on every run)
-- HEAD: 533f07a (on main, 10 commits ahead of origin/main 94d1206). Full source is tracked
+TREE STATE (measured 2026-11-13; refresh to observed state on every run)
+- HEAD: cf06069 (on main, tag v1.1, in sync with origin/main). Full source is tracked
   in git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 610/610 pass, 0 fail, exit 0 across 49 test
+- Gates: npm run build:css exit 0; npm test 638/638 pass, 0 fail, exit 0 across 51 test
   files (all tracked).
 - Working tree: clean at measurement (`git status --short` empty).

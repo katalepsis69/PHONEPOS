@@ -1267,3 +1267,26 @@ test('isInstanceLockLive rejects prior-boot locks and recycled non-POS Windows P
     'live same-boot TechPartsPOS.exe lock must still trigger single-instance handoff'
   );
 });
+
+test('isInstanceLockLive tolerance floor, tasklist fail-open, and the no-port guard', () => {
+  const { isInstanceLockLive } = require('../src/server');
+  const nowBootAt = 1_700_000_000_000;
+  const liveLock = { pid: 2576, port: 3000, started_at: new Date(nowBootAt + 5000).toISOString(), boot_at: nowBootAt - 30_000 };
+  const aliveHooks = { nowBootAt, isPidAlive: () => true, platform: 'win32', queryWinPidImage: () => '"TechPartsPOS.exe","2576","Services","0","50,000 K"\r\n' };
+
+  // A boot_at within the 60 s tolerance is a LIVE lock (uptime granularity and
+  // small clock steps must not false-stale it into a second instance).
+  assert.strictEqual(isInstanceLockLive(liveLock, aliveHooks), true, 'boot_at within tolerance stays live');
+
+  // tasklist failing (timeout, spawn error) fails OPEN: the lock is treated as
+  // live, which can only delay a start, never double-boot one.
+  assert.strictEqual(
+    isInstanceLockLive(liveLock, { ...aliveHooks, queryWinPidImage: () => null }),
+    true,
+    'a tasklist failure must fail open, not stale a live lock'
+  );
+
+  // No port or a self-owned pid is never "another running instance".
+  assert.strictEqual(isInstanceLockLive({ ...liveLock, port: 0 }, aliveHooks), false, 'a lock without a port is stale');
+  assert.strictEqual(isInstanceLockLive({ ...liveLock, pid: process.pid }, aliveHooks), false, 'our own pid is not a foreign instance');
+});

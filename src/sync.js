@@ -105,10 +105,11 @@ function setSyncLogSink(fn) { syncLogSink = typeof fn === 'function' ? fn : null
 const syncLog = (msg) => { if (syncLogSink) { try { syncLogSink(msg); return; } catch (_) {} } console.log(msg); };
 
 // A command that failed DETERMINISTICALLY (part missing, validation refusal,
-// floor refusal, duplicate SKU) is acked so a poison command cannot retry on
-// every drain forever; the refusal is logged where an operator can see it.
+// floor refusal, duplicate SKU, a SQL constraint such as NOT NULL or FOREIGN
+// KEY) is acked so a poison command cannot retry on every drain forever; the
+// refusal is logged where an operator can see it.
 // A transient failure (SQLITE_BUSY, disk full) stays un-acked and retries.
-const COMMAND_REFUSED = /not found|must be|insufficient|too small|UNIQUE constraint|required/i;
+const COMMAND_REFUSED = /not found|must be|insufficient|too small|constraint failed|required/i;
 
 function applyCloudCommands(db, commands) {
   if (!Array.isArray(commands) || commands.length === 0) return [];

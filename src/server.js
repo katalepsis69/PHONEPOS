@@ -1984,6 +1984,10 @@ function isInstanceLockLive(existing, hooks = {}) {
     return false;
   }
   const bootAt = typeof hooks.nowBootAt === 'number' ? hooks.nowBootAt : currentBootEpochMs();
+  // ponytail: boot_at staleness assumes the wall clock steps less than 60 s
+  // while a server runs; a manual time change can false-stale a live lock into
+  // a second instance on a drifted port. Probing the locked port first is the
+  // upgrade path, but it needs async in this sync path.
   if (typeof existing.boot_at === 'number') {
     if (Math.abs(bootAt - existing.boot_at) > 60000) return false;
   } else if (existing.started_at) {
@@ -1997,15 +2001,20 @@ function readInstanceLock() {
   try { return JSON.parse(fs.readFileSync(instanceLockPath(), 'utf8')); }
   catch (_) { return null; }
 }
+// One shape for both state files: the lock (direct runs) and the service
+// runtime state share the fields isInstanceLockLive reads back.
+function instanceStateRecord(port) {
+  return {
+    pid: process.pid,
+    port,
+    started_at: new Date().toISOString(),
+    boot_at: currentBootEpochMs()
+  };
+}
 function writeInstanceLock(port) {
   try {
     fs.mkdirSync(path.dirname(instanceLockPath()), { recursive: true });
-    fs.writeFileSync(instanceLockPath(), JSON.stringify({
-      pid: process.pid,
-      port,
-      started_at: new Date().toISOString(),
-      boot_at: currentBootEpochMs()
-    }));
+    fs.writeFileSync(instanceLockPath(), JSON.stringify(instanceStateRecord(port)));
   } catch (_) {}
 }
 function runtimeStatePath(baseDir = getBaseDir()) {
@@ -2015,12 +2024,7 @@ function writeRuntimeState(port, baseDir = getBaseDir()) {
   try {
     const p = runtimeStatePath(baseDir);
     fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify({
-      pid: process.pid,
-      port,
-      started_at: new Date().toISOString(),
-      boot_at: currentBootEpochMs()
-    }));
+    fs.writeFileSync(p, JSON.stringify(instanceStateRecord(port)));
   } catch (_) {}
 }
 function releaseInstanceLock() {

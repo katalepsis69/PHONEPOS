@@ -15,8 +15,8 @@ BASELINE RITUAL (first, no exceptions)
    differ from observed), refresh the block to today's observed state and say so in
    one line. Re-measure, do not copy a number you did not see.
 2. Run the gates and record exact results BEFORE the first change:
-   - npm test (node --test tests/*.test.js): all pass, exit 0 (610/610 on 2026-11-12,
-     about 24 s; today's count becomes the run baseline).
+   - npm test (node --test tests/*.test.js): all pass, exit 0 (638/638 on 2026-11-13,
+     about 28 s; today's count becomes the run baseline).
    - npm run build:css: exit 0.
    A hung run is a rerun, not a regression; rerun once before concluding anything.
 3. git status is the interference detector: files edited mid-session have been found
@@ -76,11 +76,11 @@ A gate goes red and stays red on rerun; a fix would change behavior the finding 
 not cover; the approved list is exhausted; or the tree shows signs of concurrent
 interference (see baseline step 3). Report and stop.
 
-TREE STATE (measured 2026-11-12; refresh to observed state on every run)
-- HEAD: c8a2751 (on main, 12 commits ahead of origin/main 94d1206; 533f07a plus the v9
-  audit batch: report docs/audit-2026-11-12.md, cloud command taxonomy, installer ACLs,
-  fractional money display, API_REFERENCE coverage). Full source is tracked in git
-  (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 614/614 pass, 0 fail, exit 0 across 49 test
-  files (all tracked; 610 baseline plus the four audit regression tests).
+TREE STATE (measured 2026-11-13; refresh to observed state on every run)
+- HEAD: cf06069 (on main, tag v1.1, in sync with origin/main; the official v1.0/v1.1
+  releases and the two 2026-11-12 fix batches landed since 533f07a). Full source is
+  tracked in git (since 2026-11-07); the release pipeline commits mid-session, so
+  never --amend.
+- Gates: npm run build:css exit 0; npm test 638/638 pass, 0 fail, exit 0 across 51 test
+  files (all tracked).
 - Working tree: clean at measurement (`git status --short` empty).

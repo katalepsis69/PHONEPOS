@@ -1,14 +1,13 @@
 # Code and System Audit Prompt (v9)
 
-[v9, 2026-11-12, supersedes v8 of 2026-11-09 (which superseded v7 of 2026-11-05, v6 of
-2026-11-02, v5 of 2026-10-14, v4 and v3 of 2026-10-02; a frozen v3 sits at
-backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). THIS EDITION IS MEASURED
-ON 2026-11-12 at HEAD 533f07a (branch main, 10 commits ahead of v2.8 tag 94d1206): npm test
-reports 610 tests across 49 tracked files (610/610 pass in about 24 s; the rerun rule in
-GATES stands), and npm run build:css exits 0. Version is 2.8 across package.json:3,
-CURRENT_VERSION (src/updater.js:11), and MyAppVersion (installer/TechPartsPOS.iss). Note:
-origin/main still sits at 94d1206 until pushed.]
-POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..533f07a, first-look audit targets):
+[v9, 2026-11-12, measured refresh 2026-11-13, supersedes v8 of 2026-11-09 (which superseded
+v7 of 2026-11-05, v6 of 2026-11-02, v5 of 2026-10-14, v4 and v3 of 2026-10-02; a frozen v3
+sits at backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). THIS EDITION IS
+MEASURED ON 2026-11-13 at HEAD cf06069 (branch main, tag v1.1, in sync with origin/main):
+npm test reports 638 tests across 51 tracked files (638/638 pass in about 28 s; the rerun
+rule in GATES stands), and npm run build:css exits 0. Version is 1.1 across package.json:3,
+CURRENT_VERSION (src/updater.js:11), and MyAppVersion (installer/TechPartsPOS.iss).]
+POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..cf06069, first-look audit targets):
 1) Universal POS & Cloud Hardening (113ebc2): store profiles (phone_repair / general_retail /
    pc_components), fractional quantities, wholesale price tiers, cloud/workstation analytics
    parity suite (tests/analytics-parity.test.js), EN/TL copy expansion (public/js/i18n.js),
@@ -38,12 +37,20 @@ POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..533f07a, first-look audit ta
      scripts/publish-release.ps1, scripts/generate-changelog.js, and RELEASE_NOTES.md
      publish TechPartsPOS-Setup-<ver>.exe, TechPartsPOS.exe, and .sha256 with zero .zip
      archives; tests/ui-fixes.test.js normalizes CRLF in source() for Windows Git checkouts.
+3) Official releases v1.0 and v1.1 (e3bbe7e..cf06069, tags v1.0 and v1.1): the 2026-11-12
+   second-pass fixes (version-skew command ack, wholesale tag) and refused-scan session
+   review, then the release batch: Windows service installer expansion with branding
+   assets and embedded exe icon (installer/TechPartsPOS.iss, installer/brand/,
+   installer/license.txt), Dim and Paper themes (public/js/theme.js, public/styles.css),
+   inventory UI batch (public/js/views/inventory.js), and the version renumber 2.8 -> 1.1
+   across package.json, CURRENT_VERSION, and MyAppVersion; new tests appearance-tones
+   .test.js and build-exe-icon.test.js.
 GIT IS THE HISTORY NOW: 6834474 (2026-11-07) brought the full source tree under version
 control. git log, git diff, and git blame are primary history; git status is the
 interference detector (hazard (f) below survives on that point); never git --amend because
 the release pipeline commits mid-session.
-CLOUD TREE DUALITY: cloud/ and cloud-deploy/ both exist; as of 2026-11-12
-their server.js (1903 lines), public/app.js (1932 lines) and public/index.html (1524 lines)
+CLOUD TREE DUALITY: cloud/ and cloud-deploy/ both exist; as of 2026-11-13
+their server.js (1929 lines), public/app.js (2009 lines) and public/index.html (1613 lines)
 files are byte-identical and cloud/ additionally holds data/ (runtime state); re-verify at
 audit time. DEPLOY DIRECTION, measured 2026-11-05 and contradicting the folder names:
 scripts/deploy-cloud.js copies cloud/ INTO cloud-deploy/ and uploads the cloud/ copies to
@@ -103,7 +110,7 @@ OPERATING SCALE (judge every finding against THIS)
   pushes row snapshots out; the manager phone app logs in over the internet and watches
   Server-Sent Events for live updates. Treat every cloud route as internet-facing and
   every cloud finding as higher severity than its LAN equivalent.
-- Distribution is an Inno Setup 7 installer (dist/installer/TechPartsPOS-Setup-2.8.exe)
+- Distribution is an Inno Setup 7 installer (dist/installer/TechPartsPOS-Setup-1.1.exe)
   wrapping the Node SEA executable (release/customer/TechPartsPOS.exe; verified on disk
   2026-11-12, no portable .zip archive). GitHub Releases carry TechPartsPOS-Setup-<ver>.exe
   plus TechPartsPOS.exe and TechPartsPOS.exe.sha256 for in-app auto-updates. dist/ is the
@@ -113,21 +120,21 @@ If a problem cannot manifest at this scale, it belongs in "Future Scale Notes", 
 in the findings. Do not manufacture performance problems where they cannot occur.
 
 WHAT TO AUDIT (and what to skip)
-Audit: src/ (server.js 2401, printer.js 970, updater.js 728, analytics.js 593,
-inventory.js 604, license.js 483, db.js 474, auth.js 398, sync.js 329, credits.js 310,
+Audit: src/ (server.js 2477, printer.js 974, updater.js 728, analytics.js 593,
+inventory.js 610, license.js 483, db.js 474, auth.js 398, sync.js 356, credits.js 310,
 sales.js 295, returns.js 235, settings.js 149, seed.js 133, reconcile.js 123,
-audit.js 112, shifts.js 86, names.js 43, money.js 35; 8501 lines total across 19 files),
-public/ sources (js/ including views/ (backoffice.js 2213, inventory.js 1700, pos.js 1630),
-auth.js 2589, receipts.js 1031, main.js 1034, i18n.js 1001, ui.js 543, report.js 395,
-importer.js 154, theme.js 129, search.js 116, chart.js 84, state.js 77, api.js 58,
-cart-recovery.js 12, index.html 2688, report.html 483, styles.css 5750, report-sw.js,
+audit.js 112, shifts.js 86, names.js 43, money.js 35; 8614 lines total across 19 files),
+public/ sources (js/ including views/ (backoffice.js 2213, inventory.js 1822, pos.js 1689),
+auth.js 2591, receipts.js 1031, main.js 1036, i18n.js 1039, ui.js 545, report.js 395,
+importer.js 154, theme.js 138, search.js 116, chart.js 84, state.js 77, api.js 58,
+cart-recovery.js 11, index.html 2719, report.html 483, styles.css 5828, report-sw.js,
 the manifests; skip fonts/ and the generated tailwind.build.css), cloud-deploy/
-(server.js 1903, public/app.js 1932, public/index.html 1524, byte-identical to cloud/ at
+(server.js 1929, public/app.js 2009, public/index.html 1613, byte-identical to cloud/ at
 measurement time; the manager app), scripts/ (generate-license.js 421, set-pin.js 67,
-mirror-backups.js 70, build-artifacts.js 90, build-exe.js 118, build-common.js 112,
+mirror-backups.js 70, build-artifacts.js 90, build-exe.js 123, build-common.js 193,
 build-license-exe.js 89, build-installer.js 60, verify-exe.js 275, release-customer.js 58,
-check-repair-ui.js 110, deploy-cloud.js 82, generate-changelog.js 563, publish-release.ps1
-640), installer/TechPartsPOS.iss (216 lines), tests/ (49 tracked *.test.js files plus
+check-repair-ui.js 110, deploy-cloud.js 82, generate-changelog.js 669, publish-release.ps1
+662), installer/TechPartsPOS.iss (379 lines), tests/ (51 tracked *.test.js files plus
 helper.js and cloud-hardening-harness.js), and the docs:
 README.md, RELEASE_NOTES.md, ARCHITECTURE.md,
 DATABASE_SCHEMA.md, API_REFERENCE.md, BUSINESS_LOGIC_AND_WORKFLOWS.md,
@@ -155,7 +162,8 @@ deliberate behavior, verify the code matches the comment; do not flag the commen
 Where code and doc disagree, that is a finding.
 
 METHOD FOR SEEING WHAT CHANGED (git is the history since 2026-11-07)
-Primary tools: git log --oneline, git log --stat, git diff v2.8 (v2.8 = 94d1206),
+Primary tools: git log --oneline, git log --stat, git diff v1.0 (tags are now v1.0 =
+e875978 and v1.1 = cf06069),
 git blame for a line's history, git status as the interference detector. For changes
 older than 6834474 the snapshots are the secondary record:
 backups/code-pre-v6fixes-2026-10-15/ is the last FULL pre-git snapshot (use
@@ -363,8 +371,8 @@ that the implementation still matches, then move on)
   license surface (machine id, trial seal, anti-rollback) is NEW and unaudited, see below.
 
 GATES (recount and rerun at audit time; report the current numbers)
-- npm test (node --test tests/*.test.js). Measured 2026-11-12 at 533f07a: 610 tests across
-  49 tracked files; 610/610 on a parallel run, about 24 s (tests/ui-fixes.test.js
+- npm test (node --test tests/*.test.js). Measured 2026-11-13 at cf06069: 638 tests across
+  51 tracked files; 638/638 on a parallel run, about 28 s (tests/ui-fixes.test.js
   normalizes CRLF line endings inside source()). The 11-05 history stands: one parallel run that
   day produced no output for over ten minutes and was killed; the immediate rerun was
   green, so a HANG is also a rerun, not a regression. The v6
@@ -930,15 +938,17 @@ AUDIT CATEGORIES (cover all ten; report per category)
    gitignored files is visible anywhere but a git tag.
 
 8. TEST QUALITY
-   610 tests across 49 tracked files (measured 2026-11-12 at 533f07a; v8 counted 568 across
-   49 files including untracked universal-pos, v7 counted 505 in 44), with mix of
+   638 tests across 51 tracked files (measured 2026-11-13 at cf06069; v9 counted 610 across
+   49 at 533f07a, v8 counted 568 across 49 files including untracked universal-pos, v7
+   counted 505 in 44), with mix of
    behavioral, hybrid vm-slice, and static greps. Recount per file, keep the
    behavioral / hybrid / pure-static split as the useful axis, and name what each group can
    actually detect. Recent additions: tests/setup.test.js, tests/backup-restore.test.js,
    tests/analytics-parity.test.js, tests/universal-pos.test.js, tests/receipt-choices.test.js,
    tests/reorder.test.js, tests/port-drift.test.js, and tests/packaging-workflows.test.js
    (covering installer/TechPartsPOS.iss task XML, ssDone cleanup, installer-only releases
-   without .zip, and publish-release.ps1 ordering). Also verify tests/ui-fixes.test.js CRLF
+   without .zip, and publish-release.ps1 ordering), plus the v1.0-release additions
+   tests/appearance-tones.test.js and tests/build-exe-icon.test.js. Also verify tests/ui-fixes.test.js CRLF
    normalization in source() keeps the suite deterministic on Windows checkouts. Files added
    since v6: tests/template-chooser.test.js and
    tests/changelog.test.js (both from the parallel 11-03/05 session; the latter is a new
