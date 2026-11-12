@@ -7,38 +7,74 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+const { execFileSync } = require('node:child_process');
 const {
   generateReleaseHighlights,
   buildReleaseNotesMarkdown,
   updateChangelogFile,
-  updateReleaseNotesFile
+  updateReleaseNotesFile,
+  getPreviousTag
 } = require('../scripts/generate-changelog');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 
-test('generateReleaseHighlights discovers actual codebase changes with zero em dashes', () => {
-  // Isolate from live CHANGELOG.md and existing v1.0 tag so v2.2 fixture still scans codebase changes cleanly.
-  const isolatedChangelog = path.join(os.tmpdir(), `changelog-isolated-${process.pid}.md`);
-  const highlights = generateReleaseHighlights({ version: '2.2', prevTag: 'v0-baseline', changelogPath: isolatedChangelog });
-  assert.ok(Array.isArray(highlights), 'highlights must be an array');
-  assert.ok(highlights.length > 0, 'highlights must not be empty');
+test('generateReleaseHighlights summarizes real git diff and ignores untouched features', () => {
+  const tmpRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'changelog-repo-'));
+  const git = (args) => execFileSync('git', args, { cwd: tmpRepo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 
-  // Anti-slop: zero em dashes across all generated highlights
-  for (const h of highlights) {
-    assert.doesNotMatch(h, /—/, `Highlight must not contain em dash: ${h}`);
+  try {
+    git(['init']);
+    git(['config', 'user.email', 'test@example.com']);
+    git(['config', 'user.name', 'Test User']);
+
+    fs.mkdirSync(path.join(tmpRepo, 'public', 'js', 'views'), { recursive: true });
+    fs.mkdirSync(path.join(tmpRepo, 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRepo, 'public', 'index.html'), '<button data-tab="appearance">Appearance</button>\n<table><th>Stock</th></table>\n', 'utf8');
+    fs.writeFileSync(path.join(tmpRepo, 'public', 'js', 'views', 'pos.js'), 'export function renderBrandChips() {}\n', 'utf8');
+    git(['add', '.']);
+    git(['commit', '-m', 'Initial release']);
+    git(['tag', 'v1.0']);
+
+    // Edit an unrelated line in index.html + uncommitted fix in pos.js + test
+    fs.writeFileSync(path.join(tmpRepo, 'public', 'index.html'), '<button data-tab="appearance">Appearance</button>\n<table><th>Stock</th><th title="Low-stock threshold">Min Stock Alert</th></table>\n', 'utf8');
+    fs.writeFileSync(path.join(tmpRepo, 'public', 'js', 'views', 'pos.js'), 'export function renderBrandChips(inStock) { return inStock; }\n', 'utf8');
+    fs.writeFileSync(path.join(tmpRepo, 'tests', 'pos.test.js'), "test('brand chips hide zero-stock items when In stock only is checked', () => {});\n", 'utf8');
+
+    const isolatedChangelog = path.join(tmpRepo, 'CHANGELOG.md');
+    const highlights = generateReleaseHighlights({
+      version: '1.1',
+      prevTag: 'v1.0',
+      changelogPath: isolatedChangelog,
+      repoDir: tmpRepo
+    });
+
+    assert.ok(Array.isArray(highlights) && highlights.length >= 2, 'must return highlights for each changed area');
+    const joined = highlights.join('\n');
+    assert.doesNotMatch(joined, /Settings Navigation Revamp/i, 'must not emit untouched Appearance tab feature');
+    assert.doesNotMatch(joined, /1366x768/, 'must not emit unrelated 1366 ergonomics milestone');
+    assert.match(joined, /Min Stock Alert/, 'must surface actual added UI label from diff');
+    assert.match(joined, /brand chips hide zero-stock items/i, 'must surface newly added test summary from diff');
+    for (const h of highlights) {
+      assert.doesNotMatch(h, /—/, `Highlight must not contain em dash: ${h}`);
+    }
+    assert.equal(getPreviousTag('1.0', tmpRepo), '', 'getPreviousTag must not return v1.0 as prior to 1.0');
+  } finally {
+    fs.rmSync(tmpRepo, { recursive: true, force: true });
   }
+});
 
-  // Must detect smaller monitor counter ergonomics for v2.2
-  const hasErgonomics = highlights.some(h => /Ergonomics|monitors|typography|1366/i.test(h));
-  assert.ok(hasErgonomics, 'highlights must include smaller monitor counter ergonomics');
-
-  // Must also generate clean highlights for current version
-  const currentHighlights = generateReleaseHighlights();
-  assert.ok(Array.isArray(currentHighlights), 'current highlights must be an array');
-  assert.ok(currentHighlights.length > 0, 'current highlights must not be empty');
-  for (const h of currentHighlights) {
-    assert.doesNotMatch(h, /—/, `Current highlight must not contain em dash: ${h}`);
-  }
+test('generate-changelog CLI --stdout outputs notes without writing CHANGELOG.md or RELEASE_NOTES.md', () => {
+  const clBefore = fs.readFileSync(path.join(ROOT_DIR, 'CHANGELOG.md'), 'utf8');
+  const rnBefore = fs.readFileSync(path.join(ROOT_DIR, 'RELEASE_NOTES.md'), 'utf8');
+  const out = execFileSync(process.execPath, ['scripts/generate-changelog.js', '--version', 'v1.1', '--stdout'], {
+    cwd: ROOT_DIR,
+    encoding: 'utf8'
+  });
+  assert.match(out, /# What is New in TechParts POS \(v1\.1\)/);
+  assert.doesNotMatch(out, /Settings Navigation Revamp/i);
+  assert.doesNotMatch(out, /—/);
+  assert.equal(fs.readFileSync(path.join(ROOT_DIR, 'CHANGELOG.md'), 'utf8'), clBefore);
+  assert.equal(fs.readFileSync(path.join(ROOT_DIR, 'RELEASE_NOTES.md'), 'utf8'), rnBefore);
 });
 
 test('updateChangelogFile writes Keep a Changelog structure and is idempotent', () => {

@@ -145,6 +145,7 @@ export function setPartCategory(category) {
 
 export function setInStockOnly(on) {
   S.posInStockOnly = !!on;
+  renderBrandChips();
   renderPartsTable();
 }
 
@@ -588,8 +589,9 @@ export function renderBrandChips() {
   const profileItems = (mode !== 'hybrid')
     ? catalog.filter(i => itemMatchesProfile(i, mode))
     : catalog;
+  const chipItems = S.posInStockOnly ? profileItems.filter(i => i.stock_quantity > 0) : profileItems;
 
-  const catalogBrands = [...new Set(profileItems.map(i => (i.brand || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const catalogBrands = [...new Set(chipItems.map(i => (i.brand || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const templateBrands = (TEMPLATE_BRANDS?.[mode] || TEMPLATE_BRANDS?.retail || []).filter(b => b !== 'Other');
   const brands = catalogBrands.length > 0 ? catalogBrands : templateBrands;
 

@@ -299,20 +299,56 @@ function Get-PlainChangelog([string]$versionTag) {
     $genScript = Join-Path $rootDir "scripts\generate-changelog.js"
     if (Test-Path $genScript) {
         try {
-            $cmdArgs = @($genScript, "--version", $versionTag)
+            $cmdArgs = @($genScript, "--version", $versionTag, "--stdout")
             if (-not [string]::IsNullOrWhiteSpace($Changelog)) {
                 $cmdArgs += @("--note", $Changelog)
             }
-            & node $cmdArgs | Out-Null
+            $draftOut = & node $cmdArgs 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $joined = ($draftOut -join "`n").Trim()
+                if (-not [string]::IsNullOrWhiteSpace($joined)) {
+                    return $joined
+                }
+            }
         } catch {}
     }
 
-    $relNotes = Join-Path $rootDir "RELEASE_NOTES.md"
-    if (Test-Path $relNotes) {
-        return [System.IO.File]::ReadAllText($relNotes, [System.Text.Encoding]::UTF8)
-    }
-
     return Get-DefaultReleaseNotes $versionTag
+}
+
+function Sync-ChangelogFile([string]$versionTag, [string]$editedNotes) {
+    $genScript = Join-Path $rootDir "scripts\generate-changelog.js"
+    if (Test-Path $genScript) {
+        $cmdArgs = @($genScript, "--version", $versionTag, "--changelog-only")
+        if (-not [string]::IsNullOrWhiteSpace($Changelog)) {
+            $cmdArgs += @("--note", $Changelog)
+        }
+        & node $cmdArgs | Out-Null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($editedNotes)) {
+        $changelogPath = Join-Path $rootDir "CHANGELOG.md"
+        if (Test-Path $changelogPath) {
+            $bulletsMatch = [regex]::Match($editedNotes, "(?s)### Highlights in this update:\s*(.*?)(?=\r?\n\r?\n---|\r?\n\r?\n###|$)")
+            if ($bulletsMatch.Success) {
+                $bulletsText = $bulletsMatch.Groups[1].Value.Trim()
+                $today = (Get-Date).ToString("yyyy-MM-dd")
+                $newEntry = "## [$versionTag] - $today`r`n`r`n### Highlights & Changes`r`n$bulletsText`r`n"
+                $clContent = [System.IO.File]::ReadAllText($changelogPath, [System.Text.Encoding]::UTF8)
+                $secRegex = "(?s)##\s*\[" + [regex]::Escape($versionTag) + "\].*?(?=\r?\n##\s*\[|$)"
+                if ($clContent -match $secRegex) {
+                    $clContent = [regex]::Replace($clContent, $secRegex, $newEntry.Trim() + "`r`n`r`n")
+                } else {
+                    $idx = $clContent.IndexOf("## [")
+                    if ($idx -ge 0) {
+                        $clContent = $clContent.Substring(0, $idx) + $newEntry + "`r`n" + $clContent.Substring($idx)
+                    } else {
+                        $clContent = $clContent.TrimEnd() + "`r`n`r`n" + $newEntry
+                    }
+                }
+                [System.IO.File]::WriteAllText($changelogPath, $clContent, [System.Text.Encoding]::UTF8)
+            }
+        }
+    }
 }
 
 $releaseNotesPath = Join-Path $rootDir "RELEASE_NOTES.md"
@@ -358,21 +394,6 @@ if ($DryRun) {
                 $edited = [System.IO.File]::ReadAllText($tempFile, [System.Text.Encoding]::UTF8).Trim()
                 if (-not [string]::IsNullOrWhiteSpace($edited)) {
                     $releaseNotes = $edited
-                    $changelogPath = Join-Path $rootDir "CHANGELOG.md"
-                    if (Test-Path $changelogPath) {
-                        $bulletsMatch = [regex]::Match($edited, "(?s)### Highlights in this update:\s*(.*?)(?=\r?\n\r?\n---|\r?\n\r?\n###|$)")
-                        if ($bulletsMatch.Success) {
-                            $bulletsText = $bulletsMatch.Groups[1].Value.Trim()
-                            $today = (Get-Date).ToString("yyyy-MM-dd")
-                            $newEntry = "## [$tag] - $today`r`n`r`n### Highlights & Changes`r`n$bulletsText`r`n"
-                            $clContent = [System.IO.File]::ReadAllText($changelogPath, [System.Text.Encoding]::UTF8)
-                            $secRegex = "(?s)##\s*\[" + [regex]::Escape($tag) + "\].*?(?=\r?\n##\s*\[|$)"
-                            if ($clContent -match $secRegex) {
-                                $clContent = [regex]::Replace($clContent, $secRegex, $newEntry.Trim() + "`r`n`r`n")
-                                [System.IO.File]::WriteAllText($changelogPath, $clContent, [System.Text.Encoding]::UTF8)
-                            }
-                        }
-                    }
                 }
                 Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
             }
@@ -383,7 +404,8 @@ if ($DryRun) {
         }
     }
 
-    # Automatically sync the active release notes to RELEASE_NOTES.md
+    # Commit confirmed highlights to CHANGELOG.md and RELEASE_NOTES.md
+    Sync-ChangelogFile $tag $releaseNotes
     $normalizedNotes = $releaseNotes -replace "(?<!`r)`n", "`r`n"
     [System.IO.File]::WriteAllText($releaseNotesPath, $normalizedNotes, [System.Text.Encoding]::UTF8)
 

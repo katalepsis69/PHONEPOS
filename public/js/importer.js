@@ -18,7 +18,7 @@ const HEADER_ALIASES = {
   price_retail: ['priceretail', 'retail', 'retailprice', 'price', 'sellingprice', 'sellprice', 'srp'],
   price_technician: ['pricetechnician', 'technician', 'technicianprice', 'techprice', 'wholesale', 'wholesaleprice'],
   stock_quantity: ['stockquantity', 'stock', 'qty', 'quantity', 'stockqty', 'onhand', 'stockonhand', 'qtyonhand'],
-  min_stock_alert: ['minstockalert', 'minstock', 'reorderpoint', 'minimumstock'],
+  min_stock_alert: ['minstockalert', 'minstock', 'reorderpoint', 'minimumstock', 'alertstock', 'stockalert', 'minalert'],
   supplier: ['supplier', 'vendor', 'distributor'],
   location: ['location', 'bin', 'shelf', 'rack', 'storagelocation'],
 };

@@ -342,7 +342,11 @@ function normalizeRow(r) {
     if (res['Stock Qty'] != null) res.stock_quantity = res['Stock Qty'];
     else if (res['Stock Quantity'] != null) res.stock_quantity = res['Stock Quantity'];
   }
-  if (res.min_stock_alert == null && res['Min Stock Alert'] != null) res.min_stock_alert = res['Min Stock Alert'];
+  if (res.min_stock_alert == null) {
+    if (res['Min Stock Alert'] != null) res.min_stock_alert = res['Min Stock Alert'];
+    else if (res['Alert Stock'] != null) res.min_stock_alert = res['Alert Stock'];
+    else if (res['Stock Alert'] != null) res.min_stock_alert = res['Stock Alert'];
+  }
   if (res.supplier == null && res['Supplier'] != null) res.supplier = res['Supplier'];
   if (res.location == null && res['Location'] != null) res.location = res['Location'];
   if (res.item_name == null) {

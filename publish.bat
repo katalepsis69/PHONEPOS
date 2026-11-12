@@ -140,9 +140,9 @@ if errorlevel 1 echo [WARN] Installer step failed. The staged executable is stil
 
 :stage
 echo.
-echo [4/4] Stage publish copy and update changelog
-"!NODE_BIN!" scripts\generate-changelog.js
-if errorlevel 1 echo [WARN] Automated changelog update reported warnings.
+echo [4/4] Stage publish copy and preview changelog
+"!NODE_BIN!" scripts\generate-changelog.js --dry-run
+if errorlevel 1 echo [WARN] Automated changelog preview reported warnings.
 
 "!NODE_BIN!" -e "const fs=require('node:fs'),cp=require('node:crypto'),pa=require('node:path');const ver=JSON.parse(fs.readFileSync('package.json','utf8')).version;const d=new Date(),p=n=>String(n).padStart(2,'0');const dst='publish'+pa.sep+'TechPartsPOS-'+ver+'-'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+'.exe';fs.mkdirSync('publish',{recursive:true});fs.copyFileSync('release'+pa.sep+'customer'+pa.sep+'TechPartsPOS.exe',dst);const buf=fs.readFileSync(dst);const h=cp.createHash('sha256').update(buf).digest('hex');fs.writeFileSync(dst+'.sha256.txt',h+'  '+pa.basename(dst)+'\n');const mb=(buf.length/(1024*1024)).toFixed(2);console.log('       Staged:    '+dst+' ('+mb+' MB)');console.log('       Checksum:  '+dst+'.sha256.txt');console.log('       SHA-256:   '+h);"
 if errorlevel 1 (

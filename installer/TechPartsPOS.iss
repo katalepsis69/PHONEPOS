@@ -16,7 +16,7 @@
 ; Rewritten by scripts/publish-release.ps1 on every release; keep it equal to
 ; package.json's version and src/updater.js's CURRENT_VERSION.
 #ifndef MyAppVersion
-#define MyAppVersion "1.0"
+#define MyAppVersion "1.1"
 #endif
 #define MyAppPublisher "TechParts"
 #define MyAppExeName "TechPartsPOS.exe"

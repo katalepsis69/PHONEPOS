@@ -380,3 +380,95 @@ test('fractional order lines show the centavo the register charges', () => {
   ctx.document.getElementById = id => (id === 'pos-discount' ? { value: '' } : boxes[id] || null);
   assert.equal(ctx.cartTotals().subtotal, 3.7, 'cart totals must agree with the displayed line');
 });
+
+test('renderBrandChips skips out-of-stock brands when posInStockOnly is on and CSS bounds chip height', () => {
+  const pos = source('public/js/views/pos.js');
+  const css = source('public/styles.css');
+
+  assert.match(css, /\.brand-chips\s*\{[^}]*max-height:\s*\d+px;[^}]*overflow-y:\s*auto;/s);
+
+  const fnStart = pos.indexOf('export function renderBrandChips()');
+  const fnEnd = pos.indexOf('\nexport function renderCategoryOptions()');
+  const code = pos.slice(fnStart, fnEnd).replace(/^export /, '');
+
+  const box = { innerHTML: '' };
+  const ctx = vm.createContext({
+    S: {
+      shopSettings: { business_type: 'phone' },
+      posInStockOnly: true,
+      posBrandFilter: '',
+      posCatalog: [
+        { brand: 'Apple', model_name: 'iPhone 11', part_type: 'LCD', stock_quantity: 4 },
+        { brand: 'ZeroBrand', model_name: 'Model X', part_type: 'Battery', stock_quantity: 0 }
+      ]
+    },
+    TEMPLATE_BRANDS: { phone: ['Apple', 'Samsung'] },
+    itemMatchesProfile: () => true,
+    escHtml: s => String(s),
+    document: { getElementById: id => (id === 'pos-brand-chips' ? box : null) }
+  });
+  vm.runInContext(code, ctx);
+  ctx.renderBrandChips();
+
+  assert.ok(box.innerHTML.includes('Apple'), 'in-stock brand should render');
+  assert.ok(!box.innerHTML.includes('ZeroBrand'), '0-stock brand must stay hidden while In stock only is checked');
+});
+
+test('openImportPreview displays Min Stock Alert and swaps Brand/Model when clicked', async () => {
+  const inv = source('public/js/views/inventory.js');
+  const { matchHeaders } = await import('../public/js/importer.js');
+
+  const fnStart = inv.indexOf('let importState = null;');
+  const fnEnd = inv.indexOf('\nexport function openImportPreview(');
+  const code = inv.slice(fnStart, fnEnd)
+    .replace('function ensureImportPreviewModal()', 'function ensureImportPreviewModal_unused()')
+    .replace(/^export /gm, '');
+
+  const makeEl = () => {
+    const classes = new Set();
+    let clickFn = null;
+    return {
+      innerHTML: '',
+      textContent: '',
+      classList: { add: c => classes.add(c), remove: c => classes.delete(c), has: c => classes.has(c) },
+      querySelector: sel => (sel === '#import-swap-btn' ? { addEventListener: (_ev, fn) => { clickFn = fn; } } : null),
+      triggerSwap: () => clickFn && clickFn()
+    };
+  };
+  const els = {
+    'import-swap-warning': makeEl(),
+    'import-preview-note': makeEl(),
+    'import-preview-table': makeEl()
+  };
+  const rows = [
+    ['Brand', 'Model Name', 'Part Type', 'Stock Qty', 'Min Stock Alert'],
+    ...Array.from({ length: 22 }, (_, i) => [`Part ${i}`, 'Apple', 'LCD', '5', ''])
+  ];
+  const ctx = vm.createContext({
+    S: { shopSettings: { default_retail_markup_pct: 50, default_wholesale_markup_pct: 20 } },
+    t: (_k, fb) => fb,
+    escHtml: s => String(s),
+    matchHeaders,
+    rows,
+    document: { getElementById: id => els[id] || null }
+  });
+  const state = vm.runInContext(`${code}\nimportState = { rows, header: rows[0], auto: matchHeaders(rows[0]), op_id: 'op1' }; renderImportPreviewTable(); importState;`, ctx);
+
+  assert.equal(els['import-swap-warning'].classList.has('hidden'), false, 'swap warning must show when Brands >> Models');
+  assert.ok(els['import-preview-table'].innerHTML.includes('Min Stock Alert'), 'preview must show Min Stock Alert header');
+  assert.ok(els['import-preview-table'].innerHTML.includes('3 <span class="tag tag--quiet text-xs">default</span>'), 'blank alert previews default 3');
+  assert.equal(state.auto.brand, 0);
+
+  els['import-swap-warning'].triggerSwap();
+  assert.equal(state.auto.brand, 1, 'swap button flips Brand and Model column mapping');
+  assert.equal(state.auto.model_name, 0);
+  assert.equal(els['import-swap-warning'].classList.has('hidden'), true, 'swap warning clears after swap');
+});
+
+test('inventory table renders an explicit Min Stock Alert column', () => {
+  const html = source('public/index.html');
+  const inv = source('public/js/views/inventory.js');
+  assert.match(html, /data-i18n="inv\.th_min_alert"[^>]*>Min Stock Alert<\/th>/);
+  assert.match(inv, /showSkeleton\('inventory-tbody', 10\)/);
+  assert.match(inv, /<td class="is-mid font-mono" style="color: var\(--txt-2\);">\$\{item\.min_stock_alert \?\? 0\}<\/td>/);
+});

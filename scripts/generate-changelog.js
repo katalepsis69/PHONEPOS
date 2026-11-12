@@ -4,7 +4,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execSync } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 
@@ -72,235 +72,327 @@ function getPriorReleaseBullets(currentVersion, changelogPath = path.join(ROOT_D
   }
 }
 
-function getPreviousTag(currentVersion) {
+function runGit(args, cwd = ROOT_DIR) {
   try {
-    const cleanCurrent = (currentVersion || '').replace(/^v/i, '');
-    const tags = execSync('git tag --sort=-v:refname', { cwd: ROOT_DIR, encoding: 'utf8' })
-      .split('\n')
-      .map(t => t.trim())
-      .filter(Boolean);
-
-    for (const tag of tags) {
-      const cleanTag = tag.replace(/^v/i, '');
-      if (isPriorVersion(cleanTag, cleanCurrent)) {
-        return tag;
-      }
-    }
-    return tags[tags.length - 1] || '';
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: 10 * 1024 * 1024
+    }).trimEnd();
   } catch {
     return '';
   }
 }
 
-function getTagDate(tag) {
-  if (!tag) return null;
-  try {
-    const dateStr = execSync(`git log -1 --format="%ci" ${tag}`, { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
-    if (dateStr) {
-      const parsed = new Date(dateStr);
-      if (!isNaN(parsed.getTime())) return parsed;
+function tagExistsInGit(tag, cwd = ROOT_DIR) {
+  if (!tag) return false;
+  return Boolean(runGit(['rev-parse', '--verify', `${tag}^{commit}`], cwd));
+}
+
+/**
+ * Find the newest git tag strictly older than `currentVersion`.
+ * Never returns the current release tag itself.
+ */
+function getPreviousTag(currentVersion, cwd = ROOT_DIR) {
+  const cleanCurrent = (currentVersion || '').replace(/^v/i, '');
+  const tags = runGit(['tag', '--sort=-v:refname'], cwd)
+    .split('\n')
+    .map(t => t.trim())
+    .filter(Boolean);
+
+  for (const tag of tags) {
+    const cleanTag = tag.replace(/^v/i, '');
+    if (isPriorVersion(cleanTag, cleanCurrent)) {
+      return tag;
     }
-  } catch {}
-  return null;
-}
-
-function getGitCommitsSinceTag(tag) {
-  if (!tag) return [];
-  try {
-    const raw = execSync(`git log "${tag}..HEAD" --pretty=format:"%s"`, { cwd: ROOT_DIR, encoding: 'utf8' });
-    return raw
-      .split('\n')
-      .map(l => l.trim())
-      .filter(msg => {
-        if (!msg) return false;
-        if (/^(merge|chore|bump|publish|test(\(.*\))?:)/i.test(msg)) return false;
-        if (/publish-release/i.test(msg)) return false;
-        if (/^Release\s+v/i.test(msg)) return false;
-        return true;
-      })
-      .map(msg => {
-        let clean = msg;
-        const match = msg.match(/^(feat|fix|refactor|docs)(\([^\)]+\))?:\s*(.+)$/i);
-        if (match) clean = match[3];
-        return clean.charAt(0).toUpperCase() + clean.slice(1);
-      });
-  } catch {
-    return [];
   }
+  return '';
 }
 
-function getModifiedFilesSince(sinceDate) {
-  const cutoff = sinceDate || new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  const targets = ['public', 'src', 'tests', 'scripts', 'cloud'];
-  const modified = [];
+function getGitCommitsSinceTag(tag, cwd = ROOT_DIR) {
+  if (!tagExistsInGit(tag, cwd)) return [];
+  const raw = runGit(['log', `${tag}..HEAD`, '--pretty=format:%s'], cwd);
+  if (!raw) return [];
+  return raw
+    .split('\n')
+    .map(l => l.trim())
+    .filter(msg => {
+      if (!msg) return false;
+      if (/^(merge|chore|bump|publish|test(\(.*\))?:)/i.test(msg)) return false;
+      if (/publish-release/i.test(msg)) return false;
+      if (/^Release\s+v/i.test(msg)) return false;
+      return true;
+    })
+    .map(msg => {
+      let clean = msg;
+      const match = msg.match(/^(feat|fix|refactor|docs)(\([^)]+\))?:\s*(.+)$/i);
+      if (match) clean = match[3];
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
+    });
+}
 
-  function walk(dir) {
-    if (!fs.existsSync(dir)) return;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const ent of entries) {
-      const full = path.join(dir, ent.name);
-      if (ent.isDirectory()) {
-        if (ent.name === 'node_modules' || ent.name === '.git' || ent.name.startsWith('t_')) continue;
-        walk(full);
-      } else if (ent.isFile()) {
-        try {
-          const stat = fs.statSync(full);
-          if (stat.mtime > cutoff) {
-            modified.push({
-              relPath: path.relative(ROOT_DIR, full).replace(/\\/g, '/'),
-              fullPath: full,
-              mtime: stat.mtime
-            });
-          }
-        } catch {}
+const IGNORED_DIFF_PATHS = [
+  /^CHANGELOG\.md$/i,
+  /^RELEASE_NOTES\.md$/i,
+  /^package(-lock)?\.json$/i,
+  /^public\/tailwind\.build\.css$/,
+  /^(dist|release|publish|updates|node_modules|\.git)\//,
+  /^tests\/t_/
+];
+
+function isRelevantRepoPath(relPath) {
+  const normalized = String(relPath || '').replace(/\\/g, '/').trim();
+  if (!normalized) return false;
+  return !IGNORED_DIFF_PATHS.some(re => re.test(normalized));
+}
+
+const AREA_RULES = [
+  { area: 'Repair Counter (POS)', match: p => /pos\.js$|pos-helpers|^public\/styles\.css$/.test(p) },
+  { area: 'Inventory & Import', match: p => /inventory|importer|catalog/.test(p) },
+  { area: 'Customer Credit (Utang)', match: p => /credits?\.js$/.test(p) },
+  { area: 'Thermal Printing', match: p => /printer\.js$|receipts\.js$/.test(p) },
+  { area: 'Reports & Analytics', match: p => /reports?\.|dashboard/.test(p) },
+  { area: 'Cloud Sync', match: p => /^cloud/.test(p) },
+  { area: 'Security & Licensing', match: p => /auth\.js$|license/.test(p) },
+  { area: 'Updater & Packaging', match: p => /updater\.js$|^scripts\/|^installer\/|publish\.bat$/.test(p) },
+  { area: 'Server & Database', match: p => /^src\//.test(p) },
+  { area: 'Counter UI', match: p => /^public\//.test(p) }
+];
+
+function classifyFileArea(relPath) {
+  for (const rule of AREA_RULES) {
+    if (rule.match(relPath)) return rule.area;
+  }
+  return 'General';
+}
+
+function parseUnifiedDiffByFile(rawDiff) {
+  const byFile = new Map();
+  let current = null;
+  for (const line of String(rawDiff || '').split(/\r?\n/)) {
+    const fileMatch = line.match(/^diff --git a\/.+ b\/(.+)$/);
+    if (fileMatch) {
+      const file = fileMatch[1].replace(/\\/g, '/');
+      current = { path: file, addedLines: [], hunkContexts: [] };
+      byFile.set(file, current);
+      continue;
+    }
+    if (!current) continue;
+    if (line.startsWith('@@')) {
+      const ctxMatch = line.match(/^@@[^@]+@@\s*(.+)$/);
+      if (ctxMatch && ctxMatch[1].trim()) current.hunkContexts.push(ctxMatch[1].trim());
+      continue;
+    }
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      current.addedLines.push(line.slice(1));
+    }
+  }
+  return byFile;
+}
+
+/**
+ * Collect actual git diff hunks and untracked files relative to `baseRef`
+ * (or working tree against HEAD when no base tag exists).
+ */
+function collectDiffEntries(baseRef, cwd = ROOT_DIR) {
+  const ref = tagExistsInGit(baseRef, cwd) ? baseRef : (tagExistsInGit('HEAD', cwd) ? 'HEAD' : '');
+  const byFile = new Map();
+
+  if (ref) {
+    const changed = runGit(['diff', '--name-only', ref], cwd)
+      .split(/\r?\n/)
+      .map(s => s.trim())
+      .filter(isRelevantRepoPath);
+    if (changed.length > 0) {
+      const rawDiff = runGit(['diff', '-U0', '--no-color', ref, '--', ...changed], cwd);
+      for (const [k, v] of parseUnifiedDiffByFile(rawDiff)) {
+        byFile.set(k, v);
       }
     }
   }
 
-  for (const t of targets) {
-    walk(path.join(ROOT_DIR, t));
-  }
-
-  return modified.sort((a, b) => b.mtime - a.mtime);
-}
-
-function inspectCodebaseChanges(modifiedFiles) {
-  const highlights = [];
-  const paths = modifiedFiles.map(f => f.relPath);
-
-  // 1. Workstation Typography & Theme Presets (5 accents, 4 scale presets, tabular figures)
-  if (paths.some(p => p.includes('theme.js') || p.includes('typography-presets') || (p.includes('styles.css') && fs.readFileSync(path.join(ROOT_DIR, p), 'utf8').includes('data-accent')))) {
-    highlights.push('Workstation Typography & Themes: 5 shop color accents, 4 readable text scale presets (90% to 125%), locked clean sans display, and monospace tabular digits.');
-  }
-
-  // 2. Settings Modal Navigation Revamp (6 organized tabs, cashier account & security unification)
-  if (paths.some(p => p.includes('typography-presets.test.js')) || (paths.includes('public/index.html') && fs.readFileSync(path.join(ROOT_DIR, 'public/index.html'), 'utf8').includes('data-tab="appearance"'))) {
-    highlights.push('Settings Navigation Revamp: 6 organized settings tabs (Store, Staff & Security, Printing, Appearance, Cloud Sync, Data) with threshold controls and unified cashier accounts.');
-  }
-
-  // 3. Manager Phone Reports (/api/report/* namespace, mobile reporting view)
-  if (paths.some(p => p.includes('report.html') || p.includes('report.js') || p.includes('report.test.js'))) {
-    highlights.push('Manager Phone Reports: Secure token-authenticated mobile report endpoint (/api/report/*) for off-site till and revenue monitoring.');
-  }
-
-  // 4. Cloud Sync Service & Hardening (multi-shop synchronization service)
-  if (paths.some(p => p.startsWith('cloud/') || p.includes('deploy-cloud.js') || p.includes('cloud-hardening.test.js'))) {
-    highlights.push('Cloud Sync Hardening: Hardened multi-shop synchronization service with scoped bearer tokens and automated cloud deployment.');
-  }
-
-  // 5. Counter Ergonomics & 1366px Monitor Layout (v2.2 feature)
-  const stylesPath = path.join(ROOT_DIR, 'public', 'styles.css');
-  if (fs.existsSync(stylesPath)) {
+  const untracked = runGit(['ls-files', '--others', '--exclude-standard'], cwd)
+    .split(/\r?\n/)
+    .map(s => s.trim())
+    .filter(isRelevantRepoPath);
+  for (const rel of untracked) {
     try {
-      const styles = fs.readFileSync(stylesPath, 'utf8');
-      if (styles.includes('@media (max-width: 1366px)') && (paths.includes('public/styles.css') || paths.includes('public/index.html'))) {
-        highlights.push('Counter Ergonomics: Compact workstation spacing and enlarged typography (cells 14px, part names 14.5px bold, prices 15px tabular numbers, grand total 25px bold green) for 1366x768 and 1280x800 counter monitors.');
-        highlights.push('Automatic Rail Collapse: Navigation rail automatically collapses from 250px to 68px icon mode on screens 1366px wide or smaller, reclaiming 182px of horizontal table space.');
-      }
+      const content = fs.readFileSync(path.join(cwd, rel), 'utf8');
+      byFile.set(rel, { path: rel, addedLines: content.split(/\r?\n/).slice(0, 120), hunkContexts: [] });
     } catch {}
   }
 
-  // 6. Responsive Font Scaling in backoffice / inventory
-  if (paths.some(p => p.includes('backoffice.js') || p.includes('inventory.js') || p.includes('auth.js'))) {
-    highlights.push('Responsive Font Scaling: Standardized badges, wholesale tags, customer status pills, and utang payment references to responsive scale-aware sizes.');
-  }
-
-  // 7. In-App Updater improvements
-  if (paths.some(p => p.includes('updater.js'))) {
-    highlights.push('Software Updates: Safe offline update staging with strict SHA-256 verification and atomic binary installation.');
-  }
-
-  // 8. Security & Manager PIN
-  if (paths.some(p => p.includes('license.js') || p.includes('build-license-exe.js') || p.includes('set-pin.js'))) {
-    highlights.push('Security & Licensing: Cryptographic offline RSA license validation and salted PBKDF2 manager PIN protection.');
-  }
-
-  // 9. Thermal Receipt Printing
-  if (paths.some(p => p.includes('printer.js') || p.includes('receipts.js'))) {
-    highlights.push('Thermal Receipt Printing: Reliable 58mm and 80mm ESC/POS receipt generation, claim stubs, and automated cash drawer kick.');
-  }
-
-  // 10. Customer Credit ("Utang")
-  if (paths.some(p => p.includes('credits.js'))) {
-    highlights.push('Customer Credit (Utang): FIFO credit allocation and ledger settlement improvements.');
-  }
-
-  // 11. Repair Counter & POS
-  if (paths.some(p => p.includes('pos.js') || p.includes('sales.js'))) {
-    highlights.push('Repair Counter: Fast job intake, checkout shortcuts, and payment handling improvements.');
-  }
-
-  // 12. Automated Test Coverage
-  if (paths.some(p => p.startsWith('tests/'))) {
-    highlights.push('Automated Test Suite: Comprehensive test suite verification ensuring zero floating-point drift, database safety, and UI resilience.');
-  }
-
-  // 13. Inventory Capital & Clean Import Template
-  if (paths.some(p => p.includes('template-chooser') || (p.includes('inventory.js') && fs.readFileSync(path.join(ROOT_DIR, p), 'utf8').includes('IMPORT_TEMPLATE_HEADERS')))) {
-    highlights.push('Inventory Capital & Blank Template: Standardized cost price to Capital across all screens and exports; download template is now completely empty with zero dummy rows.');
-    highlights.push('Wholesale Pricing & Catalog Transfer: Fixed CSV exports to use friendly Capital and Wholesale Price headers for clean multi-PC catalog updates.');
-  }
-
-  return highlights;
+  return [...byFile.values()];
 }
 
-function generateReleaseHighlights({ version, prevTag, customNote, changelogPath } = {}) {
+function extractAddedSignals(entry) {
+  const tests = [];
+  const uiLabels = [];
+  const symbols = [];
+  const seen = new Set();
+  const pushUnique = (arr, val, maxLen = 80) => {
+    const clean = String(val || '').replace(/—/g, ' - ').replace(/\s+/g, ' ').trim();
+    if (!clean || clean.length < 3 || clean.length > maxLen) return;
+    if (seen.has(clean.toLowerCase())) return;
+    seen.add(clean.toLowerCase());
+    arr.push(clean);
+  };
+
+  for (const line of entry.addedLines) {
+    const testMatch = line.match(/^\s*(?:test|it)\s*\(\s*(['"`])(.+?)\1/);
+    if (testMatch) {
+      pushUnique(tests, testMatch[2], 140);
+      continue;
+    }
+
+    const i18nMatch = line.match(/['"][a-z]+\.[a-z0-9_]+['"]\s*:\s*['"]([^'"]+)['"]/i);
+    if (i18nMatch) pushUnique(uiLabels, i18nMatch[1], 60);
+
+    const htmlTitle = line.match(/\btitle="([^"]{4,60})"/i);
+    if (htmlTitle) pushUnique(uiLabels, htmlTitle[1], 60);
+
+    for (const m of line.matchAll(/<(?:button|strong|th|h[1-6])[^>]*>([^<$]{3,50})<\//gi)) {
+      if (!m[1].includes('{')) {
+        pushUnique(uiLabels, m[1].replace(/&amp;/g, '&'), 60);
+      }
+    }
+
+    const fnMatch = line.match(/^\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z0-9_]+)/);
+    if (fnMatch) pushUnique(symbols, fnMatch[1], 50);
+
+    const routeMatch = line.match(/['"](\/api\/[a-z0-9_\/:-]+)['"]/i);
+    if (routeMatch) pushUnique(symbols, routeMatch[1], 60);
+
+    const cssMatch = line.match(/^\s*\.([a-z][a-z0-9_-]{2,})\s*\{/i);
+    if (cssMatch) pushUnique(symbols, `.${cssMatch[1]}`, 40);
+  }
+
+  for (const ctx of entry.hunkContexts) {
+    const fnCtx = ctx.match(/(?:function\s+)([a-zA-Z0-9_]+)/);
+    if (fnCtx) pushUnique(symbols, fnCtx[1], 50);
+  }
+
+  return { tests, uiLabels, symbols };
+}
+
+function matchTestArea(testDesc, testPath) {
+  const hay = `${testPath} ${testDesc}`.toLowerCase();
+  if (/brandchip|brand chips|posinstock|repair counter|\bpos\b/.test(hay)) return 'Repair Counter (POS)';
+  if (/import|min stock|min_stock|inventory|template|wholesale|capital/.test(hay)) return 'Inventory & Import';
+  if (/utang|credit/.test(hay)) return 'Customer Credit (Utang)';
+  if (/print|receipt|esc\/pos|drawer/.test(hay)) return 'Thermal Printing';
+  if (/report|dashboard|analytics|profit/.test(hay)) return 'Reports & Analytics';
+  if (/cloud/.test(hay)) return 'Cloud Sync';
+  if (/pin|license|recovery|auth/.test(hay)) return 'Security & Licensing';
+  if (/updater|installer|changelog|publish/.test(hay)) return 'Updater & Packaging';
+  return '';
+}
+
+/**
+ * Summarize actual changed files and added diff hunks into plain-English bullets.
+ */
+function summarizeDiffEntries(entries) {
+  if (!entries || entries.length === 0) return [];
+
+  const areaBuckets = new Map();
+  const areaTests = new Map();
+  const unassignedTests = [];
+
+  for (const entry of entries) {
+    const sig = extractAddedSignals(entry);
+    if (entry.path.startsWith('tests/')) {
+      for (const td of sig.tests) {
+        const area = matchTestArea(td, entry.path);
+        if (area) {
+          if (!areaTests.has(area)) areaTests.set(area, []);
+          areaTests.get(area).push(td);
+        } else {
+          unassignedTests.push(td);
+        }
+      }
+      continue;
+    }
+
+    const area = classifyFileArea(entry.path);
+    if (!areaBuckets.has(area)) {
+      areaBuckets.set(area, { files: new Set(), uiLabels: [], symbols: [] });
+    }
+    const bucket = areaBuckets.get(area);
+    bucket.files.add(path.basename(entry.path));
+    for (const lbl of sig.uiLabels) {
+      if (!bucket.uiLabels.includes(lbl)) bucket.uiLabels.push(lbl);
+    }
+    for (const sym of sig.symbols) {
+      if (!bucket.symbols.includes(sym)) bucket.symbols.push(sym);
+    }
+  }
+
+  const bullets = [];
+  for (const [area, bucket] of areaBuckets.entries()) {
+    const files = [...bucket.files].slice(0, 3);
+    const tests = (areaTests.get(area) || []).slice(0, 2);
+    const details = [];
+    if (tests.length > 0) details.push(tests.join('; '));
+    const labels = bucket.uiLabels.slice(0, 3);
+    if (labels.length > 0) details.push(labels.join(', '));
+    else if (tests.length === 0 && bucket.symbols.length > 0) details.push(`Updated ${bucket.symbols.slice(0, 3).join(', ')}`);
+
+    const summary = details.length > 0
+      ? `${details.join('; ')} (${files.join(', ')})`
+      : `Updated ${files.join(', ')}`;
+    bullets.push(`${area}: ${summary}`.replace(/—/g, ' - '));
+  }
+
+  if (bullets.length === 0 && unassignedTests.length > 0) {
+    for (const td of unassignedTests.slice(0, 3)) {
+      bullets.push(`Verified: ${td}`.replace(/—/g, ' - '));
+    }
+  }
+
+  return bullets;
+}
+
+/**
+ * Generate release highlight bullets from custom notes, git commits since `prevTag`,
+ * and actual working-tree/branch git diff hunks.
+ */
+function generateReleaseHighlights({ version, prevTag, customNote, changelogPath, repoDir } = {}) {
+  const cwd = repoDir || ROOT_DIR;
   const ver = (version || getPackageVersion()).replace(/^v/i, '');
-  const previous = prevTag || getPreviousTag(ver);
-  const prevDate = getTagDate(previous);
+  const previous = prevTag !== undefined ? prevTag : getPreviousTag(ver, cwd);
   const priorBullets = getPriorReleaseBullets(ver, changelogPath);
 
   const bullets = [];
+  const pushBullet = (text) => {
+    const clean = String(text || '').replace(/—/g, ' - ').trim();
+    if (!clean) return;
+    if (priorBullets.has(clean) || bullets.includes(clean)) return;
+    bullets.push(clean);
+  };
 
   if (customNote && customNote.trim()) {
-    bullets.push(customNote.trim());
+    pushBullet(customNote.trim());
   }
 
-  // 1. Commits from git if present
-  const gitCommits = getGitCommitsSinceTag(previous);
+  const gitCommits = getGitCommitsSinceTag(previous, cwd);
   for (const c of gitCommits) {
-    if (!bullets.includes(c)) bullets.push(c);
+    pushBullet(c);
   }
 
-  // 2. Local filesystem modifications inspection
-  const modifiedFiles = getModifiedFilesSince(prevDate);
-  const areaHighlights = inspectCodebaseChanges(modifiedFiles);
-  for (const h of areaHighlights) {
-    const prefixMatch = h.match(/^([^:]+):/);
-    const prefix = prefixMatch ? prefixMatch[1].trim().toLowerCase() : '';
-    const alreadyPublished = priorBullets.has(h) || (prefix && priorBullets.has(prefix));
-
-    if (!alreadyPublished && !bullets.includes(h)) {
-      bullets.push(h);
+  // Always inspect uncommitted changes; when no new commits exist since `previous`,
+  // inspect the full diff from `previous` (covering both branch commits and working tree).
+  const hasDirtyFiles = Boolean(runGit(['status', '--porcelain'], cwd));
+  if (gitCommits.length === 0 || hasDirtyFiles) {
+    const diffBase = gitCommits.length === 0 ? previous : 'HEAD';
+    const diffEntries = collectDiffEntries(diffBase, cwd);
+    for (const b of summarizeDiffEntries(diffEntries)) {
+      pushBullet(b);
     }
   }
 
-  // 3. Fallback to modified test names if all highlights were previously published
   if (bullets.length === 0) {
-    for (const f of modifiedFiles) {
-      if (f.relPath.startsWith('tests/') && f.relPath.endsWith('.test.js')) {
-        try {
-          const content = fs.readFileSync(f.fullPath, 'utf8');
-          const testMatches = [...content.matchAll(/test\s*\(\s*['"]([^'"]+)['"]/g)];
-          for (const m of testMatches) {
-            const desc = m[1].replace(/—/g, ' - ').trim();
-            if (desc && !bullets.includes(desc) && !priorBullets.has(desc)) {
-              bullets.push(`Verified: ${desc}`);
-              if (bullets.length >= 3) break;
-            }
-          }
-        } catch {}
-      }
-      if (bullets.length >= 3) break;
-    }
-  }
-
-  // 4. Fallback baseline if nothing specific detected
-  if (bullets.length === 0) {
-    bullets.push('Simplified Excel and CSV parts import with automatic markup calculation from cost.');
-    bullets.push('Added friendly bilingual micro-hints (English & Tagalog) throughout counter and screens.');
-    bullets.push('Added fast counter shortcuts for checkout, customer search, price tiers, and claim stubs.');
-    bullets.push('System stability, thermal receipt printing, and automated daily backup improvements.');
+    pushBullet('Maintenance and stability improvements across POS counter, inventory, and backups.');
   }
 
   return bullets;
@@ -520,6 +612,8 @@ function runCli() {
   let version = getPackageVersion();
   let customNote = '';
   let dryRun = false;
+  let stdoutOnly = false;
+  let changelogOnly = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--version' && args[i + 1]) {
@@ -528,11 +622,20 @@ function runCli() {
       customNote = args[++i];
     } else if (args[i] === '--dry-run') {
       dryRun = true;
+    } else if (args[i] === '--stdout') {
+      stdoutOnly = true;
+    } else if (args[i] === '--changelog-only') {
+      changelogOnly = true;
     }
   }
 
   const tag = version.startsWith('v') ? version : `v${version}`;
   const highlights = generateReleaseHighlights({ version, customNote });
+
+  if (stdoutOnly) {
+    process.stdout.write(buildReleaseNotesMarkdown(tag, highlights).replace(/—/g, ' - '));
+    return;
+  }
 
   console.log(`[generate-changelog] Generating changelog for ${tag}...`);
   for (const h of highlights) {
@@ -545,8 +648,10 @@ function runCli() {
   }
 
   updateChangelogFile(tag, highlights);
-  updateReleaseNotesFile(tag, highlights);
-  console.log(`[generate-changelog] Successfully updated CHANGELOG.md and RELEASE_NOTES.md for ${tag}.`);
+  if (!changelogOnly) {
+    updateReleaseNotesFile(tag, highlights);
+  }
+  console.log(`[generate-changelog] Successfully updated CHANGELOG.md${changelogOnly ? '' : ' and RELEASE_NOTES.md'} for ${tag}.`);
 }
 
 if (require.main === module) {
@@ -559,5 +664,6 @@ module.exports = {
   updateChangelogFile,
   updateReleaseNotesFile,
   getPackageVersion,
-  getPreviousTag
+  getPreviousTag,
+  summarizeDiffEntries
 };

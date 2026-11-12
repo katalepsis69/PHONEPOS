@@ -148,4 +148,6 @@ test('matchHeaders supports Capital and Wholesale Price aliases', async () => {
   assert.equal(map.price_retail, 5);
   assert.equal(map.price_technician, 6);
   assert.equal(importer.matchHeaders(['Puhunan']).cost_price, 0);
+  assert.equal(importer.matchHeaders(['Alert Stock']).min_stock_alert, 0);
+  assert.equal(importer.matchHeaders(['Stock Alert']).min_stock_alert, 0);
 });

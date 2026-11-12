@@ -40,6 +40,7 @@ export const I18N = {
     'inv.th_retail': 'Retail (₱)',
     'inv.th_wholesale': 'Wholesale (₱)',
     'inv.th_stock': 'Stock Qty',
+    'inv.th_min_alert': 'Min Stock Alert',
     'inv.th_status': 'Status',
     'inv.th_actions': 'Actions',
 
@@ -311,6 +312,7 @@ export const I18N = {
     'inv.th_retail': 'Retail (₱)',
     'inv.th_wholesale': 'Wholesale (₱)',
     'inv.th_stock': 'Dami sa Stock',
+    'inv.th_min_alert': 'Min. Stock Alert',
     'inv.th_status': 'Katayuan',
     'inv.th_actions': 'Aksyon',
     'inv.reorder_btn': 'Listahan ng Reorder',

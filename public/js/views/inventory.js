@@ -208,7 +208,7 @@ export async function loadInventoryTable() {
   const partType = document.getElementById('inv-type-filter')?.value || '';
   const lowStock = document.getElementById('inv-low-stock-check')?.checked || false;
   const showArchived = document.getElementById('inv-archived-check')?.checked || false;
-  showSkeleton('inventory-tbody', 9);
+  showSkeleton('inventory-tbody', 10);
 
   let url = `/api/inventory?search=${encodeURIComponent(search)}`;
   if (brand) url += `&brand=${encodeURIComponent(brand)}`;
@@ -234,7 +234,7 @@ export async function loadInventoryTable() {
     // table, and the toast says the refresh failed.
     const tbody = document.getElementById('inventory-tbody');
     if (tbody && tbody.querySelector('.skel')) {
-      tbody.innerHTML = `<tr><td colspan="9">
+      tbody.innerHTML = `<tr><td colspan="10">
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-wifi-slash w-5 h-5"></i></div>
           <div class="empty__title">Couldn't load inventory</div>
@@ -680,7 +680,7 @@ export function renderInventoryTable(items) {
   if (visibleItems.length === 0) {
     const hint = escHtml(t('inv.empty_catalog_hint', 'Adjust the filter, or add a new item to the catalog.'));
     tbody.innerHTML = `
-      <tr><td colspan="9">
+      <tr><td colspan="10">
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-package w-5 h-5"></i></div>
           <div class="empty__title">${escHtml(t('inv.empty_title', 'No items in catalog yet'))}</div>
@@ -729,6 +729,7 @@ export function renderInventoryTable(items) {
         <td class="is-num money font-mono">${fmtMoney(Number(item.price_retail))}</td>
         <td class="is-num font-mono font-bold">${fmtMoney(Number(item.price_technician))}</td>
         <td class="is-mid"><span class="stock${isOut ? ' stock--out' : (isLow ? ' stock--low' : '')}">${item.stock_quantity}</span></td>
+        <td class="is-mid font-mono" style="color: var(--txt-2);">${item.min_stock_alert ?? 0}</td>
         <td class="is-mid">${statusBadge}</td>
         <td class="is-mid">
           <span class="inline-flex items-center gap-1">
@@ -1231,6 +1232,7 @@ function ensureImportPreviewModal() {
             </button>
           </div>
           <div id="import-missing-warning" class="hidden p-2.5 rounded border text-xs" style="border-color: var(--danger); color: var(--danger);"></div>
+          <div id="import-swap-warning" class="hidden p-2.5 rounded border text-xs flex items-center justify-between gap-2" style="border-color: var(--warn, #d97706); color: var(--warn, #d97706);"></div>
           <div id="import-table-wrap" class="max-h-48 overflow-auto rounded border border-[var(--line-soft)]">
             <table id="import-preview-table" class="w-full text-xs"></table>
           </div>
@@ -1261,54 +1263,29 @@ function ensureImportPreviewModal() {
   });
 }
 
-export function openImportPreview(rows) {
-  if (!Array.isArray(rows) || rows.length < 2) {
-    showToast('The file has no data rows', 'error');
-    return;
-  }
-  const header = Array.from(rows[0], h => String(h ?? '').trim());
-  ensureImportPreviewModal();
-  const errBox = document.getElementById('import-errors');
-  if (errBox) { errBox.innerHTML = ''; errBox.classList.add('hidden'); }
-  importState = { rows, header, op_id: crypto.randomUUID() };
-  const auto = matchHeaders(header);
-
-  const missing = IMPORT_REQUIRED.filter(col => auto[col] === -1);
-  const warnBox = document.getElementById('import-missing-warning');
-  const tableWrap = document.getElementById('import-table-wrap');
-  const tipBox = document.getElementById('import-auto-price-tip');
-  const okBtn = document.getElementById('import-preview-ok');
-
+export function renderImportPreviewTable() {
+  if (!importState) return;
+  const { rows, auto } = importState;
   const retPct = Number(S.shopSettings?.default_retail_markup_pct ?? 50);
   const whoPct = Number(S.shopSettings?.default_wholesale_markup_pct ?? 20);
-
-  if (missing.length > 0) {
-    const missingLabels = missing.map(m => m.replace(/_/g, ' ')).join(', ');
-    warnBox.innerHTML = `
-      <p class="font-semibold">Missing required columns: ${escHtml(missingLabels)}</p>
-      <p class="mt-1">Make sure your headers match the template format.</p>
-      <button type="button" id="import-download-sample-btn" class="btn-mini mt-2">Download template</button>
-    `;
-    warnBox.classList.remove('hidden');
-    warnBox.querySelector('#import-download-sample-btn')?.addEventListener('click', downloadImportTemplate);
-    tableWrap.classList.add('hidden');
-    tipBox.classList.add('hidden');
-    document.getElementById('import-preview-note').textContent = `${rows.length - 1} data row(s) detected.`;
-    okBtn.disabled = true;
-    okBtn.textContent = 'Missing columns';
-    openModal('modal-import-preview');
-    return;
+  const dataRows = rows.slice(1);
+  const swapBox = document.getElementById('import-swap-warning');
+  if (swapBox) {
+    const uBrands = new Set(dataRows.map(r => String(r[auto.brand] ?? '').trim().toLowerCase()).filter(Boolean)).size;
+    const uModels = new Set(dataRows.map(r => String(r[auto.model_name] ?? '').trim().toLowerCase()).filter(Boolean)).size;
+    if (auto.brand !== -1 && auto.model_name !== -1 && uBrands > 20 && uBrands > uModels * 2) {
+      swapBox.innerHTML = `<span><strong>Brand and Model look swapped</strong> (${uBrands} unique Brands vs ${uModels} Models).</span><button type="button" id="import-swap-btn" class="btn-mini shrink-0">Swap Brand &amp; Model</button>`;
+      swapBox.classList.remove('hidden');
+      swapBox.querySelector('#import-swap-btn')?.addEventListener('click', () => {
+        [importState.auto.brand, importState.auto.model_name] = [importState.auto.model_name, importState.auto.brand];
+        renderImportPreviewTable();
+      });
+    } else {
+      swapBox.innerHTML = '';
+      swapBox.classList.add('hidden');
+    }
   }
 
-  warnBox.classList.add('hidden');
-  tableWrap.classList.remove('hidden');
-  tipBox.classList.remove('hidden');
-
-  const tipMsg = (t('inv.import_auto_note', 'Blank prices use store markup (%s% retail, %s% wholesale) for new parts, and for existing parts when their capital changed. Set in Settings > Store.'))
-    .replace('%s', retPct).replace('%s', whoPct);
-  document.getElementById('import-auto-price-tip-text').textContent = tipMsg;
-
-  const dataRows = rows.slice(1);
   const previewData = dataRows.slice(0, 4).map(r => {
     const obj = {};
     for (const [col, idx] of Object.entries(auto)) {
@@ -1343,10 +1320,13 @@ export function openImportPreview(rows) {
         <th class="px-2 py-1">${escHtml(t('part.retail', 'Retail'))}</th>
         <th class="px-2 py-1">${escHtml(t('part.wholesale', 'Wholesale'))}</th>
         <th class="px-2 py-1">${escHtml(t('part.stock', 'Stock'))}</th>
+        <th class="px-2 py-1">${escHtml(t('part.min_alert', 'Min Stock Alert'))}</th>
       </tr>
     </thead>
     <tbody>
-      ${previewData.map(p => `
+      ${previewData.map(p => {
+        const hasAlert = p.min_stock_alert !== '' && p.min_stock_alert != null;
+        return `
         <tr class="border-b border-[var(--line-soft)]">
           <td class="px-2 py-1">${escHtml(p.brand || '-')}</td>
           <td class="px-2 py-1">${escHtml(p.model_name || '-')}</td>
@@ -1355,12 +1335,66 @@ export function openImportPreview(rows) {
           <td class="px-2 py-1 font-mono">${p.ret ? '₱' + escHtml(p.ret) + (p.retAuto ? ' <span class="tag tag--quiet text-xs">auto</span>' : '') : '-'}</td>
           <td class="px-2 py-1 font-mono">${p.who ? '₱' + escHtml(p.who) + (p.whoAuto ? ' <span class="tag tag--quiet text-xs">auto</span>' : '') : '-'}</td>
           <td class="px-2 py-1 font-mono">${escHtml(p.stock_quantity || '0')}</td>
-        </tr>
-      `).join('')}
+          <td class="px-2 py-1 font-mono">${hasAlert ? escHtml(p.min_stock_alert) : '3 <span class="tag tag--quiet text-xs">default</span>'}</td>
+        </tr>`;
+      }).join('')}
     </tbody>`;
+}
+
+export function openImportPreview(rows) {
+  if (!Array.isArray(rows) || rows.length < 2) {
+    showToast('The file has no data rows', 'error');
+    return;
+  }
+  const header = Array.from(rows[0], h => String(h ?? '').trim());
+  ensureImportPreviewModal();
+  const errBox = document.getElementById('import-errors');
+  if (errBox) { errBox.innerHTML = ''; errBox.classList.add('hidden'); }
+  importState = { rows, header, op_id: crypto.randomUUID() };
+  const auto = matchHeaders(header);
+  importState.auto = auto;
+
+  const missing = IMPORT_REQUIRED.filter(col => auto[col] === -1);
+  const warnBox = document.getElementById('import-missing-warning');
+  const swapBox = document.getElementById('import-swap-warning');
+  const tableWrap = document.getElementById('import-table-wrap');
+  const tipBox = document.getElementById('import-auto-price-tip');
+  const okBtn = document.getElementById('import-preview-ok');
+
+  const retPct = Number(S.shopSettings?.default_retail_markup_pct ?? 50);
+  const whoPct = Number(S.shopSettings?.default_wholesale_markup_pct ?? 20);
+
+  if (missing.length > 0) {
+    const missingLabels = missing.map(m => m.replace(/_/g, ' ')).join(', ');
+    warnBox.innerHTML = `
+      <p class="font-semibold">Missing required columns: ${escHtml(missingLabels)}</p>
+      <p class="mt-1">Make sure your headers match the template format.</p>
+      <button type="button" id="import-download-sample-btn" class="btn-mini mt-2">Download template</button>
+    `;
+    warnBox.classList.remove('hidden');
+    warnBox.querySelector('#import-download-sample-btn')?.addEventListener('click', downloadImportTemplate);
+    if (swapBox) { swapBox.innerHTML = ''; swapBox.classList.add('hidden'); }
+    tableWrap.classList.add('hidden');
+    tipBox.classList.add('hidden');
+    document.getElementById('import-preview-note').textContent = `${rows.length - 1} data row(s) detected.`;
+    okBtn.disabled = true;
+    okBtn.textContent = 'Missing columns';
+    openModal('modal-import-preview');
+    return;
+  }
+
+  warnBox.classList.add('hidden');
+  tableWrap.classList.remove('hidden');
+  tipBox.classList.remove('hidden');
+
+  const tipMsg = (t('inv.import_auto_note', 'Blank prices use store markup (%s% retail, %s% wholesale) for new parts, and for existing parts when their capital changed. Set in Settings > Store.'))
+    .replace('%s', retPct).replace('%s', whoPct);
+  document.getElementById('import-auto-price-tip-text').textContent = tipMsg;
+
+  renderImportPreviewTable();
 
   okBtn.disabled = false;
-  okBtn.textContent = `Import ${dataRows.length} part(s)`;
+  okBtn.textContent = `Import ${rows.length - 1} part(s)`;
   openModal('modal-import-preview');
 }
 
@@ -1374,7 +1408,7 @@ function showImportErrors(messages) {
 let importInFlight = false;
 async function applyImport() {
   if (importInFlight) return;
-  const auto = matchHeaders(importState.header);
+  const auto = importState.auto || matchHeaders(importState.header);
   let rows;
   try {
     rows = importState.rows.slice(1).map(r => {
