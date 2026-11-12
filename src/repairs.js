@@ -68,7 +68,7 @@ function upsertRepair(db, actor, body = {}) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         ref,
-        cleanField(body, 'customer_name') ?? 'Walk-in Customer',
+        cleanField(body, 'customer_name') || 'Walk-in Customer',
         cleanField(body, 'customer_phone') ?? '',
         cleanField(body, 'device') ?? '',
         cleanField(body, 'imei') ?? '',

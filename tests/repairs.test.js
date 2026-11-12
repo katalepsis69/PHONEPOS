@@ -36,6 +36,11 @@ dbTest('upsertRepair creates, then updates the same ref without duplicating', (d
   assert.ok(db.prepare("SELECT id FROM audit_log WHERE category = 'repair' AND action = 'update'").get());
 });
 
+dbTest('an empty customer_name falls back to Walk-in Customer', (db) => {
+  const t = upsertRepair(db, MANAGER, { ref: 'RO-251113-EMPTY', customer_name: '   ' });
+  assert.equal(t.customer_name, 'Walk-in Customer');
+});
+
 dbTest('upsertRepair validates ref, status, and estimate', (db) => {
   assert.match(repairError(() => upsertRepair(db, MANAGER, { ref: 'no spaces allowed' }))?.message, /job reference/);
   assert.match(repairError(() => upsertRepair(db, MANAGER, { ref: 'RO-251113-OK', status: 'exploded' }))?.message, /Unknown repair status/);

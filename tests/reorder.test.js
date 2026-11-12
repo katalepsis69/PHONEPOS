@@ -398,6 +398,17 @@ dbTest('receiveInventory adds stock, can reprice, and rejects bad lines atomical
   assert.throws(() => receiveInventory(db, [], ctxMgr), /1 to 100/);
 });
 
+dbTest('receiveInventory replays the same op_id instead of adding stock twice', (db) => {
+  const a = createInventoryItem(db, { brand: 'Samsung', model_name: 'S21', part_type: 'OLED', cost_price: 100, price_retail: 200, price_technician: 150, stock_quantity: 7, supplier: 'ABC Parts' });
+  const op = 'receive-test-op-1';
+  const first = receiveInventory(db, [{ id: a.id, quantity: 5, op_id: op }], ctxMgr);
+  const second = receiveInventory(db, [{ id: a.id, quantity: 5, op_id: op }], ctxMgr);
+  assert.equal(first[0].received, 5);
+  assert.equal(second[0].replayed, true);
+  assert.equal(getInventoryItem(db, a.id).stock_quantity, 12, 'replay adds nothing');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM stock_movements WHERE reason = 'receive' AND note = 'Supplier receive'").get().n, 1);
+});
+
 serverTest('/api/inventory/receive is elevation-gated and receives stock', async (base, db, auth) => {
   auth = await ensurePinChanged(base, auth);
   const item = createInventoryItem(db, { brand: 'Test', model_name: 'R', part_type: 'X', cost_price: 10, price_retail: 20, price_technician: 15, stock_quantity: 1 });

@@ -96,7 +96,7 @@ export function wireRepairsView() {
         body: JSON.stringify({ status: select.value })
       });
       if (!res.ok) throw new Error('failed');
-      showToast(t('repairs.status_saved', 'Status saved.'), 'pos');
+      showToast(t('repairs.status_saved', 'Status saved.'), 'success');
       loadRepairs();
     } catch (_) {
       showToast(t('repairs.status_failed', 'Could not save the status.'), 'error');

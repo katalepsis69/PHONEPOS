@@ -1400,7 +1400,7 @@ function wireDashboardControls() {
     }
     const qty = Number(await inputModal('Quantity received', { inputType: 'number', step: 'any', defaultValue: btn.dataset.suggested, yes: 'Next' }));
     if (!Number.isFinite(qty) || qty <= 0) return;
-    const line = { id: Number(btn.dataset.partId), quantity: qty };
+    const line = { id: Number(btn.dataset.partId), quantity: qty, op_id: globalThis.crypto?.randomUUID?.() || `receive-${Date.now()}` };
     const cost = await inputModal('Unit cost, blank keeps the current cost', { inputType: 'number', step: 'any', defaultValue: btn.dataset.cost, yes: 'Receive' });
     if (cost !== null && String(cost).trim() !== '' && Number(cost) >= 0) line.unit_cost = Number(cost);
     try {
@@ -1414,7 +1414,7 @@ function wireDashboardControls() {
         return;
       }
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not receive the stock');
-      showToast('Stock received.', 'pos');
+      showToast('Stock received.', 'success');
       loadDashboardData();
     } catch (err) {
       showToast(err.message, 'error');
@@ -1454,11 +1454,13 @@ function wireDashboardControls() {
       showToast('Category and a positive amount are required.', 'error');
       return;
     }
+    const submitBtn = expenseForm.querySelector('[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
     try {
       const res = await fetch('/api/expenses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify({ ...body, op_id: globalThis.crypto?.randomUUID?.() || `expense-${Date.now()}` })
       });
       if (res.status === 403) {
         requireManagerPin('Enter manager PIN to record an expense', () => loadDashboardData());
@@ -1466,10 +1468,12 @@ function wireDashboardControls() {
       }
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not save the expense');
       expenseForm.reset();
-      showToast('Expense recorded.', 'pos');
+      showToast('Expense recorded.', 'success');
       loadDashboardData();
     } catch (err) {
       showToast(err.message, 'error');
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
     }
   });
   const expenseList = $id('dash-expenses-list');
@@ -1484,7 +1488,7 @@ function wireDashboardControls() {
         return;
       }
       if (!res.ok) throw new Error('Could not remove the expense');
-      showToast('Expense removed.', 'pos');
+      showToast('Expense removed.', 'success');
       loadDashboardData();
     } catch (err) {
       showToast(err.message, 'error');

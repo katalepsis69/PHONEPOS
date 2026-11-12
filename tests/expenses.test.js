@@ -26,6 +26,15 @@ dbTest('addExpense books a row, enqueues sync, and writes one audit event', (db)
   assert.ok(auditRow);
 });
 
+dbTest('addExpense replays the same op_id instead of booking twice', (db) => {
+  const op = 'expense-test-op-1';
+  const first = addExpense(db, MANAGER, { category: 'Rent', amount: 500, op_id: op });
+  const second = addExpense(db, MANAGER, { category: 'Rent', amount: 500, op_id: op });
+  assert.equal(second.id, first.id);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM expenses').get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sync_outbox WHERE table_name = 'expenses'").get().n, 1);
+});
+
 dbTest('addExpense rejects empty category and non-positive or non-numeric amounts', (db) => {
   assert.match(expenseError(() => addExpense(db, MANAGER, { category: '  ', amount: 5 }))?.message, /Category is required/);
   assert.match(expenseError(() => addExpense(db, MANAGER, { category: 'Rent', amount: 0 }))?.message, /greater than zero/);

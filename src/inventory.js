@@ -623,14 +623,23 @@ function receiveInventory(db, items, ctx = {}) {
       e.statusCode = 404;
       throw e;
     }
-    const updated = adjustStock(db, item.id, qty, { reason: 'receive', note: 'Supplier receive' }, ctx);
+    // Per-line idempotency: a retried request with the same ids replays the
+    // first receive instead of double-adding the stock. adjustStock owns the
+    // op_log record for its op_id; the pre-check just short-circuits the rest
+    // of the line (the cost reprice included).
+    const meta = { reason: 'receive', note: 'Supplier receive' };
+    if (typeof line.op_id === 'string' && line.op_id.length <= 64) meta.op_id = `${line.op_id}:${item.id}`;
+    if (meta.op_id && opReplayed(db, meta.op_id)) {
+      return { id: item.id, name: partLabel(item), received: qty, unit_cost: cost ?? item.cost_price, replayed: true };
+    }
+    const updated = adjustStock(db, item.id, qty, meta, ctx);
     if (!updated) {
       const e = new Error(`Line ${n}: part not found`);
       e.statusCode = 404;
       throw e;
     }
     if (cost !== null) {
-      updateInventoryItem(db, item.id, { cost_price: cost }, { reason: 'receive', note: 'Supplier receive' }, ctx);
+      updateInventoryItem(db, item.id, { cost_price: cost }, meta, ctx);
     }
     return { id: item.id, name: partLabel(item), received: qty, unit_cost: cost ?? item.cost_price };
   }));
@@ -638,6 +647,8 @@ function receiveInventory(db, items, ctx = {}) {
 
 module.exports = {
   partLabel,
+  opReplayed,
+  opRecord,
   listInventory,
   getInventoryItem,
   getInventoryByBarcode,

@@ -6,6 +6,7 @@
 const { txn, audit } = require('./audit');
 const { money } = require('./money');
 const { enqueueRow, enqueueDelete } = require('./sync');
+const { opReplayed, opRecord } = require('./inventory');
 
 const CATEGORY_MAX = 40;
 const DESCRIPTION_MAX = 200;
@@ -26,11 +27,17 @@ function addExpense(db, actor, body = {}) {
   const amount = money(Number(body.amount));
   if (!Number.isFinite(amount) || amount <= 0) throw expenseError('Amount must be greater than zero');
   const description = cleanText(body.description, DESCRIPTION_MAX);
+  // Money write, so it dedups like the rest: a retried or double-clicked POST
+  // replays the first booking instead of shrinking net profit twice.
+  const opId = typeof body.op_id === 'string' && body.op_id.length <= 64 ? body.op_id : '';
+  const replay = opReplayed(db, opId);
+  if (replay) return db.prepare('SELECT * FROM expenses WHERE id = ?').get(replay.entity_id) || null;
   return txn(db, () => {
     const r = db.prepare(
       'INSERT INTO expenses (category, description, amount, actor_name, created_at) VALUES (?, ?, ?, ?, ?)'
     ).run(category, description, amount, actor?.name || '', new Date().toISOString());
     const id = Number(r.lastInsertRowid);
+    if (opId) opRecord(db, opId, id);
     enqueueRow(db, 'expenses', id);
     audit(db, actor, false, 'expense', 'add', { expense_id: id, category, amount });
     return db.prepare('SELECT * FROM expenses WHERE id = ?').get(id);
