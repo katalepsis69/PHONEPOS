@@ -10,6 +10,9 @@ A commercial-grade Point of Sale and inventory management workstation built for 
 - **Parts & Repair Labor Checkout:** Unified cart supporting physical phone parts and repair labor service charges.
 - **Customer Credit & "Utang" Ledger:** Complete customer credit management with FIFO partial and full settlement tracking.
 - **Warranty & RMA Management:** Shop warranty tracking, parts replacements, and audit-logged RMA adjustments.
+- **Repair Ticket Lifecycle:** Every intake gets a server-side ticket keyed by its `RO-` reference and moves `intake` → `in_repair` → `ready` → `released` on the Repairs tab queue, mirrored to the cloud. A money-free **Pickup slip** (58mm/80mm, reprintable, drawer closed) tells the customer the unit is ready.
+- **Supplier Reorder Sheet:** Low stock turns into a printable per-supplier order with editable quantities and live re-pricing, and a manager-gated **Receive** flow books the delivery into stock with per-line idempotency.
+- **Operating Expenses & Net Profit:** Book rent, utilities and other expenses on the Reports & profit tab; the KPI net, the trend chart, the Z-report and the cloud mirror all subtract the same window, so profit always reconciles to one number.
 - **Thermal Receipt Printing:** ESC/POS direct counter printing to standard 58mm and 80mm thermal receipt printers, with automatic browser print fallback for slips and reports.
 - **GCash & Digital Payments:** GCash reference logging, on-screen shop QR code presentation, and daily cash drawer reconciliation.
 - **Automated Backups & Day Close:** Hourly local SQLite database snapshots with automatic retention pruning.
