@@ -3,7 +3,7 @@
 [v9, 2026-11-12, measured refresh 2026-11-13, supersedes v8 of 2026-11-09 (which superseded
 v7 of 2026-11-05, v6 of 2026-11-02, v5 of 2026-10-14, v4 and v3 of 2026-10-02; a frozen v3
 sits at backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). THIS EDITION IS
-MEASURED ON 2026-11-13 at HEAD e86e347 (branch main, tag v1.1, 4 unpushed commits ahead of
+MEASURED ON 2026-11-13 at HEAD c91f354 (branch main, tag v1.1, 4 unpushed commits ahead of
 origin/main):
 npm test reports 661 tests across 55 tracked files (661/661 pass in about 30 s; the rerun
 rule in GATES stands), and npm run build:css exits 0. Version is 1.1 across package.json:3,
@@ -381,7 +381,7 @@ that the implementation still matches, then move on)
   license surface (machine id, trial seal, anti-rollback) is NEW and unaudited, see below.
 
 GATES (recount and rerun at audit time; report the current numbers)
-- npm test (node --test tests/*.test.js). Measured 2026-11-13 at e86e347: 661 tests across
+- npm test (node --test tests/*.test.js). Measured 2026-11-13 at c91f354: 661 tests across
   55 tracked files; 661/661 on a parallel run, about 30 s (tests/ui-fixes.test.js
   normalizes CRLF line endings inside source()). The 11-05 history stands: one parallel run that
   day produced no output for over ten minutes and was killed; the immediate rerun was
@@ -948,7 +948,7 @@ AUDIT CATEGORIES (cover all ten; report per category)
    gitignored files is visible anywhere but a git tag.
 
 8. TEST QUALITY
-   661 tests across 55 tracked files (measured 2026-11-13 at e86e347; the cf06069 same-day
+   661 tests across 55 tracked files (measured 2026-11-13 at c91f354; the cf06069 same-day
    refresh counted 638 across 51, v9 counted 610 across
    49 at 533f07a, v8 counted 568 across 49 files including untracked universal-pos, v7
    counted 505 in 44), with mix of

@@ -77,7 +77,7 @@ not cover; the approved list is exhausted; or the tree shows signs of concurrent
 interference (see baseline step 3). Report and stop.
 
 TREE STATE (measured 2026-11-13; refresh to observed state on every run)
-- HEAD: e86e347 (on main, tag v1.1, pushed: origin/main matches): the 2026-11-13
+- HEAD: c91f354 (4 unpushed docs commits above origin/main 4e7d19b; measured facts unchanged from e86e347): the 2026-11-13
   audit-pass fixes, the refactoring CLEAN record, the dead-i18n deletion, and the
   verify/logout hardening tests). Full source is
   tracked in git (since 2026-11-07); the release pipeline commits mid-session, so
