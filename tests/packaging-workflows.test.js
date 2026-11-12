@@ -259,6 +259,9 @@ test('Inno Setup installer script configures SYSTEM service, ACLs, and preserves
   assert.match(iss, /TechPartsPOS-Server/, 'scheduled task name must be TechPartsPOS-Server');
   assert.match(iss, /PrepareToInstall/, 'installer must implement PrepareToInstall to stop service');
   assert.match(iss, /UnlockExistingDataDirForUpgrade/, 'PrepareToInstall must unlock existing ProgramData\\TechPartsPOS before [Dirs] runs');
+  assert.match(iss, /runtime\\server\.lock/, 'upgrade unlock helper must remove stale server.lock as well as server.json');
+  assert.match(iss, /GrantServiceTaskRunAccess/, 'installer must grant Authenticated Users GRGX permission on TechPartsPOS-Server');
+  assert.match(iss, /\(A;;GRGX;;;AU\)/, 'service task security descriptor must allow standard users to run TechPartsPOS-Server');
   assert.match(iss, /takeown\.exe[\s\S]*icacls\.exe/, 'upgrade unlock helper must take ownership and temporarily grant Administrators');
   assert.match(iss, /InitializeUninstall/, 'installer must implement InitializeUninstall to stop service');
   assert.match(iss, /<\?xml version="1\.0"\?>/, 'task XML must declare version="1.0" without encoding="UTF-8"');

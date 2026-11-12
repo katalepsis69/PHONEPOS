@@ -1949,6 +1949,50 @@ function isPidAlive(pid) {
   try { process.kill(pid, 0); return true; }
   catch (err) { return !!(err && err.code === 'EPERM'); }
 }
+function currentBootEpochMs() {
+  return Math.round(Date.now() - os.uptime() * 1000);
+}
+function isPosProcessPidAlive(pid, hooks = {}) {
+  const pidAliveFn = hooks.isPidAlive || isPidAlive;
+  if (!pidAliveFn(pid)) return false;
+  const platform = hooks.platform || process.platform;
+  if (platform === 'win32') {
+    const queryPidFn = hooks.queryWinPidImage || ((targetPid) => {
+      try {
+        const { execFileSync } = require('node:child_process');
+        return execFileSync('tasklist.exe', ['/FI', `PID eq ${targetPid}`, '/FO', 'CSV', '/NH'], {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 3000
+        });
+      } catch (_) {
+        return null;
+      }
+    });
+    const out = queryPidFn(pid);
+    if (typeof out === 'string' && out.trim()) {
+      // tasklist returns either "INFO: No tasks..." or "\"image.exe\",\"pid\",..."
+      if (!/"(TechPartsPOS(?:\.exe)?|node(?:\.exe)?)"/i.test(out)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+function isInstanceLockLive(existing, hooks = {}) {
+  if (!existing || !Number.isInteger(existing.pid) || existing.pid === process.pid || !existing.port) {
+    return false;
+  }
+  const bootAt = typeof hooks.nowBootAt === 'number' ? hooks.nowBootAt : currentBootEpochMs();
+  if (typeof existing.boot_at === 'number') {
+    if (Math.abs(bootAt - existing.boot_at) > 60000) return false;
+  } else if (existing.started_at) {
+    // Legacy v1.0 lock files lack boot_at: if started before this boot, the PID was recycled (e.g. svchost.exe).
+    const startedMs = Date.parse(existing.started_at);
+    if (Number.isFinite(startedMs) && startedMs < bootAt - 60000) return false;
+  }
+  return isPosProcessPidAlive(existing.pid, hooks);
+}
 function readInstanceLock() {
   try { return JSON.parse(fs.readFileSync(instanceLockPath(), 'utf8')); }
   catch (_) { return null; }
@@ -1956,7 +2000,12 @@ function readInstanceLock() {
 function writeInstanceLock(port) {
   try {
     fs.mkdirSync(path.dirname(instanceLockPath()), { recursive: true });
-    fs.writeFileSync(instanceLockPath(), JSON.stringify({ pid: process.pid, port, started_at: new Date().toISOString() }));
+    fs.writeFileSync(instanceLockPath(), JSON.stringify({
+      pid: process.pid,
+      port,
+      started_at: new Date().toISOString(),
+      boot_at: currentBootEpochMs()
+    }));
   } catch (_) {}
 }
 function runtimeStatePath(baseDir = getBaseDir()) {
@@ -1966,7 +2015,12 @@ function writeRuntimeState(port, baseDir = getBaseDir()) {
   try {
     const p = runtimeStatePath(baseDir);
     fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify({ pid: process.pid, port, started_at: new Date().toISOString() }));
+    fs.writeFileSync(p, JSON.stringify({
+      pid: process.pid,
+      port,
+      started_at: new Date().toISOString(),
+      boot_at: currentBootEpochMs()
+    }));
   } catch (_) {}
 }
 function releaseInstanceLock() {
@@ -1993,12 +2047,21 @@ async function runInstalledLauncher(hooks = {}) {
     return null;
   });
   const launchBrowserFn = hooks.launchBrowser || ((url) => new Promise(resolve => launchBrowser(url, resolve)));
+  const logLauncher = (line) => {
+    try {
+      const dir = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'TechPartsPOS');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(path.join(dir, 'launcher.log'), `[${new Date().toISOString()}] ${line}\n`);
+    } catch (_) {}
+  };
   const runTaskFn = hooks.runTask || ((taskName = 'TechPartsPOS-Server') => {
     try {
       const { execFileSync } = require('node:child_process');
-      execFileSync('schtasks.exe', ['/Run', '/TN', taskName], { stdio: 'ignore', windowsHide: true });
+      execFileSync('schtasks.exe', ['/Run', '/TN', taskName], { stdio: 'pipe', windowsHide: true });
       return true;
-    } catch (_) {
+    } catch (err) {
+      const detail = err?.stderr ? String(err.stderr).trim() : (err?.message || 'unknown error');
+      logLauncher(`schtasks /Run /TN ${taskName} failed: ${detail}`);
       return false;
     }
   });
@@ -2011,7 +2074,7 @@ async function runInstalledLauncher(hooks = {}) {
   });
   const sleepFn = hooks.sleep || ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
   const initialWaitMs = typeof hooks.initialWaitMs === 'number' ? hooks.initialWaitMs : 1500;
-  const totalTimeoutMs = typeof hooks.totalTimeoutMs === 'number' ? hooks.totalTimeoutMs : 8000;
+  const totalTimeoutMs = typeof hooks.totalTimeoutMs === 'number' ? hooks.totalTimeoutMs : 15000;
 
   function getPortsToProbe() {
     const state = readRuntimeState();
@@ -2207,13 +2270,17 @@ function startServer(preferredPort = process.env.PORT ? parseInt(process.env.POR
   // Hand off to an already-running instance instead of racing ports.
   if (!isTestEnv() && !process.env.POS_ALLOW_MULTI) {
     const existing = readInstanceLock();
-    if (existing && existing.pid !== process.pid && isPidAlive(existing.pid) && existing.port) {
+    if (isInstanceLockLive(existing)) {
       logLine(`[i] TechPartsPOS is already running on http://localhost:${existing.port} — opening it.`);
       if (process.platform === 'win32' && !process.env.NO_AUTO_BROWSER && !process.env.NO_LAUNCH_BROWSER) {
         launchBrowser(`http://localhost:${existing.port}`);
       }
       setTimeout(() => process.exit(0), 300);
       return null;
+    }
+    if (existing) {
+      try { fs.unlinkSync(instanceLockPath()); } catch (_) {}
+      logLine(`[i] Cleared stale instance lock (pid=${existing.pid}, started_at=${existing.started_at || 'unknown'}).`);
     }
   }
 
@@ -2405,5 +2472,6 @@ module.exports = {
   resolveLaunchMode,
   browserProfileDir,
   runtimeStatePath,
-  runInstalledLauncher
+  runInstalledLauncher,
+  isInstanceLockLive
 };

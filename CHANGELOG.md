@@ -7,10 +7,12 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 ## [v1.1] - 2026-11-12
 
 ### Highlights & Changes
+- General: Updated README.md
+- Updater & Packaging: generateReleaseHighlights summarizes real git diff and ignores untouched features; generate-changelog CLI --stdout outputs notes without writing CHANGELOG.md or RELEASE_NOTES.md (TechPartsPOS.iss, publish.bat, generate-changelog.js)
 - Counter UI: Low-stock alert threshold, Min Stock Alert, Min. Stock Alert (index.html, i18n.js)
 - Inventory & Import: openImportPreview displays Min Stock Alert and swaps Brand/Model when clicked; inventory table renders an explicit Min Stock Alert column; Brand and Model look swapped, Swap Brand & Model, Download template (importer.js, inventory.js)
-- Repair Counter (POS): renderBrandChips skips out-of-stock brands when posInStockOnly is on and CSS bounds chip height (pos.js, styles.css)
-- Updater & Packaging: generateReleaseHighlights summarizes real git diff and ignores untouched features; generate-changelog CLI --stdout outputs notes without writing CHANGELOG.md or RELEASE_NOTES.md (publish.bat, generate-changelog.js, publish-release.ps1)
+- Repair Counter (POS): renderBrandChips skips out-of-stock brands when posInStockOnly is on and CSS bounds chip height; isInstanceLockLive rejects prior-boot locks and recycled non-POS Windows PIDs (pos.js, styles.css)
+- Server & Database: Updated currentBootEpochMs, isPosProcessPidAlive, isInstanceLockLive (server.js)
 
 
 ## [v1.0] - 2026-11-12

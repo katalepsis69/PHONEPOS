@@ -109,7 +109,7 @@ Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\update
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS\runtime"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" /grant ""*S-1-5-32-545:(OI)(CI)RX"" /remove ""*S-1-5-32-544"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\attrib.exe"; Parameters: "+h +s ""{commonappdata}\TechPartsPOS"""; Flags: runhidden waituntilterminated
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TechPartsPOS"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" /remove ""*S-1-5-32-544"""; Flags: runhidden waituntilterminated
-Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""TechPartsPOS-Server"" /XML ""{tmp}\TechPartsPOS-Server.xml"" /F"; Flags: runhidden waituntilterminated
+Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""TechPartsPOS-Server"" /XML ""{tmp}\TechPartsPOS-Server.xml"" /F"; Flags: runhidden waituntilterminated; AfterInstall: GrantServiceTaskRunAccess
 Filename: "{sys}\schtasks.exe"; Parameters: "/Run /TN ""TechPartsPOS-Server"""; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 Filename: "{win}\explorer.exe"; Parameters: "ms-settings:otherusers"; Description: "Open Windows Account Settings (to add a Cashier Standard User)"; Flags: nowait postinstall skipifsilent unchecked runasoriginaluser; Check: NeedsStandardUserSetup
@@ -241,10 +241,34 @@ begin
   end;
 end;
 
+procedure GrantServiceTaskRunAccess();
+var
+  PsExe: String;
+  Params: String;
+  ResultCode: Integer;
+begin
+  PsExe := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  if not FileExists(PsExe) then
+    Exit;
+
+  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' +
+    'try { ' +
+      '$s = New-Object -ComObject Schedule.Service; $s.Connect(); ' +
+      '$t = $s.GetFolder(''\'').GetTask(''TechPartsPOS-Server''); ' +
+      '$sd = $t.GetSecurityDescriptor(0xF); ' +
+      'if ($sd -notmatch ''\(A;;[A-Z]*GX;;;AU\)'') { ' +
+        'if ($sd -match ''^(.*?)(S:\(.*)$'') { $sd = $Matches[1] + ''(A;;GRGX;;;AU)'' + $Matches[2] } else { $sd += ''(A;;GRGX;;;AU)'' }; ' +
+        '$t.SetSecurityDescriptor($sd, 0) ' +
+      '} ' +
+    '} catch {}"';
+  Exec(PsExe, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure UnlockExistingDataDirForUpgrade();
 var
   BaseDir: String;
   ServerStateFile: String;
+  ServerLockFile: String;
 begin
   BaseDir := ExpandConstant('{commonappdata}\TechPartsPOS');
   if not DirExists(BaseDir) then
@@ -259,6 +283,9 @@ begin
   ServerStateFile := BaseDir + '\runtime\server.json';
   if FileExists(ServerStateFile) then
     DeleteFile(ServerStateFile);
+  ServerLockFile := BaseDir + '\runtime\server.lock';
+  if FileExists(ServerLockFile) then
+    DeleteFile(ServerLockFile);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

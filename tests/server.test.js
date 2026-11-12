@@ -1226,3 +1226,44 @@ serverTest('update posture: progress reads without a session, apply stays locked
   });
   assert.strictEqual(applyRes.status, 401);
 });
+
+test('isInstanceLockLive rejects prior-boot locks and recycled non-POS Windows PIDs', () => {
+  const { isInstanceLockLive } = require('../src/server');
+  const nowBootAt = 1_700_000_000_000;
+
+  assert.strictEqual(
+    isInstanceLockLive(
+      { pid: 2576, port: 3000, started_at: new Date(nowBootAt - 3600_000).toISOString(), boot_at: nowBootAt - 3600_000 },
+      { nowBootAt, isPidAlive: () => true, platform: 'win32', queryWinPidImage: () => '"TechPartsPOS.exe","2576","Services","0","50,000 K"\r\n' }
+    ),
+    false,
+    'lock written in a previous Windows boot must never block startup'
+  );
+
+  assert.strictEqual(
+    isInstanceLockLive(
+      { pid: 2576, port: 3000, started_at: new Date(nowBootAt - 600_000).toISOString() },
+      { nowBootAt, isPidAlive: () => true, platform: 'win32', queryWinPidImage: () => '"svchost.exe","2576","Services","0","12,000 K"\r\n' }
+    ),
+    false,
+    'legacy v1.0 lock created before current boot must be treated as stale'
+  );
+
+  assert.strictEqual(
+    isInstanceLockLive(
+      { pid: 2576, port: 3000, started_at: new Date(nowBootAt + 5000).toISOString(), boot_at: nowBootAt },
+      { nowBootAt, isPidAlive: () => true, platform: 'win32', queryWinPidImage: () => '"svchost.exe","2576","Services","0","12,000 K"\r\n' }
+    ),
+    false,
+    'same-boot recycled PID belonging to svchost.exe must not be treated as TechPartsPOS'
+  );
+
+  assert.strictEqual(
+    isInstanceLockLive(
+      { pid: 2576, port: 3000, started_at: new Date(nowBootAt + 5000).toISOString(), boot_at: nowBootAt },
+      { nowBootAt, isPidAlive: () => true, platform: 'win32', queryWinPidImage: () => '"TechPartsPOS.exe","2576","Services","0","50,000 K"\r\n' }
+    ),
+    true,
+    'live same-boot TechPartsPOS.exe lock must still trigger single-instance handoff'
+  );
+});
