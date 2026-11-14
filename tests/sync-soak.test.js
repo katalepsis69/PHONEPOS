@@ -24,9 +24,8 @@
 //   - a cloud_commands adjust-stock round trip applies exactly once (op_id
 //     dedupe at issue time, op_log dedupe at apply time), including when the
 //     kill lands between apply and ack
-//   - unreadable payloads follow the documented contract: dropped when their
-//     whole drain window is corrupt, retained when they shared a window with
-//     readable rows
+//   - unreadable payloads are quarantined on first sight (fixed 2026-11-14;
+//     before that they were retained in mixed windows and starved the window)
 //   - shops.last_seen stays truthful across restarts
 //
 // TESTS-ONLY PASS: src/, cloud/, cloud-deploy/ and public/ are read-only
@@ -52,32 +51,15 @@ const KILL_DELAY_MAX_MS = 4200;  // covers kills inside the drain and its ack fl
 const ITERATION_TIMEOUT_MS = 90000;
 const DRAIN_TIMEOUT_MS = 45000;
 
-// The one product defect class this soak exposed (run 4: 5 iterations, run 5
-// same seed: iterations 25, 32, 33). Shop-side log evidence across run 5:
-// unreadable-payload rows are skipped, never dropped, in mixed drain windows
-// (src/sync.js: the DELETE only fires when the whole 50-row window is
-// unreadable), so they accumulate about two per iteration and the oldest-50
-// window fills with permanently skipped rows. Productive capacity per drain
-// cycle collapses from 50 rows to single digits while every cycle re-reads
-// the same retained rows (measured in the register logs: the same 37
-// unreadable rows skipped on every 2.2s cycle). Chunk iterations pushing 130
-// rows then exceed the settle bound and the pipeline starves instead of
-// flowing. No "push failed" line exists in the run window, so this is pure
-// starvation, not a 400/backoff wedge.
-//
-// One residual stall (iteration 25, only 22 rows pushed, 2 stuck) is not
-// explained by throughput alone; pinning it needs the stuck-row identities,
-// which the soak's stop condition (two consecutive red runs) deferred.
-//
-// TESTS-ONLY PASS: the defect is NOT fixed here. Iterations that hit it are
-// recorded as known skipped failures with the failing assertion quoted and a
-// remediation finding in docs/sync-soak-2026-11-14.md; they do not fail the
-// soak. Any OTHER failure class fails the run.
-const KNOWN_PRODUCT_BUGS = [{
-  match: /drain never settled/,
-  failingAssertion: 'settle-loop bound: pendingReadable === 0 && command acked within DRAIN_TIMEOUT_MS (throws "iteration N drain never settled (pendingReadable M, command acked true)")',
-  finding: 'sync.js retained-unreadable starvation: mixed drain windows skip unreadable rows forever (src/sync.js, the events.length === 0 drop is the only path that removes them), so the 50-slot window fills with skipped rows and newer rows starve behind them',
-}];
+// The drain starvation defect this soak exposed (runs 4 and 5: retained
+// unreadable payloads skip-forever in mixed windows and starve the 50-slot
+// window) is FIXED in src/sync.js as of 2026-11-14: unreadable rows are
+// quarantined on first sight. This soak is strict again: any iteration
+// failure fails the run. One stall from run 5 (iteration 25, two stuck rows,
+// no backoff evidence) was never diagnosed; if a settle stall fires, the
+// error message now names the stuck rows (id, table, local_id, payload
+// length) plus the retained-unreadable count so the next run pins it.
+const KNOWN_PRODUCT_BUGS = [];
 
 const DELETED = Symbol('mirror row removed');
 
@@ -120,14 +102,21 @@ async function waitShopReady(child, port) {
 
 // Spawns the real register server as its own OS process so the soak can kill
 // it the way a power cut would. NODE_TEST_CONTEXT bypasses the single-instance
-// hand-off, the browser launch and the auto-exit watchdog; POS_DB_PATH keeps
-// it off the repo's data/ folder.
+// hand-off and the auto-exit watchdog; POS_DB_PATH keeps it off the repo's
+// data/ folder. NO_AUTO_BROWSER + NO_LAUNCH_BROWSER are NOT optional: the
+// browser launch inside startServer's listen callback is gated only by those
+// env vars (not by NODE_TEST_CONTEXT), and without them every spawned shop
+// opened a real browser window on the operator's desktop (measured: the
+// 2026-11-14 runs littered the taskbar with dead TechParts POS windows).
 function spawnShop(dbPath, backupDir, preferredPort) {
   const child = spawn(process.execPath, [SHOP_SERVER], {
     cwd: ROOT,
     env: {
       ...process.env,
       NODE_TEST_CONTEXT: '1',
+      NO_AUTO_BROWSER: '1',
+      NO_LAUNCH_BROWSER: '1',
+      NO_AUTO_EXIT: '1',
       POS_DB_PATH: dbPath,
       POS_BACKUP_DIR: backupDir,
       PORT: String(preferredPort),
@@ -537,7 +526,7 @@ test('sync pipeline soak: 50 kill/restart drain cycles converge to an exactly-on
           // 6. outbox assertions: acked-only marking holds per documented contract
           for (const ev of enqueued) {
             const row = shopDb.prepare('SELECT synced_at FROM sync_outbox WHERE id = ?').get(ev.outboxId);
-            if (ev.kind === 'unreadable') continue; // dropped alone-in-window, retained in mixed: both documented
+            if (ev.kind === 'unreadable') continue; // quarantined on first sight since the 2026-11-14 fix
             if (ev.kind === 'valid' || ev.kind === 'replay' || ev.kind === 'delete') {
               assert.ok(row && row.synced_at, `outbox ${ev.outboxId} (${ev.kind} ${ev.key}) must be marked synced, got ${JSON.stringify(row)} (iteration ${i})`);
             } else {
