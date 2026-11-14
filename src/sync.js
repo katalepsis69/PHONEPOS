@@ -60,8 +60,11 @@ function enqueue(db, table, localId, payload) {
   `).run(table, localId, JSON.stringify(payload), new Date().toISOString());
 }
 
-// ponytail: whitelist — table name can't be bound param
-const ALLOWED_SYNC_TABLES = new Set(['inventory','sales','sale_items','stock_movements','credit_payments','warranty_returns','shop_settings','staff','audit_log','sync_outbox','shifts','day_reconciliations','cash_adjustments','customer_profiles','expenses','repairs']);
+// ponytail: whitelist — table name can't be bound param. No enqueue call site
+// targets sync_outbox (the outbox never syncs itself) and the cloud's own
+// ALLOWED_TABLES rejects it, so the entry stays out: an accidental enqueue
+// throws here instead of queueing a row no cloud will accept.
+const ALLOWED_SYNC_TABLES = new Set(['inventory','sales','sale_items','stock_movements','credit_payments','warranty_returns','shop_settings','staff','audit_log','shifts','day_reconciliations','cash_adjustments','customer_profiles','expenses','repairs']);
 function enqueueDelete(db, table, localId) {
   if (!ALLOWED_SYNC_TABLES.has(table)) throw new Error(`Sync table not allowed: ${table}`);
   enqueue(db, table, localId, { _deleted: true });
@@ -271,22 +274,22 @@ async function drainOutbox(db, { batch = 50 } = {}) {
   }
 
   // One corrupt payload row must not poison the whole oldest-first window:
-  // it stays pending (one wasted slot, visible in the status) while the rest
-  // of the batch still flows.
+  // enqueue always writes valid JSON, so a payload that no longer parses can
+  // never become readable. Quarantine it on first sight, the same way the
+  // cloud-rejected path below drops its rows; the local rows themselves are
+  // untouched. Retaining skipped rows instead starved the 50-row window
+  // (measured, 2026-11-14 soak: retained unreadables accumulated until the
+  // window was majority skipped rows and newer rows stopped flowing).
   const events = [];
-  let unreadable = 0;
   const unreadableIds = [];
   for (const r of rows) {
     let payload;
-    try { payload = JSON.parse(r.payload); } catch (_) { unreadable++; unreadableIds.push(r.id); continue; }
+    try { payload = JSON.parse(r.payload); } catch (_) { unreadableIds.push(r.id); continue; }
     const deleted = payload && payload._deleted === true;
     events.push({ outbox_id: r.id, table: r.table_name, local_id: r.local_id, deleted, row: deleted ? null : payload });
   }
-  if (events.length === 0) {
-    // The whole window is corrupt: enqueue always writes valid JSON, so these
-    // rows can never become readable and re-parsing them every 2s freezes the
-    // drain behind a head-of-line block forever. Drop them the same way the
-    // cloud-rejected path does; the local rows themselves are untouched.
+  const unreadable = unreadableIds.length;
+  if (unreadable > 0) {
     const drop = db.prepare('DELETE FROM sync_outbox WHERE id = ?');
     db.exec('BEGIN');
     try {
@@ -296,7 +299,9 @@ async function drainOutbox(db, { batch = 50 } = {}) {
       db.exec('ROLLBACK');
       throw err;
     }
-    return { synced: 0, unreadable, quarantined: unreadableIds.length };
+  }
+  if (events.length === 0) {
+    return { synced: 0, unreadable, quarantined: unreadable };
   }
 
   const res = await postBatch(url, token, shopId, events);

@@ -280,6 +280,39 @@ test('a cloud-rejected event is quarantined and the rest of the batch still flow
   }
 });
 
+test('an unreadable payload is quarantined on first sight and never starves the window', async () => {
+  const { db, dir } = tmpDb();
+  const { cloud, server } = makeCloud();
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(`http://127.0.0.1:${port}`);
+    const { enqueue, drainOutbox } = require('../src/sync');
+    enqueue(db, 'inventory', 1, { id: 1, brand: 'Keep' });
+    // Enqueue always writes valid JSON, so a corrupted payload only exists
+    // after on-disk damage: plant one the way the 2026-11-14 soak did.
+    db.prepare('INSERT INTO sync_outbox (table_name, local_id, payload, created_at) VALUES (?, ?, ?, ?)')
+      .run('inventory', 2, 'soak-corrupt-{not-json', new Date().toISOString());
+    enqueue(db, 'inventory', 3, { id: 3, brand: 'Behind' });
+
+    const r = await drainOutbox(db);
+    assert.strictEqual(r.synced, 2, 'valid rows behind the corrupt row still flow');
+    assert.strictEqual(r.unreadable, 1, 'the corrupt row is reported as unreadable');
+    const pending = db.prepare('SELECT COUNT(*) c FROM sync_outbox WHERE synced_at IS NULL').get().c;
+    assert.strictEqual(pending, 0, 'nothing readable or corrupt stays queued');
+    const total = db.prepare('SELECT COUNT(*) c FROM sync_outbox').get().c;
+    assert.strictEqual(total, 2, 'the corrupt row is dropped; the valid rows remain marked');
+
+    enqueue(db, 'inventory', 4, { id: 4, brand: 'After' });
+    const r2 = await drainOutbox(db);
+    assert.strictEqual(r2.synced, 1, 'the next window flows freely after the corrupt row is gone');
+  } finally {
+    server.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('backfillMirror queues existing rows and the drain lands them on the cloud', async () => {
   const { db, dir } = tmpDb();
   const { cloud, server } = makeCloud();
