@@ -99,3 +99,21 @@ test('software update modal ergonomics: popup dialog on available update with ac
   assert.match(backofficeJs, /openModal\(['"]modal-update['"]\)/);
   assert.match(backofficeJs, /btn-modal-apply-update/);
 });
+
+test('automatic update detection: topbar chip, banner, and periodic background timer', () => {
+  const mainJs = fs.readFileSync(path.join(ROOT, 'public/js/main.js'), 'utf8');
+
+  // Background timer checks every 30m and on network reconnect
+  assert.match(mainJs, /setInterval\(\(\)\s*=>\s*\{[\s\S]*?checkForAppUpdates\(true\);\s*\}, 30 \* 60 \* 1000\);/);
+  assert.match(mainJs, /window\.addEventListener\('online',\s*\(\)\s*=>\s*checkForAppUpdates\(true\)\);/);
+
+  // Status chip is revealed automatically when update is ready without requiring manual !silent
+  assert.match(backofficeJs, /if \(chip\) \{\s*if \(chipIcon\) chipIcon\.className/);
+
+  // Top banner is revealed unless explicitly dismissed without requiring manual !silent
+  assert.match(backofficeJs, /if \(banner && !_bannerDismissed\) \{/);
+
+  // Session-scoped modal prompt key
+  assert.match(backofficeJs, /const sessionPromptKey = `tp_update_prompted_\$\{data\.latestVersion\}`;/);
+  assert.match(backofficeJs, /if \(!silent \|\| !sessionStorage\.getItem\(sessionPromptKey\)\) \{/);
+});

@@ -2076,6 +2076,23 @@ function renderUpdateProgressState(p) {
     statusEl.textContent = detailLabel;
     statusEl.className = 'foot-note text-cyan-400';
   }
+
+  // Official Software Update Modal progress bar
+  const modalProgressWrap = document.getElementById('modal-update-progress-wrap');
+  const modalProgressBar = document.getElementById('modal-update-progress-bar');
+  const modalProgressPct = document.getElementById('modal-update-progress-pct');
+  const modalProgressDetail = document.getElementById('modal-update-progress-detail');
+  const modalBadge = document.getElementById('modal-update-badge');
+  if (modalProgressWrap) {
+    modalProgressWrap.classList.remove('hidden');
+    if (modalProgressBar && pct !== null) modalProgressBar.style.width = `${pct}%`;
+    if (modalProgressPct && pct !== null) modalProgressPct.textContent = `${pct}%`;
+    if (modalProgressDetail) modalProgressDetail.textContent = detailLabel;
+    if (modalBadge) {
+      modalBadge.textContent = shortLabel;
+      modalBadge.className = 'px-2 py-0.5 rounded text-xs font-mono border border-[var(--line)] bg-[var(--pos-bg)] text-[var(--pos)] font-semibold';
+    }
+  }
 }
 
 function setCheckLoading(loading) {
@@ -2141,6 +2158,11 @@ function setApplyLoading(loading) {
   updateBtnState(settingsBtn);
   updateBtnState(bannerBtn);
   updateBtnState(modalBtn);
+
+  if (!loading) {
+    const modalProgressWrap = document.getElementById('modal-update-progress-wrap');
+    if (modalProgressWrap) modalProgressWrap.classList.add('hidden');
+  }
 
   if (chip && chipIcon && chipText) {
     if (loading) {
@@ -2228,21 +2250,21 @@ export async function checkForAppUpdates(silent = false) {
         releaseLink.classList.remove('hidden');
       }
 
-      // Top notification banner (like adhdvnreader)
+      // Top notification banner
       const banner = document.getElementById('update-notification-banner');
       const bannerText = document.getElementById('update-banner-text');
       const bannerNotes = document.getElementById('update-banner-notes');
-      if (banner && !_bannerDismissed && !silent) {
+      if (banner && !_bannerDismissed) {
         if (bannerText) bannerText.textContent = `A new version (${data.latestVersion}) is available!`;
         if (bannerNotes) bannerNotes.href = data.htmlUrl || 'https://github.com/katalepsis69/PHONEPOS/releases';
         banner.classList.remove('hidden');
       }
 
-      // Topbar status chip
+      // Topbar status chip: always reveal when update is ready
       const chip = document.getElementById('update-status-chip');
       const chipText = document.getElementById('update-chip-text');
       const chipIcon = chip?.querySelector('i');
-      if (chip && !silent) {
+      if (chip) {
         if (chipIcon) chipIcon.className = 'ph ph-arrow-circle-up w-3.5 h-3.5 text-emerald-400';
         if (chipText) chipText.textContent = `Update ${data.latestVersion}`;
         chip.classList.remove('hidden');
@@ -2263,12 +2285,15 @@ export async function checkForAppUpdates(silent = false) {
           applyAppUpdate();
         });
       }
-      // The boot check is silent: the update shows in Settings (status line and
-      // Apply button above), not as a modal over the counter. A manual check
-      // (silent=false) still pops the full notification.
-      if (!silent) openModal('modal-update');
 
-      if (!silent) showToast(`Update ${data.latestVersion} is available!`, 'info');
+      // Automatically prompt once per session per version, or on manual check
+      const sessionPromptKey = `tp_update_prompted_${data.latestVersion}`;
+      if (!silent || !sessionStorage.getItem(sessionPromptKey)) {
+        sessionStorage.setItem(sessionPromptKey, '1');
+        openModal('modal-update');
+      }
+
+      showToast(`Update ${data.latestVersion} is available!`, 'info');
     } else {
       if (statusEl) {
         statusEl.textContent = `You are up to date! (v${data.currentVersion})`;
@@ -2339,14 +2364,37 @@ export async function applyAppUpdate() {
       _updateApplyInFlight = false;
       if (_updateProgressTimer) { clearInterval(_updateProgressTimer); _updateProgressTimer = null; }
       document.body.innerHTML = `
-        <div style="min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: #0b1120; color: #f1f5f9; font-family: sans-serif; padding: 24px;">
-          <div style="max-width: 440px; text-align: center; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
-            <div style="width: 48px; height: 48px; border-radius: 9999px; background: rgba(6, 182, 212, 0.15); color: #06b6d4; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
-              <svg style="width: 24px; height: 24px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+        <div style="min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: var(--app-bg); color: var(--txt); font-family: var(--font-text, system-ui, sans-serif); padding: 24px;">
+          <div style="max-width: 440px; width: 100%; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 36px 28px; box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.1);">
+            <div style="position: relative; width: 64px; height: 64px; margin: 0 auto 20px;">
+              <div style="width: 64px; height: 64px; border-radius: 16px; background: var(--surface-2); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);">
+                <img src="icon.svg" alt="TechParts POS" style="width: 36px; height: 36px; border-radius: 8px;">
+              </div>
+              <div style="position: absolute; right: -4px; bottom: -4px; width: 22px; height: 22px; border-radius: 9999px; background: var(--surface); border: 2px solid var(--surface); display: flex; align-items: center; justify-content: center;">
+                <i class="ph ph-circle-notch animate-spin" style="font-size: 14px; color: var(--pos);"></i>
+              </div>
             </div>
-            <h2 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 8px;">Applying Update...</h2>
-            <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 12px;">TechParts POS is swapping in the new version and starting again.</p>
-            <p id="update-handoff-clock" style="color: #94a3b8; font-size: 0.8125rem; margin-bottom: 0;">Waiting for the register to answer. 0s elapsed.</p>
+            <div style="font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--txt-3); margin-bottom: 6px;">TechParts POS • System Update</div>
+            <h2 style="font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; color: var(--txt); margin: 0 0 8px 0;">Applying Update…</h2>
+            <p style="color: var(--txt-3); font-size: 0.8125rem; line-height: 1.5; margin: 0 0 20px 0;">TechParts POS is restarting the background service and updating files. Your shop records stay safe.</p>
+            <div style="display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 9999px; background: var(--surface-2); border: 1px solid var(--line); font-family: var(--font-numeric, monospace); font-size: 0.75rem; color: var(--txt-2); margin-bottom: 20px;">
+              <span style="width: 7px; height: 7px; border-radius: 9999px; background: var(--pos); display: inline-block;"></span>
+              <span id="update-handoff-clock">Waiting for the register to answer. 0s elapsed.</span>
+            </div>
+            <div style="text-align: left; background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 12px; padding: 14px 16px; font-size: 0.75rem; line-height: 1.6; color: var(--txt-3); display: flex; flex-direction: column; gap: 6px;">
+              <div style="display: flex; align-items: center; gap: 8px; color: var(--pos); font-weight: 500;">
+                <i class="ph ph-check-circle" style="font-size: 0.95rem; flex-shrink: 0;"></i>
+                <span>Update package verified (SHA-256)</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px; color: var(--pos); font-weight: 500;">
+                <i class="ph ph-check-circle" style="font-size: 0.95rem; flex-shrink: 0;"></i>
+                <span>Executable handoff initiated</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px; color: var(--txt); font-weight: 600;">
+                <i class="ph ph-arrows-clockwise animate-spin" style="font-size: 0.95rem; color: var(--pos); flex-shrink: 0;"></i>
+                <span>Reconnecting to register…</span>
+              </div>
+            </div>
           </div>
         </div>`;
       const clockEl = document.getElementById('update-handoff-clock');
@@ -2395,20 +2443,27 @@ function watchForRegisterBack(clockEl, onStalled, limitS) {
 // run. Without this state the operator had a spinner forever and no way out,
 // which is exactly what a hung update looks like from the counter.
 function showUpdateHandoffStalled(releaseUrl, waitedS) {
-  const btn = 'border-radius: 8px; font-weight: 600; font-size: 0.875rem; min-height: 44px; padding: 0 18px; cursor: pointer; border: 1px solid transparent;';
   document.body.innerHTML = `
-    <div style="min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: #0b1120; color: #f1f5f9; font-family: sans-serif; padding: 24px;">
-      <div style="max-width: 480px; text-align: center; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
-        <div style="width: 48px; height: 48px; border-radius: 9999px; background: rgba(245, 158, 11, 0.15); color: #f59e0b; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
-          <svg style="width: 24px; height: 24px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"></path></svg>
+    <div style="min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: var(--app-bg); color: var(--txt); font-family: var(--font-text, system-ui, sans-serif); padding: 24px;">
+      <div style="max-width: 480px; width: 100%; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 36px 32px; box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.1);">
+        <div style="width: 56px; height: 56px; border-radius: 14px; background: var(--warn-bg, #FBF3DB); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; color: var(--warn, #7A5200);">
+          <i class="ph ph-warning" style="font-size: 1.75rem;"></i>
         </div>
-        <h2 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 8px;">The register has not come back</h2>
-        <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 12px;">Nothing answered here for ${waitedS} seconds. Start TechParts POS again and press Update Now to retry the swap.</p>
-        <p style="color: #64748b; font-size: 0.75rem; margin-bottom: 12px;">If it stays stuck, the swap log is at ${S.serviceMode ? 'C:\\ProgramData\\TechPartsPOS\\updates\\TechPartsPOS_update.handoff.log' : '%LOCALAPPDATA%\\TechPartsPOS\\TechPartsPOS_update.handoff.log'}.</p>
-        <p id="update-handoff-clock" style="color: #94a3b8; font-size: 0.8125rem; margin-bottom: 20px;">Waiting for the register to answer. 0s elapsed.</p>
-        <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-          <button type="button" id="update-handoff-wait" style="${btn} background: #06b6d4; color: #0b1120;">Keep waiting</button>
-          ${releaseUrl ? `<button type="button" id="update-handoff-page" style="${btn} background: #334155; color: #f1f5f9;">Open the release page</button>` : ''}
+        <div style="font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--txt-3); margin-bottom: 6px;">TechParts POS • Update Handoff</div>
+        <h2 style="font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; color: var(--txt); margin: 0 0 8px 0;">The register has not come back</h2>
+        <p style="color: var(--txt-3); font-size: 0.8125rem; line-height: 1.5; margin: 0 0 12px 0;">Nothing answered here for ${waitedS} seconds. Start TechParts POS again and press Update Now to retry the swap.</p>
+        <div style="color: var(--txt-3); font-size: 0.75rem; font-family: var(--font-numeric, monospace); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 0 0 16px 0; word-break: break-all; text-align: left;">
+          <span style="display: block; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--txt-4); margin-bottom: 2px;">Log location</span>
+          ${S.serviceMode ? 'C:\\ProgramData\\TechPartsPOS\\updates\\TechPartsPOS_update.handoff.log' : '%LOCALAPPDATA%\\TechPartsPOS\\TechPartsPOS_update.handoff.log'}
+        </div>
+        <p id="update-handoff-clock" style="color: var(--txt-3); font-size: 0.8125rem; margin-bottom: 20px;">Waiting for the register to answer. 0s elapsed.</p>
+        <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+          <button type="button" id="update-handoff-wait" class="btn-primary" style="min-height: 44px; padding: 0 20px; font-weight: 600; font-size: 0.875rem; border-radius: 8px; cursor: pointer;">
+            <i class="ph ph-clock-countdown w-4 h-4"></i> <span>Keep waiting</span>
+          </button>
+          ${releaseUrl ? `<button type="button" id="update-handoff-page" class="btn-secondary" style="min-height: 44px; padding: 0 18px; font-weight: 600; font-size: 0.875rem; border-radius: 8px; cursor: pointer; background: var(--surface-2); color: var(--txt); border: 1px solid var(--line);">
+            <i class="ph ph-arrow-square-out w-4 h-4"></i> <span>Open release page</span>
+          </button>` : ''}
         </div>
       </div>
     </div>`;

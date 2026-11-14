@@ -4,6 +4,13 @@ All notable changes to TechParts POS and Phone Repair Management System are docu
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v1.3] - 2026-11-14
+
+### Highlights & Changes
+- Counter UI: Applying UpdateΓÇª, The register has not come back (index.html, main.js, backoffice.js)
+- Repair Counter (POS): Updated styles.css
+
+
 ## [v1.2] - 2026-11-14
 
 ### Highlights & Changes

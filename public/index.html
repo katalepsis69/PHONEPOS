@@ -203,8 +203,8 @@
         </div>
       </header>
 
-      <!-- UPDATE NOTIFICATION BANNER (hidden by default, like adhdvnreader) -->
-      <div id="update-notification-banner" class="hidden no-print px-4 py-2 bg-emerald-950/90 border-b border-emerald-500/40 text-emerald-200 text-xs flex items-center justify-between transition-all">
+      <!-- UPDATE NOTIFICATION BANNER (hidden per counter ergonomics; topbar chip and modal used instead) -->
+      <div id="update-notification-banner" class="hidden no-print px-4 py-2 bg-emerald-950/90 border-b border-emerald-500/40 text-emerald-200 text-xs flex items-center justify-between transition-all" style="display: none !important;">
         <div class="flex items-center gap-2">
           <i class="ph ph-arrow-circle-up text-emerald-400 w-4 h-4"></i>
           <span id="update-banner-text">A new version is available!</span>
@@ -2390,7 +2390,18 @@
             <div class="font-medium text-[var(--txt)] text-sm" id="modal-update-version">Update available</div>
             <div class="foot-note text-[var(--txt-3)]" id="modal-update-current">Checking current version...</div>
           </div>
-          <span class="px-2 py-0.5 rounded text-xs font-mono border border-[var(--line)] bg-[var(--surface-3)] text-[var(--pos)] font-semibold">Ready</span>
+          <span id="modal-update-badge" class="px-2 py-0.5 rounded text-xs font-mono border border-[var(--line)] bg-[var(--surface-3)] text-[var(--pos)] font-semibold">Ready</span>
+        </div>
+        <!-- Live download progress -->
+        <div id="modal-update-progress-wrap" class="hidden space-y-1.5 pt-1">
+          <div class="flex items-center justify-between text-xs font-mono text-[var(--txt-2)]">
+            <span id="modal-update-progress-label">Downloading update…</span>
+            <span id="modal-update-progress-pct" class="font-bold text-[var(--pos)]">0%</span>
+          </div>
+          <div class="w-full h-2 rounded-full bg-[var(--surface-3)] border border-[var(--line)] overflow-hidden">
+            <div id="modal-update-progress-bar" class="h-full bg-[var(--pos)] transition-all duration-300" style="width: 0%;"></div>
+          </div>
+          <p id="modal-update-progress-detail" class="text-[11px] text-[var(--txt-3)] font-mono"></p>
         </div>
         <p class="foot-note text-[var(--txt-3)]" id="modal-update-desc">
           A new version of TechParts POS is ready to install from GitHub Releases. The POS will replace the executable and restart automatically.

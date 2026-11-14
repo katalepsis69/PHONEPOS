@@ -6101,5 +6101,12 @@ body[data-tab="pos"] .topbar .search {
   right: -4px;
 }
 
+/* Update notification banner permanently hidden per counter ergonomics & user directive;
+   topbar status chip & Software Update modal provide clean, official feedback instead. */
+#update-notification-banner {
+  display: none !important;
+}
+
+
 
 

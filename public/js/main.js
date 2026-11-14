@@ -1067,6 +1067,11 @@ if (sessionStorage.getItem('techparts_cloud_banner') === '1') {
   document.getElementById('dash-cloud-banner')?.classList.add('hidden');
 }
 checkForAppUpdates(true);
+// Background update check every 30 minutes and on network reconnect
+setInterval(() => {
+  if (navigator.onLine) checkForAppUpdates(true);
+}, 30 * 60 * 1000);
+window.addEventListener('online', () => checkForAppUpdates(true));
 
 try {
   if (sessionStorage.getItem('tp_update_complete')) {
