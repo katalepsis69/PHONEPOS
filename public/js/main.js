@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, debouncedViewLoad, initConfirmModal, initInputModal, initLiveClock, openModal, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
 import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, syncCloudUi, openForgotPinPanel, closeForgotPinPanel, submitRecoveryPinReset, submitRecoveryPasswordChange } from './auth.js';
-import { autoPrintEnabled, calculateChange, calculateCreditBalance, clearDeviceSelection, setPosBrandFilter, clearRepairOrder, completeSale, copyRepairRef, customerComboboxInit, editCartQtyPrompt, fillExactAmount, focusImeiForScan, loadCustomerSuggestions, loadPosCatalog, newRepairRef, onCustomerNameInput, onDeviceSelected, onPartSearchKeydown, onRepairIntakeInput, printClaimStub, quickAddPart, refreshDraftChip, removeCartItem, renderCartSummary, resetPosFilters, resetRepairCounter, restoreCartRecovery, saveRepairDraft, setPartCategory, setInStockOnly, setPaymentMethod, setPriceTier, toggleRepairNote, renderPartsTable, initScanListeners, resumeRepairDraft, clearRefusedScans, openScanRefusals } from './views/pos.js';
+import { autoPrintEnabled, calculateChange, calculateCreditBalance, clearDeviceSelection, setPosBrandFilter, clearRepairOrder, completeSale, copyRepairRef, customerComboboxInit, editCartQtyPrompt, fillExactAmount, focusImeiForScan, formatPhPhone, loadCustomerSuggestions, loadPosCatalog, newRepairRef, onCustomerNameInput, onDeviceSelected, onPartSearchKeydown, onRepairIntakeInput, printClaimStub, quickAddPart, refreshDraftChip, removeCartItem, renderCartSummary, resetPosFilters, resetRepairCounter, restoreCartRecovery, saveRepairDraft, setPartCategory, setInStockOnly, setPaymentMethod, setPriceTier, toggleRepairNote, renderPartsTable, initScanListeners, resumeRepairDraft, clearRefusedScans, openScanRefusals } from './views/pos.js';
 import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, setAddItemTemplate, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
 import { loadRepairs, wireRepairsView } from './views/repairs.js';
 import { editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, dismissUpdateBanner, openUpdateModal, downloadBackup } from './views/backoffice.js';
@@ -246,6 +246,15 @@ export function exportInventoryCsv() {
 const ACTIONS = {
   'start-new-sale': () => startNewSale(),
   'switch-tab': el => switchTab(el.dataset.tab),
+  'dash-low-stock': () => {
+    switchTab('inventory');
+    const cb = document.getElementById('inv-low-stock-check');
+    if (cb && !cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change')); }
+  },
+  'dash-cloud-dismiss': () => {
+    sessionStorage.setItem('techparts_cloud_banner', '1');
+    document.getElementById('dash-cloud-banner')?.classList.add('hidden');
+  },
   'open-settings': () => openSettingsModal(),
   'open-staff-settings': () => openSettingsModal('staff'),
   'open-cloud-settings': () => openSettingsModal('cloud'),
@@ -475,12 +484,36 @@ function initFormWiring() {
   on('pos-category-filter', 'change', e => setPartCategory(e.target.value));
   on('pos-instock-only', 'change', e => setInStockOnly(e.target.checked));
   on('pos-customer-name', 'input', onCustomerNameInput);
+  on('pos-customer-phone', 'focus', e => {
+    // Prefill the PH country code so the cashier types only the subscriber digits.
+    if (!e.target.value) {
+      e.target.value = '+63';
+      const n = e.target.value.length;
+      e.target.setSelectionRange(n, n);
+    }
+  });
+  on('pos-customer-phone', 'input', e => {
+    const el = e.target;
+    const cleaned = el.value.replace(/[^+\d]/g, '');
+    let v = cleaned;
+    if (v.startsWith('+63')) {
+      let tail = v.slice(3);
+      if (tail.startsWith('0')) tail = tail.slice(1); // typed 0 after the prefix: swallow it
+      v = ('+63' + tail).slice(0, 13); // '+63' + max 10 subscriber digits
+    }
+    el.value = v === '+63' ? '+63' : (v ? formatPhPhone(v) : '');
+  });
+  on('pos-customer-phone', 'blur', e => { if (e.target.value === '+63') e.target.value = ''; });
   on('pos-discount', 'input', renderCartSummary);
   on('pos-tendered', 'input', calculateChange);
   on('pos-credit-downpayment', 'input', calculateCreditBalance);
   on('repair-note', 'input', onRepairIntakeInput);
 
-  on('credit-search', 'input', searchCustomers);
+  on('credit-search', 'input', e => {
+    const globalSearch = document.getElementById('global-search');
+    if (globalSearch && S.currentTab === 'credits') globalSearch.value = e.target.value;
+    searchCustomers();
+  });
   on('day-close-date', 'change', loadDayClose);
   on('credit-filter', 'change', loadCustomers);
   on('inv-search', 'input', searchInventory);
@@ -892,9 +925,9 @@ export async function startSaleForCustomer() {
   switchTab('pos');
   const nameEl = document.getElementById('pos-customer-name');
   if (nameEl) nameEl.value = name;
-  if (phone && phone !== 'None provided') {
+    if (phone && phone !== 'None provided') {
     const phoneEl = document.getElementById('pos-customer-phone');
-    if (phoneEl) phoneEl.value = phone;
+    if (phoneEl) phoneEl.value = formatPhPhone(phone);
   }
   closeModal('modal-customer-ledger');
   onCustomerNameInput();
@@ -1029,6 +1062,10 @@ export async function refreshSyncChip() {
 }
 window.refreshSyncChip = refreshSyncChip;
 setInterval(() => { if (S.sessionToken) refreshSyncChip(); }, 30000);
+// Session-dismissed Live View banner stays hidden until the next session.
+if (sessionStorage.getItem('techparts_cloud_banner') === '1') {
+  document.getElementById('dash-cloud-banner')?.classList.add('hidden');
+}
 checkForAppUpdates(true);
 
 try {

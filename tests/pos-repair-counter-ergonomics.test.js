@@ -133,3 +133,78 @@ test('phone repair counter: complete keyboard shortcuts and customer rehousing',
   assert.match(mainJs, /lowerKey === 'r'[\s\S]*?resumeRepairDraft\(\)/);
   assert.match(mainJs, /lowerKey === 'a'[\s\S]*?openAddPartModal\(\)/);
 });
+
+test('customers & utang view: 5-column industrial layout, dynamic card state, and ledger triggers', () => {
+  // Table header has 5 semantic columns, no fake single th
+  assert.doesNotMatch(indexHtml, /<th class="flex items-center justify-between">/);
+  assert.match(indexHtml, /<th>Customer Profile<\/th>[\s\S]*?<th class="is-num">Orders \/ Spent<\/th>[\s\S]*?<th class="is-num">Credit Limit<\/th>[\s\S]*?<th class="is-mid">Utang Balance \/ Status<\/th>[\s\S]*?<th class="is-mid">Action<\/th>/);
+
+  // Skeleton aligns with 5 columns
+  assert.match(backofficeJs, /showSkeleton\('customers-tbody', 5\)/);
+
+  // Outstanding utang card toggles dynamically rather than stuck in stat--danger
+  assert.match(backofficeJs, /outCard\.classList\.toggle\('stat--danger', totalOutstanding > 0\.001\)/);
+  assert.match(backofficeJs, /outCard\.classList\.toggle\('stat--pos', totalOutstanding <= 0\.001\)/);
+
+  // Button ledger trigger has expanded hit target
+  assert.match(styles, /\.btn-ledger-trigger::after\s*\{/);
+});
+
+test('inventory view: honest metric copy, screen tech badges, and action hit areas', () => {
+  // Metric card copy handles single unit and honest zero-stock meta
+  assert.match(invJs, /units === 1 \? t\('inv\.stat_unit_single'/);
+  assert.match(invJs, /units > 0 \? t\('inv\.stat_low_only', 'below alert level'\) : t\('inv\.stat_none', 'nothing on hand'\)/);
+
+  // Screen tech rendered with uppercase badge
+  assert.match(invJs, /<span class="tag tag--subtle font-mono uppercase text-xs">\$\{escHtml\(item\.part_type\)\}<\/span>/);
+
+  // Action buttons have Phosphor icons and expanded hit areas
+  assert.match(invJs, /class="btn-mini btn-inv-action"/);
+  assert.match(invJs, /ph-sliders-horizontal/);
+  assert.match(invJs, /ph-clock-counter-clockwise/);
+  assert.match(styles, /\.btn-inv-action::after\s*\{/);
+  assert.match(styles, /#view-inventory \.parts-tools \.field-search\s*\{[\s\S]*?max-width:\s*200px/);
+  assert.match(styles, /body\[data-tab="inventory"\] \.topbar \.search/);
+});
+
+test('installer script: version expansion and clean task hierarchy', () => {
+  const iss = fs.readFileSync(path.join(ROOT, 'installer/TechPartsPOS.iss'), 'utf8');
+  assert.doesNotMatch(iss, /\[version\]/, 'installer script must not contain unexpanded [version] placeholders');
+  assert.match(iss, /WelcomeLabel2=This will install TechParts POS and Repair System \{#MyAppVersion\}/);
+  assert.match(iss, /LicenseLabel=TechParts POS and Repair System, version \{#MyAppVersion\}\./);
+  assert.doesNotMatch(iss, /GroupDescription:\s*"{cm:AdditionalIcons}"/);
+});
+
+test('sales and returns ergonomics: no orphaned timestamp wrap, action hit areas, and hidden topbar search', () => {
+  assert.match(backofficeJs, /<td class="font-mono whitespace-nowrap text-xs">\$\{formatDateTime\(s\.created_at\)\}<\/td>/);
+  assert.match(backofficeJs, /<td class="font-mono whitespace-nowrap text-xs">\$\{formatDateTime\(r\.created_at\)\}<\/td>/);
+  assert.match(styles, /\.sales-action-btn::after\s*\{/);
+  assert.match(styles, /body\[data-tab="sales"\] \.topbar \.search/);
+  assert.match(styles, /body\[data-tab="returns"\] \.topbar \.search/);
+});
+
+test('reports & profit ergonomics: currency sign placement, honest pluralization, expense form, and chart clarity', () => {
+  const uiJs = fs.readFileSync(path.join(ROOT, 'public/js/ui.js'), 'utf8');
+
+  // fmtMoney places negative sign before currency symbol
+  assert.match(uiJs, /const sign = num < 0 \? '-' : '';\s*return sign \+ '₱' \+ Math\.abs\(num\)\.toLocaleString/);
+
+  // Pluralization in backoffice
+  assert.match(backofficeJs, /\$\{b\.count\} \$\{b\.count === 1 \? 'entry' : 'entries'\}/);
+  assert.match(backofficeJs, /\$\{st\.total_parts_stock\} \$\{st\.total_parts_stock === 1 \? 'part' : 'parts'\} on shelf/);
+  assert.match(backofficeJs, /\$\{p\.units\} \$\{p\.units === 1 \? 'unit' : 'units'\} ·/);
+
+  // Expense form input class and width
+  assert.match(indexHtml, /id="expense-amount"[^>]*class="dash-expense-input w-28"/);
+  assert.match(styles, /\.dash-expense-input\s*\{/);
+
+  // Dashboard topbar search hidden
+  assert.match(styles, /body\[data-tab="dashboard"\] \.topbar \.search/);
+
+  // Chart values visible by default on readable series
+  assert.match(styles, /\.chart__value\s*\{[\s\S]*?opacity:\s*0\.92/);
+});
+
+
+
+

@@ -398,11 +398,17 @@ function getPeriodStats(db, period = 'day', refDate = null, fromDate = null) {
   const trendMap = new Map(trendRows.map(t => [t.bucket, t]));
   const trend = [...new Set([...trendMap.keys(), ...costs.keys(), ...refunds.keys(), ...expByBucket.keys()])].sort().map(b => {
     const t = trendMap.get(b) || { count: 0, revenue: 0.0 };
+    const ref = refunds.get(b) || 0.0;
+    const cst = costs.get(b) || 0.0;
+    const exp = expByBucket.get(b) || 0.0;
     return {
       bucket: b,
       count: t.count,
       revenue: money(t.revenue),
-      profit: money(t.revenue - (costs.get(b) || 0) - (refunds.get(b) || 0) - (expByBucket.get(b) || 0))
+      refunded: money(ref),
+      cost: money(cst),
+      expenses: money(exp),
+      profit: money(t.revenue - cst - ref - exp)
     };
   });
 

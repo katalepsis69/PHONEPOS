@@ -7,6 +7,21 @@ import { serializeCartForRecovery, deserializeCartForRecovery } from '../cart-re
 
 const SALE_OP_KEY = 'pos_sale_op_id';
 
+// Canonical PH mobile: +63 followed by the 10 digits after a leading 0 or 63.
+// Stored unspaced so the combobox digit search still matches old 09xx records.
+// Landline-shaped input passes through untouched. ponytail: caret snaps to the
+// end on reformat; typing is left-to-right, so only mid-number edits feel it.
+export function formatPhPhone(raw) {
+  const orig = String(raw || '').trim();
+  if (!orig) return '';
+  let d = orig.replace(/\D/g, '');
+  if (d.startsWith('0')) d = d.slice(1);
+  else if (d.startsWith('63') && d.length >= 11 && d.slice(2).startsWith('9')) d = d.slice(2);
+  if (d.length < 3) return ''; // bare +63 prefix / fragment: not a phone, saves as empty
+  if (!d.startsWith('9')) return orig;
+  return `+63${d.slice(0, 10)}`;
+}
+
 // -------------------------------------------------------------
 // CUSTOMER SUGGESTIONS & AUTOCOMPLETE
 // -------------------------------------------------------------
@@ -34,7 +49,7 @@ export function onCustomerNameInput() {
 
   if (matched) {
     if (matched.customer_phone && phoneInput && !phoneInput.value) {
-      phoneInput.value = matched.customer_phone;
+      phoneInput.value = formatPhPhone(matched.customer_phone);
     }
     badge.classList.remove('hidden');
     // State lives in words: color and emoji alone exclude color-blind cashiers.
@@ -95,7 +110,7 @@ export function customerComboboxInit() {
     onPick: c => {
       input.value = c.customer_name;
       const phone = document.getElementById('pos-customer-phone');
-      if (phone && !phone.value && c.customer_phone) phone.value = c.customer_phone;
+      if (phone && !phone.value && c.customer_phone) phone.value = formatPhPhone(c.customer_phone);
       onCustomerNameInput(); // refresh the utang badge
     }
   });
@@ -694,10 +709,15 @@ export function renderSummaryDevice() {
   const imei = document.getElementById('repair-imei')?.value.trim() || '';
   const note = document.getElementById('repair-note')?.value.trim() || '';
 
+  const unitBox = document.querySelector('.unit.unit--compact');
+  if (unitBox) {
+    unitBox.classList.toggle('has-device', !!S.activeDevice);
+  }
+
   setCounterText('sum-device-name', label || (S.activeDevice ? 'Unnamed device' : 'No device chosen'));
   setCounterText('sum-device-meta', S.activeDevice
     ? [imei ? `IMEI ${imei}` : 'No IMEI / serial', note ? `Note: ${note}` : ''].filter(Boolean).join(' · ')
-    : 'Pick a unit above, or enter one by hand.');
+    : 'Device comes from the repair ticket.');
 
   const label2 = document.getElementById('note-toggle-label');
   const wrap = document.getElementById('repair-note-wrap');
@@ -967,7 +987,7 @@ export async function saveRepairDraft() {
     imei: document.getElementById('repair-imei')?.value || '',
     note: document.getElementById('repair-note')?.value || '',
     customer: document.getElementById('pos-customer-name')?.value || '',
-    phone: document.getElementById('pos-customer-phone')?.value || '',
+    phone: (document.getElementById('pos-customer-phone')?.value || '').replace(/^\+63$/, ''),
     discount: document.getElementById('pos-discount')?.value || 0,
     tier: S.currentPriceTier,
     held_at: new Date().toISOString()
@@ -983,26 +1003,26 @@ export async function saveRepairDraft() {
   // The held job becomes a server-side ticket keyed by its reference, so the
   // queue sees the intake even before the unit is billed. Best effort: the
   // local hold still stands if the server is unreachable, and ringing the
-  // sale upserts the same reference again.
-  if (draft.deviceInput || draft.imei || draft.note) {
-    try {
-      const res = await fetch('/api/repairs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ref: draft.ref,
-          customer_name: draft.customer || 'Walk-in Customer',
-          customer_phone: draft.phone,
-          device: draft.deviceInput,
-          imei: draft.imei,
-          issue_note: draft.note,
-          status: 'intake'
-        })
-      });
-      if (!res.ok) throw new Error('ticket save failed');
-    } catch (_) {
-      showToast('Job held locally, but the repair ticket did not reach the server. It will attach when the sale is rung up.', 'warning');
-    }
+  // sale upserts the same reference again. No device-info gate: the queue
+  // promised that a held job shows up here, and a parts-only hold is still
+  // something parked under an RO number.
+  try {
+    const res = await fetch('/api/repairs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ref: draft.ref,
+        customer_name: draft.customer || 'Walk-in Customer',
+        customer_phone: draft.phone,
+        device: draft.deviceInput,
+        imei: draft.imei,
+        issue_note: draft.note,
+        status: 'intake'
+      })
+    });
+    if (!res.ok) throw new Error('ticket save failed');
+  } catch (_) {
+    showToast('Job held locally, but the repair ticket did not reach the server. It will attach when the sale is rung up.', 'warning');
   }
 
   const ref = draft.ref;
@@ -1043,7 +1063,7 @@ export async function resumeRepairDraft() {
     'repair-imei': draft.imei || '',
     'repair-note': draft.note || '',
     'pos-customer-name': draft.customer || '',
-    'pos-customer-phone': draft.phone || '',
+    'pos-customer-phone': formatPhPhone(draft.phone || ''),
     'pos-discount': draft.discount || 0
   };
   Object.entries(fields).forEach(([id, v]) => {
@@ -1365,6 +1385,11 @@ export function renderCartSummary() {
     }
   }
 
+  const checkoutPanel = document.querySelector('.checkout-panel');
+  if (checkoutPanel) {
+    checkoutPanel.classList.toggle('is-idle', total <= 0);
+  }
+
   if (S.currentPaymentMethod === 'cash') calculateChange();
   if (S.currentPaymentMethod === 'credit') calculateCreditBalance();
 }
@@ -1454,7 +1479,7 @@ export async function completeSale() {
   }
 
   const customerName = document.getElementById('pos-customer-name')?.value.trim() || 'Walk-in Customer';
-  const customerPhone = document.getElementById('pos-customer-phone')?.value.trim() || '';
+  const customerPhone = (document.getElementById('pos-customer-phone')?.value.trim() || '').replace(/^\+63$/, '');
 
   if (S.currentPaymentMethod === 'credit' && (customerName === 'Walk-in Customer' || !customerName)) {
     showToast('Customer / Buyer Name is required for Credit (Utang)', 'warning');
@@ -1708,7 +1733,7 @@ export function printClaimStub() {
     return;
   }
   const customer = document.getElementById('pos-customer-name')?.value.trim() || 'Walk-in Customer';
-  const phone = document.getElementById('pos-customer-phone')?.value.trim() || '';
+  const phone = (document.getElementById('pos-customer-phone')?.value.trim() || '').replace(/^\+63$/, '');
   const { subtotal, discount, total } = cartTotals();
   const items = S.cart.map(item => ({
     ...item,

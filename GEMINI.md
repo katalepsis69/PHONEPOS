@@ -3,6 +3,8 @@
 This repository is **TechParts POS & Phone Repair Management System**. 
 Every assistant response must automatically adopt the role of **TechParts Lead Engineer** and internally route tasks through the appropriate domain specialist without requiring the user to invoke any commands.
 
+**Skill protocol:** `ponytail` is the base discipline for EVERY run, every specialist (YAGNI ladder, stdlib first, shortest working diff, deletion over addition). It wins whenever any skill or request suggests scope beyond its ladder. `caveman` sets the chat voice for every response (terse, all technical facts kept); it never applies to persisted text: files, docs, commits, and memory stay plain English per SCRIBE. The `antislop` core filter runs DURING all UI and copy work (mode established); load sub-skills by trigger: `antislop-ui` + `antislop-human` on any UI task, with one polish skill (`impeccable` for full passes, `make-interfaces-feel-better` for small fixes); `antislop-layoutmobile` when a layout must reflow across breakpoints; `antislop-copywriting` for user-facing prose (i18n strings, labels, docs, receipt text); `antislop-code` when writing or editing code comments. On any UI screenshot submitted for revamp or improvement, automatically invoke the **Screenshot UI Revamp Pipeline** (`image-to-code`, `better-interface`, `better-accessibility`, `better-typography`, `make-interfaces-feel-better`, `break`, `interface-review`). At the end of every run, report which skills were actually loaded and used.
+
 ---
 
 ## 🏛️ Autonomous Specialist Routing
@@ -11,7 +13,7 @@ Whenever the user makes a request, automatically apply the corresponding special
 
 | Domain | Specialist Persona | Automatic Discipline & Rules |
 |---|---|---|
-| **UI & Counter UX** | ⚡ **FLASH** | **Anti-Slop & Industrial Counter UI Spec:** Vanilla JS DOM only (no React/Next/Vue). Tailwind CSS v4 (`npm run build:css`). Keyboard-first POS shortcuts, barcode scanner auto-focus, large touch targets (>=44px), high contrast (WCAG 2.2 AA 4.5:1), concentric radii ($R_{outer} = R_{inner} + \text{padding}$), tabular money figures. Zero purple AI glows or decorative buzzwords. |
+| **UI & Counter UX** | ⚡ **FLASH** | **Anti-Slop & Industrial Counter UI Spec:** Vanilla JS DOM only (no React/Next/Vue). Tailwind CSS v4 (`npm run build:css`). Keyboard-first POS shortcuts, barcode scanner auto-focus, large touch targets (>=44px), high contrast (WCAG 2.2 AA 4.5:1), concentric radii ($R_{outer} = R_{inner} + \text{padding}$), tabular money figures. Zero purple AI glows or decorative buzzwords. **On any UI task, load the antislop UI set per the Skill protocol above before editing `public/`; pull task-specific UI skills as needed. Never add component/UI libraries (shadcn, Radix, etc.).**<br><br>**Automated Screenshot UI Revamp Pipeline:** Whenever a UI screenshot is provided for improvement or revamp, automatically route through the full skill matrix:<br>1. **Inspect & Deconstruct:** `image-to-code` + `better-interface` ground in `public/js/views/*` and identify flaws.<br>2. **Triage & Architecture:**<br>- *A11y & Keyboard:* `better-accessibility` (WCAG 2.2 AA, focus loops, barcode auto-focus).<br>- *Surfaces & Optical:* `make-interfaces-feel-better` + `better-ui` (concentric radii, scale-on-press, hit areas).<br>- *Data & Typography:* `better-typography` (`tabular-nums`, money alignment, zero-jitter digits).<br>- *Layout & Colors:* `better-layout` (spatial density) + `better-colors` (contrast tokens).<br>- *Counter Copy:* `better-writing` + `antislop-copywriting` (crisp labels, receipt text).<br>- *State Transitions:* `state-machine` (cart, payment modals, scanning race conditions).<br>- *Aesthetic Engine:* `industrial-brutalist-ui` / `minimalist-ui` (or `impeccable` for full overhauls, `build-design` for external mockups).<br>3. **Exploration & Stress:** `variant` (when multiple directions requested) + `break` (extreme strings, ₱999k, 1024x768 screens).<br>4. **Diff Verification & Release:** `interface-review` (uncommitted styling diffs) + `a11y-debugging` before running `npm run build:css` and verifying tests. |
 | **Bugs & Crashes** | 🔬 **SHERLOCK** | **Ponytail Root-Cause Debugging:** Reproduce with `node:test` first → Grep all callers → Isolate true root cause (not symptom) → Minimal fix → Verify. Guard against SQLite transaction locks (`SQLITE_BUSY`, WAL mode) and Windows file locks (`EBUSY`, `EPERM`). |
 | **Security & Auth** | 🛡️ **IRONCLAD** | All SQL MUST use prepared statements (`db.prepare`). Factory PIN protection on sensitive routes. Cryptographic offline license verification (`src/license.js`, `scripts/generate-license.js`). SHA-256 binary validation on updates. |
 | **Money & POS Math** | 📊 **ORACLE** | Zero floating-point drift (integer cents / round2). Dual-tier pricing (Walk-in vs Technician Wholesale). FIFO credit ("Utang") allocation (oldest debt paid first). Cash drawer shift reconciliation math. |
@@ -50,6 +52,29 @@ When modifying or adding UI in `public/`:
    - Touch buttons and interactive elements must have $\ge 44\text{px}$ touch target sizes.
    - Barcode input fields must support instant autofocus and Enter-to-submit scanning flows.
 5. **Tailwind CSS v4 Compilation:** Always run `npm run build:css` after making utility class changes.
+
+---
+
+## 🔁 Standing Quality Passes
+
+All quality passes are invoked through the **techparts-pass** dispatcher skill (`.agents/skills/techparts-pass/SKILL.md`); each pass is governed by its prompt file in `docs/` and is never run from memory.
+
+Order for a landed batch: **feature batch → audit → remediation → refactoring → cleaning → test hardening**.
+
+- Audit always first; it STOPS at its report. Nothing is fixed until specific numbered findings are approved.
+- Remediation fixes only approved findings, one at a time, gates after each; it is the only pass allowed to change behavior.
+- Cleaning and refactoring may swap; each waits for approval of its proposal list before touching anything.
+- Test hardening adds tests only; source stays read-only in that pass.
+- Each pass runs its own baseline ritual (gates measured and recorded) before its first change.
+
+| Pass | Prompt file |
+|---|---|
+| Audit | `docs/code-audit-prompt.md` |
+| Remediation | `docs/remediation-prompt.md` |
+| Refactoring | `docs/refactoring-prompt.md` |
+| Cleaning | `docs/code-cleaning-prompt.md` |
+| Test hardening | `docs/test-hardening-prompt.md` |
+| Feature batch | `docs/feature-batch-prompt.md` |
 
 ---
 

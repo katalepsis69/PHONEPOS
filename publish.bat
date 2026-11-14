@@ -4,7 +4,6 @@ title TechParts POS ^- Stage Customer Build (local only)
 cd /d "%~dp0"
 
 :: ---- parse command line arguments -----------------------------------------
-set "WITH_INSTALLER=0"
 set "SKIP_TESTS=0"
 set "CLEAN_BUILD=0"
 set "DRY_RUN=0"
@@ -12,8 +11,6 @@ set "NO_PAUSE=0"
 
 :parse_args
 if "%~1"=="" goto :args_done
-if /i "%~1"=="--installer"  (set "WITH_INSTALLER=1" & shift & goto :parse_args)
-if /i "%~1"=="-i"           (set "WITH_INSTALLER=1" & shift & goto :parse_args)
 if /i "%~1"=="--skip-tests" (set "SKIP_TESTS=1" & shift & goto :parse_args)
 if /i "%~1"=="-s"           (set "SKIP_TESTS=1" & shift & goto :parse_args)
 if /i "%~1"=="--clean"      (set "CLEAN_BUILD=1" & shift & goto :parse_args)
@@ -66,23 +63,14 @@ if %errorlevel% neq 0 (
 if not exist "node_modules\@tailwindcss\cli" goto :need_install
 if not exist "node_modules\postject" goto :need_install
 
-:: Running exe guard (absolute find.exe path avoids GNU findutils collision)
+:: Close any running POS executables instead of refusing: the owner wants
+:: publish to win over a live exe. A settle beat follows so Windows releases
+:: the image lock before the build overwrites anything.
 if "!DRY_RUN!"=="0" (
-    tasklist /fi "imagename eq TechPartsPOS.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "TechPartsPOS.exe" >nul
-    if not errorlevel 1 (
-        echo [ERROR] TechPartsPOS.exe is running on this machine. Close the POS first
-        echo         ^(or run: taskkill /im TechPartsPOS.exe^).
-        set "REASON=The executable was still running."
-        goto :fail
-    )
-
-    tasklist /fi "imagename eq LicenseGenerator.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "LicenseGenerator.exe" >nul
-    if not errorlevel 1 (
-        echo [ERROR] LicenseGenerator.exe is running on this machine. Close it first
-        echo         ^(or run: taskkill /im LicenseGenerator.exe^).
-        set "REASON=LicenseGenerator.exe was still running."
-        goto :fail
-    )
+    taskkill /f /im TechPartsPOS.exe >nul 2>&1 && echo [*] Closed running TechPartsPOS.exe
+    taskkill /f /im TechPartsPOS_update.exe >nul 2>&1
+    taskkill /f /im LicenseGenerator.exe >nul 2>&1 && echo [*] Closed running LicenseGenerator.exe
+    ping -n 3 127.0.0.1 >nul
 )
 
 :: ---- optional clean -------------------------------------------------------
@@ -99,7 +87,7 @@ if "!DRY_RUN!"=="1" (
     echo           Node runtime:    !NODE_BIN!
     "!NODE_BIN!" -e "console.log('          Node version:    ' + process.version); console.log('          Package version: v' + require('./package.json').version);"
     echo           Dependencies:    node_modules verified (@tailwindcss/cli, postject^)
-    echo           Process locks:   None (TechPartsPOS.exe is not running^)
+    echo           Process locks:   Running POS exes are closed at build time
     echo.
     echo [DRY RUN] Pre-flight OK. Run publish.bat to build and stage.
     exit /b 0
@@ -130,13 +118,12 @@ if not exist "release\customer\TechPartsPOS.exe" (
 )
 
 echo.
-echo [3/4] Installer
-if not "!WITH_INSTALLER!"=="1" (
-    echo       Skipped. Compile it with: publish.bat --installer
-    goto :stage
-)
+echo [3/4] Setup installer (the artifact to run on this PC or hand to customers)
 "!NODE_BIN!" scripts\build-installer.js
-if errorlevel 1 echo [WARN] Installer step failed. The staged executable is still valid.
+if !errorlevel! neq 0 (
+    set "REASON=Setup installer compile failed. Nothing was published."
+    goto :fail
+)
 
 :stage
 echo.
@@ -162,6 +149,8 @@ echo ======================================================
 echo.
 echo   Never send dist\ - it holds LicenseGenerator.exe, the vendor private
 echo   key and possibly live data.
+echo   Setup installer: dist\installer\TechPartsPOS-Setup-*.exe (fresh from
+echo   this run - run it to install the new build on this PC or hand to customers)
 echo   Install steps: docs\OPERATIONS_AND_DEPLOYMENT.md
 echo   Activation:    docs\SECURITY_AND_LICENSING.md
 echo.
@@ -197,7 +186,6 @@ echo One-command vendor publish: tests, build + verify, then stage a dated
 echo copy of the customer executable with its SHA-256 in publish\.
 echo.
 echo Options:
-echo   -i, --installer     Also compile the Inno Setup installer executable.
 echo   -s, --skip-tests    Skip test suite (npm test) for faster local staging.
 echo   -c, --clean         Clean stale build artifacts before starting.
 echo   -d, --dry-run       Pre-flight check only; validates toolchain without building.

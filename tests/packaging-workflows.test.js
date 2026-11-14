@@ -92,17 +92,16 @@ test('packaging scripts use staged outputs, pinned local postject, and scoped pr
   assert.match(launcher, /SERVER_EXIT/);
 });
 
-// publish.bat's running-executable guard pipes tasklist into `find /i`. On a box
-// where PATH resolves a GNU findutils `find` before System32, /i is not a flag it
-// understands: the pipe dies, errorlevel lands on the wrong branch, and the guard
-// silently stops guarding while the build overwrites a live exe. The absolute path
-// is the whole fix, so it is pinned here rather than left to a comment.
-test('publish.bat calls the Windows find by absolute path', () => {
+// publish.bat no longer refuses when the POS is running: the owner wants
+// publish to win, so the script kills the running executables first. The kill
+// list is pinned because a build that overwrites a live exe must close every
+// image that can hold the file lock (the updater's staged copy included).
+test('publish.bat closes running executables instead of refusing', () => {
   const bat = fs.readFileSync(path.join(ROOT_DIR, 'publish.bat'), 'utf8');
-  // The exact guard line: tasklist piped into %SystemRoot%\System32\find.exe.
-  assert.ok(bat.includes('tasklist /fi "imagename eq TechPartsPOS.exe" 2>nul | "%SystemRoot%\\System32\\find.exe" /i "TechPartsPOS.exe"'),
-    'the running-executable guard no longer calls Windows find by absolute path');
-  assert.ok(!bat.includes('| find /i'), 'a bare `find` is back on the pipe, and a GNU findutils earlier on PATH defeats the guard');
+  assert.ok(bat.includes('taskkill /f /im TechPartsPOS.exe'), 'publish.bat must close a running TechPartsPOS.exe');
+  assert.ok(bat.includes('taskkill /f /im TechPartsPOS_update.exe'), 'the staged updater image must be closed too');
+  assert.ok(bat.includes('taskkill /f /im LicenseGenerator.exe'), 'publish.bat must close a running LicenseGenerator.exe');
+  assert.ok(!bat.includes('| find /i'), 'a bare `find` on a pipe breaks when GNU findutils precedes System32 on PATH');
   assert.match(bat, /--help/, 'publish.bat must support --help');
   assert.match(bat, /--skip-tests/, 'publish.bat must support --skip-tests');
   assert.match(bat, /--clean/, 'publish.bat must support --clean');
@@ -135,8 +134,9 @@ test('publish-release.bat CLI help and argument normalization on Windows', (t) =
   assert.match(bat, /--changelog/, 'publish-release.bat must support --changelog');
   assert.match(bat, /--non-interactive/, 'publish-release.bat must support --non-interactive');
   assert.match(bat, /--no-pause/, 'publish-release.bat must support --no-pause');
-  assert.ok(bat.includes('tasklist /fi "imagename eq TechPartsPOS.exe" 2>nul | "%SystemRoot%\\System32\\find.exe" /i "TechPartsPOS.exe"'),
-    'publish-release.bat must guard against running TechPartsPOS.exe');
+  assert.ok(bat.includes('taskkill /f /im TechPartsPOS.exe'), 'publish-release.bat must close a running TechPartsPOS.exe');
+  assert.ok(bat.includes('taskkill /f /im TechPartsPOS_update.exe'), 'the staged updater image must be closed too');
+  assert.ok(bat.includes('taskkill /f /im LicenseGenerator.exe'), 'publish-release.bat must close a running LicenseGenerator.exe');
 
   if (process.platform !== 'win32') {
     t.skip('Batch file execution requires Windows');

@@ -2,7 +2,7 @@ import { S } from '../state.js';
 import { t } from '../i18n.js';
 import { closeModal, confirmModal, escHtml, fmtMoney, formatDateOnly, formatDateTime, inputModal, openModal, showSkeleton, showToast, warrantyDays } from '../ui.js';
 import { hasElevation, requireManagerPin, syncCloudUi } from '../auth.js';
-import { autoPrintEnabled, loadCustomerSuggestions, loadPosCatalog } from '../views/pos.js';
+import { autoPrintEnabled, formatPhPhone, loadCustomerSuggestions, loadPosCatalog } from '../views/pos.js';
 import { autoPrintSlip, printPeriodSummary, printSlip, renderReceipt, renderSettlementReceipt, shopIdentityIsPlaceholder } from '../receipts.js';
 import { renderTrendChart } from '../chart.js';
 import { loadInventoryTable } from '../views/inventory.js';
@@ -95,7 +95,7 @@ export function renderWarrantyReturnsTable(returns) {
           <div>${escHtml(r.return_code)}</div>
           ${saleDisplay}
         </td>
-        <td class="font-mono">${formatDateTime(r.created_at)}</td>
+        <td class="font-mono whitespace-nowrap text-xs">${formatDateTime(r.created_at)}</td>
         <td>${custDisplay}</td>
         <td>${escHtml(r.item_name)}${qtyDisplay}</td>
         <td class="font-mono capitalize"><span class="tag tag--warn">${escHtml(r.return_reason.replace(/_/g, ' '))}</span></td>
@@ -345,7 +345,7 @@ export async function loadCustomers() {
   const request = ++customersRequest;
   const search = document.getElementById('credit-search')?.value || '';
   const filter = document.getElementById('credit-filter')?.value || '';
-  showSkeleton('customers-tbody', 9);
+  showSkeleton('customers-tbody', 5);
 
   let url = `/api/customers?search=${encodeURIComponent(search)}`;
   if (filter) url += `&filter=${encodeURIComponent(filter)}`;
@@ -417,6 +417,18 @@ export function updateCreditMetricCards(customers) {
   if (countEl) countEl.textContent = customers.length;
   if (utangEl) utangEl.textContent = activeDebtors;
   if (outEl) outEl.textContent = `${fmtMoney(totalOutstanding)}`;
+
+  const activeCard = document.getElementById('customers-active-card') || utangEl?.closest('.stat');
+  const outCard = document.getElementById('credit-outstanding-card') || outEl?.closest('.stat');
+
+  if (activeCard) {
+    activeCard.classList.toggle('stat--warn', activeDebtors > 0);
+  }
+  if (outCard) {
+    outCard.classList.toggle('stat--danger', totalOutstanding > 0.001);
+    outCard.classList.toggle('stat--pos', totalOutstanding <= 0.001);
+  }
+
   if (navBadge) {
     navBadge.textContent = activeDebtors;
     if (activeDebtors > 0) navBadge.classList.remove('hidden');
@@ -444,7 +456,7 @@ export function renderCustomersTable(customers) {
 
   if (customers.length === 0) {
     tbody.innerHTML = `
-      <tr><td colspan="1">
+      <tr><td colspan="5">
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-users w-5 h-5"></i></div>
           <div class="empty__title">No customers match this filter</div>
@@ -457,26 +469,47 @@ export function renderCustomersTable(customers) {
 
   tbody.innerHTML = customers.map(c => {
     const aging = utangAgeBadge(c);
+    const hasUtang = Number(c.total_credit_balance) > 0.001;
+    const creditLimitVal = Number(c.credit_limit) || 0;
+    const ordersCount = Number(c.sales_count) || 0;
+    const totalSpent = Number(c.total_purchases) || 0;
+
     return `
     <tr data-name="${escHtml(c.customer_name)}" tabindex="0" role="button"
       aria-label="Open ledger for ${escHtml(c.customer_name)}"
       class="cursor-pointer hover:bg-[var(--surface-2)] focus-visible:bg-[var(--surface-2)] outline-none transition-colors">
-      <td class="py-3 px-4">
-        <div class="flex items-center gap-3">
-          <span class="flex items-center justify-center w-8 h-8 rounded-full bg-[var(--surface-3)] text-[var(--txt-3)] shrink-0">
-            <i class="ph ph-user w-4 h-4"></i>
+      <td class="py-2.5 px-3">
+        <div class="flex items-center gap-2.5">
+          <span class="flex items-center justify-center w-7 h-7 rounded-full bg-[var(--surface-3)] text-[var(--txt-3)] shrink-0">
+            <i class="ph ph-user w-3.5 h-3.5"></i>
           </span>
           <div class="min-w-0">
             <span class="font-semibold text-sm text-[var(--txt)]">${escHtml(c.customer_name)}</span>
-            ${c.customer_phone ? `<span class="foot-note font-mono text-xs ml-2">${escHtml(c.customer_phone)}</span>` : ''}
+            ${c.customer_phone ? `<span class="foot-note font-mono text-xs ml-2 text-[var(--txt-3)]">${escHtml(c.customer_phone)}</span>` : ''}
           </div>
-          ${aging.html}
-          <span class="ml-auto shrink-0">
-            ${c.total_credit_balance > 0.001
-              ? `<span class="tag tag--danger font-mono text-xs font-bold">${fmtMoney(Number(c.total_credit_balance))}</span>`
-              : `<span class="tag tag--pos font-mono text-xs">Paid</span>`}
-          </span>
         </div>
+      </td>
+      <td class="is-num py-2.5 px-3">
+        <div class="font-medium text-xs text-[var(--txt)]">${ordersCount} ${ordersCount === 1 ? 'order' : 'orders'}</div>
+        <div class="foot-note font-mono text-xs text-[var(--txt-3)]">${fmtMoney(totalSpent)}</div>
+      </td>
+      <td class="is-num py-2.5 px-3">
+        ${creditLimitVal > 0.001
+          ? `<span class="font-mono text-xs font-semibold text-[var(--txt)]">${fmtMoney(creditLimitVal)}</span>`
+          : `<span class="foot-note text-xs text-[var(--txt-3)]">No limit</span>`}
+      </td>
+      <td class="is-mid py-2.5 px-3">
+        <div class="inline-flex items-center gap-1.5">
+          ${aging.html}
+          ${c.total_credit_balance > 0.001
+            ? `<span class="tag tag--danger font-mono text-xs font-bold">${fmtMoney(Number(c.total_credit_balance))}</span>`
+            : `<span class="tag tag--pos font-mono text-xs">Paid</span>`}
+        </div>
+      </td>
+      <td class="is-mid py-2.5 px-3">
+        <button type="button" class="btn-mini btn-ledger-trigger py-1 px-2.5" data-customer="${escHtml(c.customer_name)}" aria-label="View ledger for ${escHtml(c.customer_name)}">
+          <i class="ph ph-book-open w-3.5 h-3.5"></i> Ledger
+        </button>
       </td>
     </tr>`;
   }).join('');
@@ -505,7 +538,7 @@ export async function openCustomerLedger(customerName, { propagateError = false 
     S.activeCustomerDetails = await res.json();
 
     document.getElementById('ledger-customer-name').textContent = S.activeCustomerDetails.customer_name;
-    document.getElementById('ledger-customer-phone').textContent = `Phone: ${S.activeCustomerDetails.customer_phone || 'None provided'}`;
+    document.getElementById('ledger-customer-phone').textContent = `Phone: ${formatPhPhone(S.activeCustomerDetails.customer_phone) || 'None provided'}`;
 
     const balEl = document.getElementById('ledger-credit-balance');
     const isDebt = S.activeCustomerDetails.total_credit_balance > 0.001;
@@ -536,8 +569,8 @@ export async function openCustomerLedger(customerName, { propagateError = false 
       const aging = utangAgeBadge({ ...S.activeCustomerDetails, credit_date: oldest });
       const overLimit = limitVal > 0 && S.activeCustomerDetails.total_credit_balance > limitVal;
       statusEl.innerHTML = isDebt
-        ? `<span class="tag tag--danger rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider">Active utang</span>${aging.html}${overLimit ? '<span class="tag tag--danger rounded-full px-2 py-0.5 text-xs font-bold uppercase ml-1">Over limit</span>' : ''}`
-        : '<span class="tag tag--pos rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider">Paid up</span>';
+        ? `<span class="tag tag--danger rounded-full px-3 py-1 text-sm font-bold uppercase tracking-wider">Active utang</span>${aging.html}${overLimit ? '<span class="tag tag--danger rounded-full px-2 py-0.5 text-xs font-bold uppercase ml-1">Over limit</span>' : ''}`
+        : '<span class="tag tag--pos rounded-full px-3 py-1 text-sm font-bold uppercase tracking-wider">Paid up</span>';
     }
 
     const salesCountEl = document.getElementById('ledger-sales-count');
@@ -550,6 +583,22 @@ export async function openCustomerLedger(customerName, { propagateError = false 
     document.getElementById('settle-amount').value = isDebt ? S.activeCustomerDetails.total_credit_balance.toFixed(2) : '';
     document.getElementById('settle-method').value = 'cash';
     toggleSettleRefInput();
+
+    const isWalkIn = S.activeCustomerDetails.customer_name === 'Walk-in Customer' || !S.activeCustomerDetails.id;
+    const settleForm = document.getElementById('form-settle-credit');
+    if (settleForm) settleForm.classList.toggle('hidden', !isDebt);
+
+    const limitBtn = document.querySelector('#modal-customer-ledger [data-action="edit-credit-limit"]');
+    if (limitBtn) limitBtn.classList.toggle('hidden', isWalkIn);
+
+    // Paid-up customer: nothing to settle, so the row says so instead of letting
+    // a click die on the server's 'no outstanding credit' rejection.
+    for (const id of ['settle-amount', 'settle-method', 'btn-submit-settlement']) {
+      const el = document.getElementById(id);
+      if (el) el.disabled = !isDebt;
+    }
+    const fullBtn = document.querySelector('#modal-customer-ledger .settle-full-btn');
+    if (fullBtn) fullBtn.disabled = !isDebt;
 
     renderLedgerTabs();
     openModal('modal-customer-ledger');
@@ -984,7 +1033,7 @@ export function renderSalesHistory(sales) {
           ${s.voided ? ` <span class="tag tag--danger">VOIDED</span>` : ''}
           ${s.rma_count > 0 ? ` <span class="tag tag--warn" title="${s.rma_count} return(s) on this sale${s.refunded_amount > 0 ? ` (${fmtMoney(Number(s.refunded_amount))} refunded)` : ''}">Return${s.rma_count > 1 ? ` ×${s.rma_count}` : ''}${s.refunded_amount > 0 ? ` (-${fmtMoney(Number(s.refunded_amount))})` : ''}</span>` : ''}
         </td>
-        <td class="font-mono">${formatDateTime(s.created_at)}</td>
+        <td class="font-mono whitespace-nowrap text-xs">${formatDateTime(s.created_at)}</td>
         <td>
           <button type="button" class="linkish font-bold" data-action="open-customer" data-customer="${escHtml(s.customer_name)}" title="Open customer panel">${escHtml(s.customer_name)}</button>
           ${(s.customer_type === 'technician' || s.customer_type === 'wholesale') ? '<span class="tag tag--info text-xs ml-1.5 font-semibold" title="Wholesale order">Wholesale</span>' : ''}
@@ -997,16 +1046,16 @@ export function renderSalesHistory(sales) {
         <td class="is-num font-mono${s.discount > 0 ? ' text-[var(--warn)] font-bold' : ''}">${fmtMoney(Number(s.discount))}</td>
         <td class="is-num font-mono">
           <span class="font-bold text-[var(--txt)]">${fmtMoney(Number(s.total_amount))}</span>
-          ${s.refunded_amount > 0 ? `<div class="foot-note text-xs text-[var(--danger)]">Refunded: ${fmtMoney(Number(s.refunded_amount))}</div>` : ''}
+          ${s.refunded_amount > 0 ? `<div class="foot-note text-xs text-[var(--danger)] whitespace-nowrap">Refunded: ${fmtMoney(Number(s.refunded_amount))}</div>` : ''}
         </td>
         <td class="is-num font-mono${hasDebt ? ' text-[var(--danger)] font-bold' : ''}">${hasDebt ? `${fmtMoney(Number(s.credit_balance))}` : '₱0.00'}</td>
         <td class="is-mid">
-          <span class="inline-flex items-center gap-1.5">
-            <button data-action="view-sale" data-sale-id="${s.id}" class="btn-mini">Receipt</button>
+          <span class="inline-flex items-center gap-1.5 whitespace-nowrap">
+            <button data-action="view-sale" data-sale-id="${s.id}" class="btn-mini sales-action-btn">Receipt</button>
             ${s.voided ? '' : (s.rma_available === 0
-              ? `<button class="btn-mini btn-mini--danger" disabled style="opacity:.4;cursor:not-allowed;" title="Every returnable part on this sale has already been claimed">Return</button>`
-              : `<button data-action="open-return" data-sale-id="${s.id}" class="btn-mini btn-mini--danger" title="Process Return / Warranty">Return</button>`)}
-            ${s.voided ? '' : `<button data-action="void-sale" data-sale-id="${s.id}" class="btn-mini btn-mini--danger">Void</button>`}
+              ? `<button class="btn-mini btn-mini--danger sales-action-btn" disabled style="opacity:.4;cursor:not-allowed;" title="Every returnable part on this sale has already been claimed">Return</button>`
+              : `<button data-action="open-return" data-sale-id="${s.id}" class="btn-mini btn-mini--danger sales-action-btn" title="Process Return / Warranty">Return</button>`)}
+            ${s.voided ? '' : `<button data-action="void-sale" data-sale-id="${s.id}" class="btn-mini btn-mini--danger sales-action-btn">Void</button>`}
           </span>
         </td>
       </tr>
@@ -1102,7 +1151,7 @@ export async function loadExceptions(days = null, date = null) {
 // equal-length window so the delta chips have a baseline.
 // -------------------------------------------------------------
 const PERIOD_DAYS = { day: 1, '3d': 3, '7d': 7, '30d': 30, '365d': 365 };
-const dashState = { period: 'day', date: null, from: null, topSort: 'revenue', topExpanded: false, trendMode: 'revenue', wired: false };
+const dashState = { period: 'day', date: null, from: null, topSort: 'revenue', topExpanded: false, reorderExpanded: false, trendMode: 'revenue', wired: false };
 let lastDash = null;
 
 const $id = id => document.getElementById(id);
@@ -1119,7 +1168,9 @@ function windowLabel(s) {
 function deltaTag(node, pct) {
   if (!node) return;
   if (pct === null || pct === undefined) { node.className = 'tag'; node.textContent = 'no prior'; return; }
-  const up = pct >= 0;
+  // 0% is not a win: green + trend-up arrow on "no change" read as a boast.
+  if (pct === 0) { node.className = 'tag'; node.textContent = '0%'; return; }
+  const up = pct > 0;
   node.className = `tag tag--${up ? 'pos' : 'danger'}`;
   node.innerHTML = `<i class="ph ph-${up ? 'trend-up' : 'trend-down'}"></i>${up ? '+' : ''}${pct}%`;
 }
@@ -1206,18 +1257,19 @@ function renderDashboard(s) {
     ? (bk.age_hours >= 1 ? `${Math.round(bk.age_hours)}h ago` : 'in the last hour')
     : 'no backup file found';
   $id('dash-standing').innerHTML = `
-    <div class="kv kv--danger">
+    <div class="kv${st.total_credit_outstanding > 0.001 ? ' kv--danger' : ''}">
       <span class="flex items-center gap-2"><i class="ph ph-credit-card w-4 h-4"></i>Utang outstanding</span>
       <span class="text-right"><strong class="block">${fmtMoney(st.total_credit_outstanding)}</strong><span class="foot-note">${st.total_debtors_count} debtor${st.total_debtors_count === 1 ? '' : 's'}, right now</span></span>
     </div>
     <div class="kv">
       <span class="flex items-center gap-2"><i class="ph ph-package w-4 h-4"></i>Inventory value (retail)</span>
-      <span class="text-right"><strong class="block">${fmtMoney(st.total_inventory_retail_value)}</strong><span class="foot-note">${st.total_parts_stock} parts on shelf</span></span>
+      <span class="text-right"><strong class="block">${fmtMoney(st.total_inventory_retail_value)}</strong><span class="foot-note">${st.total_parts_stock} ${st.total_parts_stock === 1 ? 'part' : 'parts'} on shelf</span></span>
     </div>
-    <div class="kv kv--warn">
+    <button type="button" class="kv kv--link kv--warn" data-action="dash-low-stock"
+      aria-label="Open inventory filtered to low stock parts">
       <span class="flex items-center gap-2"><i class="ph ph-warning w-4 h-4"></i>Low stock parts</span>
-      <span class="text-right"><strong class="block">${st.low_stock_count}</strong><span class="foot-note">at or below minimum</span></span>
-    </div>
+      <span class="text-right"><strong class="block">${st.low_stock_count}</strong><span class="foot-note">at or below minimum, click to review</span></span>
+    </button>
     <div class="kv${bk.stale ? ' kv--danger' : ''}">
       <span class="flex items-center gap-2"><i class="ph ph-floppy-disk w-4 h-4"></i>Backup ${bk.stale ? 'overdue' : 'current'}</span>
       <span class="text-right"><strong class="block">${ageTxt}</strong><span class="foot-note">${bk.stale ? 'Older than a day plus slack; mirror it off this disk (docs section 3.3)' : 'On the same disk as the database; mirror it off-machine (docs section 3.3)'}</span></span>
@@ -1241,15 +1293,26 @@ function renderDashboard(s) {
 // they happened), driven by the seg control in the panel header.
 function renderTrend(s) {
   const profit = dashState.trendMode === 'profit';
-  renderTrendChart($id('dash-trend'), (s.trend || []).map(t => ({
-    label: s.days >= 365 ? fmonth(t.bucket) : fday(t.bucket),
-    value: profit ? t.profit : t.revenue,
-    sub: `${t.count} sale${t.count === 1 ? '' : 's'}`
-  })), { fmt: fmtMoney, title: profit ? 'Profit after refunds & expenses' : 'Revenue trend' });
+  const totalRefunds = (s.trend || []).reduce((sum, t) => sum + (t.refunded || 0), 0);
+  renderTrendChart($id('dash-trend'), (s.trend || []).map(t => {
+    let sub = `${t.count} sale${t.count === 1 ? '' : 's'}`;
+    if (!profit && t.refunded > 0) {
+      sub += ` · ${fmtMoney(t.refunded)} refunded`;
+    } else if (profit && t.refunded > 0) {
+      sub += ` · incl. -${fmtMoney(t.refunded)} refunds`;
+    }
+    return {
+      label: s.days >= 365 ? fmonth(t.bucket) : fday(t.bucket),
+      value: profit ? t.profit : t.revenue,
+      sub
+    };
+  }), { fmt: fmtMoney, title: profit ? 'Profit after refunds & expenses' : 'Revenue trend' });
   $id('dash-trend-title').textContent = profit ? 'Profit after refunds & expenses' : 'Revenue trend';
   $id('dash-trend-hint').textContent = (profit
     ? 'Profit after refunds, replacement parts, and operating expenses; each lands on the date it happened.'
-    : 'Revenue per bucket.')
+    : (totalRefunds > 0
+        ? `Gross sales volume (${fmtMoney(totalRefunds)} refunded in this window; click 'Net profit' for bottom line).`
+        : 'Gross sales volume per day.'))
     + (s.period === '365d' ? ' Monthly buckets.' : '');
 }
 
@@ -1277,7 +1340,7 @@ function renderTopProducts() {
         </div>
         <div class="rank__sub">
           <span class="rank__bar"><span style="width:${Math.round(((p[key] || 0) / max) * 100)}%"></span></span>
-          <span class="rank__meta">${p.units} u · ${p.margin_pct === null ? '-' : p.margin_pct}% margin</span>
+          <span class="rank__meta">${p.units} ${p.units === 1 ? 'unit' : 'units'} · ${p.margin_pct === null ? '-' : p.margin_pct}% margin</span>
         </div>
       </div>
     </div>`).join('')
@@ -1316,14 +1379,24 @@ function renderDeadStock(rows) {
   }).join('');
 }
 
+const REORDER_PREVIEW = 5;
+
 function renderReorder(rows) {
   const box = $id('dash-reorder');
   if (!box) return;
+  const count = $id('dash-reorder-count');
+  if (count) {
+    count.textContent = rows.length ? `${rows.length} part${rows.length === 1 ? '' : 's'}` : '';
+    count.classList.toggle('hidden', !rows.length);
+  }
   if (!rows.length) {
     box.innerHTML = emptyPanel('check-circle', 'Nothing to reorder', 'Stock levels and days of cover are healthy.');
     return;
   }
-  box.innerHTML = rows.map(r => `
+  // Collapsed shows a glanceable handful; See all opens the full list and the
+  // card's own scroll cap keeps it from stretching the page (the original bug).
+  const shown = dashState.reorderExpanded ? rows : rows.slice(0, REORDER_PREVIEW);
+  box.innerHTML = shown.map(r => `
     <div class="kv">
       <div class="min-w-0">
         <span class="block font-bold truncate">${escHtml(r.name)}</span>
@@ -1334,7 +1407,9 @@ function renderReorder(rows) {
         <span class="block foot-note font-mono">${r.units_sold} sold this window</span>
         ${r.suggested_qty > 0 ? `<button type="button" class="btn-mini mt-1" data-action="receive-part" data-part-id="${r.id}" data-suggested="${r.suggested_qty}" data-cost="${r.cost_price || 0}"><i class="ph ph-package w-3.5 h-3.5"></i> Receive ${r.suggested_qty}</button>` : ''}
       </div>
-    </div>`).join('');
+    </div>`).join('') + (rows.length > REORDER_PREVIEW
+      ? `<button type="button" class="linkish w-full text-center" data-dash-action="toggle-reorder">${dashState.reorderExpanded ? 'See less' : `See all ${rows.length} parts`}</button>`
+      : '');
 }
 
 function syncPeriodUi() {
@@ -1374,6 +1449,7 @@ function wireDashboardControls() {
     if (p) {
       dashState.period = p.dataset.period;
       dashState.topExpanded = false;
+      dashState.reorderExpanded = false;
       syncPeriodUi();
       loadDashboardData();
       return;
@@ -1392,6 +1468,11 @@ function wireDashboardControls() {
   // defaults to the current cost). One batch line per part; the server applies
   // the whole request or nothing.
   $id('dash-reorder').addEventListener('click', async e => {
+    if (e.target.closest('[data-dash-action="toggle-reorder"]')) {
+      dashState.reorderExpanded = !dashState.reorderExpanded;
+      renderReorder(lastDash?.reorder || []);
+      return;
+    }
     const btn = e.target.closest('[data-action="receive-part"]');
     if (!btn) return;
     if (!hasElevation()) {
@@ -1674,7 +1755,7 @@ export async function loadDayClose() {
             ? methods.map(([m, b]) => `<tr>
                 <td class="capitalize">${escHtml(m)}</td>
                 <td class="text-right font-mono">${fmtMoney(b.collected)}</td>
-                <td class="text-right foot-note">${b.count} entry${b.count === 1 ? '' : 's'}</td>
+                <td class="text-right foot-note">${b.count} ${b.count === 1 ? 'entry' : 'entries'}</td>
               </tr>`).join('')
             : `<tr><td class="foot-note">Nothing collected on this day.</td></tr>`}
           <tr>

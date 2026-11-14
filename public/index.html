@@ -55,7 +55,10 @@
           <span data-i18n="nav.pos">Repair counter</span>
           <span class="rail-link__hint">F1</span>
         </button>
-        <button data-action="switch-tab" data-tab="repairs" id="tab-btn-repairs" class="rail-link tab-btn">
+        <!-- Repairs queue parked 2026-11-14 (owner call, "for now"): the ticket
+             recording on Hold stays live, so re-enabling this button restores
+             the board with whatever history accumulated. -->
+        <button data-action="switch-tab" data-tab="repairs" id="tab-btn-repairs" class="rail-link tab-btn hidden">
           <i class="ph ph-wrench w-4 h-4"></i>
           <span data-i18n="nav.repairs">Repairs</span>
         </button>
@@ -320,7 +323,7 @@
                   <div class="field__wrap">
                     <input type="text" id="pos-customer-name" autocomplete="off"
                       data-i18n-ph="pos.cust_search_ph"
-                      placeholder="Customer name or phone (shows unpaid balance)" title="Customer name (Alt+C)" class="text-xs py-1">
+                      placeholder="Customer name" title="Customer name (Alt+C)" class="text-xs py-1">
                     <label class="sr-only" for="pos-customer-phone">Customer phone (optional)</label>
                     <input type="text" id="pos-customer-phone" class="field__side text-xs py-1" inputmode="tel" autocomplete="off"
                       placeholder="Phone">
@@ -337,7 +340,7 @@
                         <span class="unit__name text-xs font-semibold truncate" id="sum-device-name">No device chosen</span>
                       </div>
                     </div>
-                    <div class="unit__meta text-slate-400 truncate mt-0.5" id="sum-device-meta">Pick a unit above, or enter one by hand.</div>
+                    <div class="unit__meta text-slate-400 truncate mt-0.5" id="sum-device-meta">Device comes from the repair ticket.</div>
                   </div>
                 </div>
 
@@ -514,12 +517,12 @@
               <span id="customers-total-count" class="stat__value">0</span>
               <span class="stat__meta">Unique customer profiles</span>
             </div>
-            <div class="stat stat--warn">
+            <div id="customers-active-card" class="stat">
               <span class="stat__label">Active utang</span>
               <span id="customers-active-utang" class="stat__value">0</span>
               <span class="stat__meta">Customers with a remaining balance</span>
             </div>
-            <div class="stat stat--danger">
+            <div id="credit-outstanding-card" class="stat">
               <span class="stat__label">Outstanding utang</span>
               <span id="credit-total-outstanding" class="stat__value">₱0.00</span>
               <span class="stat__meta">Unpaid balance across all customers</span>
@@ -554,10 +557,11 @@
               <table class="ptable">
                 <thead>
                   <tr>
-                    <th class="flex items-center justify-between">
-                      <span>Customer Profile</span>
-                      <span class="text-right">Balance / Status</span>
-                    </th>
+                    <th>Customer Profile</th>
+                    <th class="is-num">Orders / Spent</th>
+                    <th class="is-num">Credit Limit</th>
+                    <th class="is-mid">Utang Balance / Status</th>
+                    <th class="is-mid">Action</th>
                   </tr>
                 </thead>
                 <tbody id="customers-tbody"></tbody>
@@ -575,7 +579,7 @@
                 <i class="ph ph-magnifying-glass w-4 h-4"></i>
                 <input type="text" id="inv-search" autocomplete="off"
                   data-i18n-ph="inv.search_ph"
-                  placeholder="Search phone model, part type, or SKU…">
+                  placeholder="Search parts, model, SKU…">
               </span>
               <label class="sr-only" for="inv-brand-filter">Filter parts by brand</label>
               <select id="inv-brand-filter" class="select-sm">
@@ -595,7 +599,7 @@
               </button>
               <!-- Import/export on the toolbar; all three are manager-only
                    and elevation-gated server-side. -->
-              <span class="flex gap-2">
+              <span class="flex items-center gap-2 ml-auto">
                 <button type="button" class="btn-mini" data-action="import-template" data-manager-only
                   data-i18n-title="inv.download_template" title="Download template">
                   <i class="ph ph-download-simple w-3.5 h-3.5"></i> Template
@@ -609,10 +613,10 @@
                   <i class="ph ph-upload-simple w-3.5 h-3.5"></i> <span data-i18n="inv.import">Import</span>
                 </button>
                 <input type="file" id="inv-import-file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
+                <button type="button" id="inv-add-part-btn" data-action="open-add-part" class="btn-primary" data-manager-only>
+                  <i class="ph ph-plus-circle w-4 h-4"></i> <span data-i18n="inv.add_part">Add New Phone Part</span>
+                </button>
               </span>
-              <button type="button" id="inv-add-part-btn" data-action="open-add-part" class="btn-primary" data-manager-only>
-                <i class="ph ph-plus-circle w-4 h-4"></i> <span data-i18n="inv.add_part">Add New Phone Part</span>
-              </button>
             </div>
           </section>
 
@@ -674,7 +678,6 @@
                     <th class="is-num" data-i18n="inv.th_wholesale">Wholesale (₱)</th>
                     <th class="is-mid" data-i18n="inv.th_stock">Stock Qty</th>
                     <th class="is-mid" data-i18n="inv.th_min_alert" title="Low-stock alert threshold">Min Stock Alert</th>
-                    <th class="is-mid" data-i18n="inv.th_status">Status</th>
                     <th class="is-mid" data-i18n="inv.th_actions">Actions</th>
                   </tr>
                 </thead>
@@ -799,7 +802,7 @@
             <span id="dash-range" class="foot-note font-mono" role="status"></span>
             <span id="dash-freshness" class="tag font-mono text-xs" role="status" aria-live="polite" hidden></span>
             <span class="flex-1"></span>
-            <button type="button" class="btn-mini" data-dash-action="print">
+            <button type="button" class="btn-mini btn-lg" data-dash-action="print">
               <i class="ph ph-printer w-3.5 h-3.5"></i> Print summary
             </button>
           </div>
@@ -821,6 +824,10 @@
             <div class="flex items-center gap-2 shrink-0">
               <button type="button" class="btn-mini btn-primary" data-action="open-cloud-settings">
                 <i class="ph ph-link w-3.5 h-3.5"></i> <span id="dash-cloud-btn-label">Pair Phone</span>
+              </button>
+              <button type="button" class="modal-card__x" data-action="dash-cloud-dismiss"
+                title="Hide for this session" aria-label="Hide the Manager Live View banner for this session">
+                <i class="ph ph-x w-4 h-4"></i>
               </button>
             </div>
           </div>
@@ -927,7 +934,10 @@
                   <h2 class="panel__title">Reorder list</h2>
                   <p class="panel__hint">Below minimum, or less than 14 days of cover left.</p>
                 </div>
-                <div class="panel__tools foot-note"><i class="ph ph-warning w-4 h-4"></i></div>
+                <div class="panel__tools foot-note items-center gap-1.5">
+                  <span id="dash-reorder-count" class="hidden font-mono font-bold"></span>
+                  <i class="ph ph-warning w-4 h-4"></i>
+                </div>
               </header>
               <div id="dash-reorder" class="panel__body space-y-2"></div>
             </section>
@@ -967,7 +977,7 @@
               </header>
               <div class="panel__body text-xs space-y-2">
                 <form id="dash-expense-form" class="flex flex-wrap gap-2 items-center" autocomplete="off">
-                  <input id="expense-category" list="expense-category-list" class="select-sm flex-1 min-w-32" maxlength="40" required aria-label="Expense category" data-i18n-ph="expense.category_ph" placeholder="Category">
+                  <input id="expense-category" list="expense-category-list" class="dash-expense-input flex-1 min-w-32" maxlength="40" required aria-label="Expense category" data-i18n-ph="expense.category_ph" placeholder="Category">
                   <datalist id="expense-category-list">
                     <option value="Rent"></option>
                     <option value="Utilities"></option>
@@ -978,8 +988,8 @@
                     <option value="Marketing"></option>
                     <option value="Other"></option>
                   </datalist>
-                  <input id="expense-amount" type="number" step="0.01" min="0.01" inputmode="decimal" class="select-sm w-24" required aria-label="Expense amount" data-i18n-ph="expense.amount_ph" placeholder="Amount">
-                  <input id="expense-description" class="select-sm flex-1 min-w-32" maxlength="200" aria-label="Expense note" data-i18n-ph="expense.note_ph" placeholder="Note (optional)">
+                  <input id="expense-amount" type="number" step="0.01" min="0.01" inputmode="decimal" class="dash-expense-input w-28" required aria-label="Expense amount" data-i18n-ph="expense.amount_ph" placeholder="Amount">
+                  <input id="expense-description" class="dash-expense-input flex-1 min-w-32" maxlength="200" aria-label="Expense note" data-i18n-ph="expense.note_ph" placeholder="Note (optional)">
                   <button type="submit" class="btn-mini btn-primary"><i class="ph ph-plus w-3.5 h-3.5"></i> <span data-i18n="expense.add">Add</span></button>
                 </form>
                 <div id="dash-expenses-list" class="space-y-1">Loading…</div>
@@ -1453,8 +1463,8 @@
               <div class="p-3 bg-[var(--surface-muted)] rounded-lg border border-[var(--line-soft)] space-y-2.5">
                 <div class="flex items-center justify-between gap-2">
                   <div>
-                    <h4 class="text-xs font-bold text-[var(--fg-loud)]">Business Profile &amp; Operational Modules</h4>
-                    <p class="foot-note">Choose a preset or customize features to fit any store type.</p>
+                    <h4 class="text-xs font-bold text-[var(--fg-loud)]">Business Profile</h4>
+                    <p class="foot-note">Pick your store type; the operational modules follow the preset.</p>
                   </div>
                   <div class="field mb-0">
                     <select id="settings-business-type" class="select-sm text-xs py-1">
@@ -1467,7 +1477,10 @@
                   </div>
                 </div>
 
-                <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--line-soft)]">
+                <!-- Module checkboxes are display-hidden (owner call 2026-11-14): the
+                     preset drives them, Save persists them, nothing was removed.
+                     Un-hide this row to expose per-module customization again. -->
+                <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--line-soft)]" hidden>
                   <label class="check check--pill text-xs">
                     <input type="checkbox" id="settings-enable-service-bench">
                     <span>Service &amp; Repair Bench</span>

@@ -21,14 +21,12 @@ echo Packaging TechPartsPOS.exe, running tests, and publishing
 echo the release to GitHub with simple release notes.
 echo.
 
-:: Fail fast if TechPartsPOS.exe is currently running
-tasklist /fi "imagename eq TechPartsPOS.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "TechPartsPOS.exe" >nul
-if not errorlevel 1 (
-    echo [ERROR] TechPartsPOS.exe is running on this machine. Close the POS first
-    echo         ^(or run: taskkill /im TechPartsPOS.exe^).
-    if not defined NO_PAUSE pause
-    exit /b 1
-)
+:: Close any running POS executables instead of refusing: publish must win
+:: over a live exe. A settle beat follows so Windows releases the image lock.
+taskkill /f /im TechPartsPOS.exe >nul 2>&1 && echo [*] Closed running TechPartsPOS.exe
+taskkill /f /im TechPartsPOS_update.exe >nul 2>&1
+taskkill /f /im LicenseGenerator.exe >nul 2>&1 && echo [*] Closed running LicenseGenerator.exe
+ping -n 3 127.0.0.1 >nul
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\publish-release.ps1" %*
 set "EXIT_CODE=%errorlevel%"

@@ -328,9 +328,14 @@ function Sync-ChangelogFile([string]$versionTag, [string]$editedNotes) {
     if (-not [string]::IsNullOrWhiteSpace($editedNotes)) {
         $changelogPath = Join-Path $rootDir "CHANGELOG.md"
         if (Test-Path $changelogPath) {
-            $bulletsMatch = [regex]::Match($editedNotes, "(?s)### Highlights in this update:\s*(.*?)(?=\r?\n\r?\n---|\r?\n\r?\n###|$)")
+            $bulletsText = ""
+            $bulletsMatch = [regex]::Match($editedNotes, "(?s)### Highlights (?:in this update|& Changes):\s*(.*?)(?=\r?\n\r?\n---|\r?\n\r?\n###|$)")
             if ($bulletsMatch.Success) {
                 $bulletsText = $bulletsMatch.Groups[1].Value.Trim()
+            } elseif ($editedNotes -match "(?s)##\s*\[.*?\]\s*-\s*\d{4}-\d{2}-\d{2}\s*### Highlights & Changes\s*(.*)") {
+                $bulletsText = $matches[1].Trim()
+            }
+            if (-not [string]::IsNullOrWhiteSpace($bulletsText)) {
                 $today = (Get-Date).ToString("yyyy-MM-dd")
                 $newEntry = "## [$versionTag] - $today`r`n`r`n### Highlights & Changes`r`n$bulletsText`r`n"
                 $clContent = [System.IO.File]::ReadAllText($changelogPath, [System.Text.Encoding]::UTF8)
@@ -406,8 +411,13 @@ if ($DryRun) {
 
     # Commit confirmed highlights to CHANGELOG.md and RELEASE_NOTES.md
     Sync-ChangelogFile $tag $releaseNotes
-    $normalizedNotes = $releaseNotes -replace "(?<!`r)`n", "`r`n"
-    [System.IO.File]::WriteAllText($releaseNotesPath, $normalizedNotes, [System.Text.Encoding]::UTF8)
+    if ($releaseNotes -notmatch 'Spreadsheet Import') {
+        # If user pasted raw changelog bullets, preserve standard user guide in RELEASE_NOTES.md
+        & node (Join-Path $rootDir "scripts\generate-changelog.js") "--version" $tag | Out-Null
+    } else {
+        $normalizedNotes = $releaseNotes -replace "(?<!`r)`n", "`r`n"
+        [System.IO.File]::WriteAllText($releaseNotesPath, $normalizedNotes, [System.Text.Encoding]::UTF8)
+    }
 
     Write-Host "Publishing version $tag..." -ForegroundColor Cyan
 

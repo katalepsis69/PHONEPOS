@@ -36,7 +36,9 @@ export const UNREADABLE_AMOUNT = '₱--';
 
 export function fmtMoney(n) {
   if (!isFiniteAmount(n)) return UNREADABLE_AMOUNT;
-  return '₱' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const num = Number(n || 0);
+  const sign = num < 0 ? '-' : '';
+  return sign + '₱' + Math.abs(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function setCounterText(id, value) {

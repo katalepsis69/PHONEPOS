@@ -16,7 +16,7 @@
 ; Rewritten by scripts/publish-release.ps1 on every release; keep it equal to
 ; package.json's version and src/updater.js's CURRENT_VERSION.
 #ifndef MyAppVersion
-#define MyAppVersion "1.1"
+#define MyAppVersion "1.2"
 #endif
 #define MyAppPublisher "TechParts"
 #define MyAppExeName "TechPartsPOS.exe"
@@ -81,7 +81,7 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\TechPartsPOS.ico"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"
 
 [Messages]
 SetupAppTitle=TechParts POS Setup
@@ -89,9 +89,9 @@ SetupWindowTitle=Setup - TechParts POS and Repair System
 UninstallAppTitle=Uninstall TechParts POS
 UninstallAppFullTitle=TechParts POS and Repair System Uninstall
 WelcomeLabel1=Welcome to TechParts POS
-WelcomeLabel2=This will install TechParts POS and Repair System [version] on this computer.%n%nTechParts POS runs offline as a local background service and opens in your web browser. Your shop records stay on this computer.%n%nIt is recommended that you close all other applications before continuing.
+WelcomeLabel2=This will install TechParts POS and Repair System {#MyAppVersion} on this computer.%n%nTechParts POS runs offline as a local background service and opens in your web browser. Your shop records stay on this computer.%n%nIt is recommended that you close all other applications before continuing.
 WizardLicense=License and Usage Terms
-LicenseLabel=TechParts POS and Repair System, version [version].
+LicenseLabel=TechParts POS and Repair System, version {#MyAppVersion}.
 LicenseLabel3=You must accept these terms before installing.
 LicenseAccepted=I &accept the terms
 LicenseNotAccepted=I &do not accept the terms

@@ -28,7 +28,11 @@ export function renderTrendChart(container, series, { fmt = v => String(v), titl
   const inner = H - PT - PB;
   const max = Math.max(...series.map(d => d.value), 0);
   const min = Math.min(...series.map(d => d.value), 0);
-  const yFor = value => PT + inner * ((max - value) / (max - min || 1));
+  // Headroom above the tallest bar: the peak never kisses the frame, and its
+  // value label always has sky to sit in instead of colliding with the top.
+  const span = max - min || 1;
+  const top = max + span * 0.14;
+  const yFor = value => PT + inner * ((top - value) / (top - min));
   const zeroY = yFor(0);
   const step = W / series.length;
   const bw = Math.max(2, Math.min(38, step * 0.66));
@@ -49,8 +53,13 @@ export function renderTrendChart(container, series, { fmt = v => String(v), titl
     </g>`;
   }).join('');
 
-  const grid = [...new Set([min, 0, max])].map(value =>
-    `<line x1="0" x2="${W}" y1="${yFor(value).toFixed(1)}" y2="${yFor(value).toFixed(1)}" class="chart__grid"${value === 0 ? ' style="stroke:var(--txt-3)"' : ''}></line><text x="2" y="${Math.max(12, yFor(value) - 4).toFixed(1)}" class="chart__label">${cell(fmt(value))}</text>`
+  // Gridlines at the anchors plus quarter marks so a lone bucket reads inside
+  // a scale, not floating in blank space. The max line's text is dropped when
+  // bars already print their values: axis label + bar label said it twice.
+  const gridValues = [...new Set([max, max - span * 0.25, max - span * 0.5, max - span * 0.75, min])]
+    .filter(v => v >= min && v <= top);
+  const grid = gridValues.map(value =>
+    `<line x1="0" x2="${W}" y1="${yFor(value).toFixed(1)}" y2="${yFor(value).toFixed(1)}" class="chart__grid"${value === 0 ? ' style="stroke:var(--txt-3)"' : ''}></line>${!(value === max && showValues) ? `<text x="2" y="${Math.max(12, yFor(value) - 4).toFixed(1)}" class="chart__label">${cell(fmt(value))}</text>` : ''}`
   ).join('');
 
   // Sparse x labels: about six, always including the last bucket. When the

@@ -472,3 +472,83 @@ test('inventory table renders an explicit Min Stock Alert column', () => {
   assert.match(inv, /showSkeleton\('inventory-tbody', 10\)/);
   assert.match(inv, /<td class="is-mid font-mono" style="color: var\(--txt-2\);">\$\{item\.min_stock_alert \?\? 0\}<\/td>/);
 });
+
+// The Business Profile block is one chain: the preset dropdown sets the three
+// module checkboxes, Save sends all four keys, the server whitelist accepts
+// them, and the loader restores the same semantics on the next open. Each link
+// is pinned here so a whitelist gap or a silent default change shows up as a
+// red test instead of a checkbox that "doesn't stick".
+test('applyBusinessPreset maps every preset to its module checkboxes', () => {
+  const auth = source('public/js/auth.js');
+  const fnStart = auth.indexOf('export function applyBusinessPreset');
+  const fnEnd = auth.indexOf('\nexport function applyBusinessModeUi');
+  const code = auth.slice(fnStart, fnEnd).replace(/^export /, '');
+
+  const makeCb = () => ({ checked: false });
+  const run = preset => {
+    const cbs = { bench: makeCb(), frac: makeCb(), ser: makeCb() };
+    const ctx = vm.createContext({
+      document: {
+        getElementById: id => ({
+          'settings-enable-service-bench': cbs.bench,
+          'settings-enable-fractional-qty': cbs.frac,
+          'settings-enable-serial-tracking': cbs.ser
+        }[id] || null)
+      }
+    });
+    vm.runInContext(code, ctx);
+    ctx.applyBusinessPreset(preset);
+    return cbs;
+  };
+
+  // phone: bench only. grocery: bench off, decimals on. pc: bench + serials.
+  // retail: nothing. anything unknown falls back to hybrid (everything on).
+  const expected = {
+    phone: [true, false, false],
+    grocery: [false, true, false],
+    pc: [true, false, true],
+    retail: [false, false, false],
+    hybrid: [true, true, true],
+    'totally-unknown-preset': [true, true, true]
+  };
+  for (const [preset, [bench, frac, ser]] of Object.entries(expected)) {
+    const cbs = run(preset);
+    assert.equal(cbs.bench.checked, bench, `preset ${preset}: Service & Repair Bench`);
+    assert.equal(cbs.frac.checked, frac, `preset ${preset}: Fractional Qty`);
+    assert.equal(cbs.ser.checked, ser, `preset ${preset}: Serial Tracking`);
+  }
+});
+
+test('business profile chain: loader defaults, save payload, and server whitelist agree', () => {
+  const auth = source('public/js/auth.js');
+
+  // Loader semantics on settings open: bench defaults ON (only a stored '0'
+  // turns it off), fractional and serial default OFF (only a stored '1' turns
+  // them on). These three expressions are the contract.
+  assert.match(auth, /benchCb\.checked = S\.shopSettings\.enable_service_bench !== '0';/);
+  assert.match(auth, /fracCb\.checked = S\.shopSettings\.enable_fractional_qty === '1';/);
+  assert.match(auth, /serCb\.checked = S\.shopSettings\.enable_serial_tracking === '1';/);
+
+  // Save reads every module checkbox as '1'/'0' and sends business_type with
+  // them: a preset change plus Save must persist all four keys together.
+  assert.match(auth, /enable_service_bench = document\.getElementById\('settings-enable-service-bench'\)\?\.checked \? '1' : '0';/);
+  assert.match(auth, /enable_fractional_qty = document\.getElementById\('settings-enable-fractional-qty'\)\?\.checked \? '1' : '0';/);
+  assert.match(auth, /enable_serial_tracking = document\.getElementById\('settings-enable-serial-tracking'\)\?\.checked \? '1' : '0';/);
+  const saveStart = auth.indexOf("const business_type = document.getElementById('settings-business-type')");
+  const saveBlock = auth.slice(saveStart, auth.indexOf('shop_footer_note,', saveStart));
+  for (const key of ['business_type', 'enable_service_bench', 'enable_fractional_qty', 'enable_serial_tracking']) {
+    assert.ok(saveBlock.includes(key), `save payload must include ${key}`);
+  }
+
+  // The server whitelist accepts all four (a missing key made every save 400
+  // once before; the same class of bug must not land here).
+  const settings = source('src/settings.js');
+  for (const key of ['business_type', 'enable_service_bench', 'enable_fractional_qty', 'enable_serial_tracking']) {
+    assert.match(settings, new RegExp(`'${key}'`), `EDITABLE_SETTINGS must include ${key}`);
+  }
+
+  // Saving re-applies the counter UI from the response, so a module flip
+  // takes effect without a reload.
+  assert.match(auth, /S\.shopSettings = savedData;/);
+  assert.match(auth, /applyBusinessModeUi\(\);/);
+});

@@ -10,7 +10,7 @@ A commercial-grade Point of Sale and inventory management workstation built for 
 - **Parts & Repair Labor Checkout:** Unified cart supporting physical phone parts and repair labor service charges.
 - **Customer Credit & "Utang" Ledger:** Complete customer credit management with FIFO partial and full settlement tracking.
 - **Warranty & RMA Management:** Shop warranty tracking, parts replacements, and audit-logged RMA adjustments.
-- **Repair Ticket Lifecycle:** Every intake gets a server-side ticket keyed by its `RO-` reference and moves `intake` → `in_repair` → `ready` → `released` on the Repairs tab queue, mirrored to the cloud. A money-free **Pickup slip** (58mm/80mm, reprintable, drawer closed) tells the customer the unit is ready.
+- **Repair Ticket Lifecycle:** Every intake gets a server-side ticket keyed by its `RO-` reference and moves `intake` Ã¢â€ â€™ `in_repair` Ã¢â€ â€™ `ready` Ã¢â€ â€™ `released` on the Repairs tab queue, mirrored to the cloud. A money-free **Pickup slip** (58mm/80mm, reprintable, drawer closed) tells the customer the unit is ready.
 - **Supplier Reorder Sheet:** Low stock turns into a printable per-supplier order with editable quantities and live re-pricing, and a manager-gated **Receive** flow books the delivery into stock with per-line idempotency.
 - **Operating Expenses & Net Profit:** Book rent, utilities and other expenses on the Reports & profit tab; the KPI net, the trend chart, the Z-report and the cloud mirror all subtract the same window, so profit always reconciles to one number.
 - **Thermal Receipt Printing:** ESC/POS direct counter printing to standard 58mm and 80mm thermal receipt printers, with automatic browser print fallback for slips and reports.
@@ -22,7 +22,7 @@ A commercial-grade Point of Sale and inventory management workstation built for 
 
 Download the latest pre-built Windows release from the [Releases](https://github.com/katalepsis69/PHONEPOS/releases) page.
 
-1. Download `TechPartsPOS-Setup-1.1.exe`.
+1. Download `TechPartsPOS-Setup-1.2.exe`.
 2. Run the installer (Administrator permissions required). TechParts POS installs to `C:\Program Files\TechPartsPOS` and automatically registers and starts `TechPartsPOS-Server` as a protected Windows background service.
 3. Open the desktop shortcut or Start Menu entry to launch the POS workstation interface (automatically connects to the local service and opens your browser).
 

@@ -60,7 +60,7 @@ export function setupInventoryEnhancements() {
       <div class="stat stat--pos">
         <span class="stat__label" data-i18n="inv.stat_in_stock">${t('inv.stat_in_stock', 'In stock')}</span>
         <span id="inv-metric-in" class="stat__value">0</span>
-        <span class="stat__meta" data-i18n="inv.stat_healthy">${t('inv.stat_healthy', 'healthy levels')}</span>
+        <span id="inv-metric-in-meta" class="stat__meta" data-i18n="inv.stat_healthy">${t('inv.stat_healthy', 'healthy levels')}</span>
       </div>
       <div class="stat stat--warn">
         <span class="stat__label" data-i18n="inv.stat_low_stock">${t('inv.stat_low_stock', 'Low stock')}</span>
@@ -234,7 +234,7 @@ export async function loadInventoryTable() {
     // table, and the toast says the refresh failed.
     const tbody = document.getElementById('inventory-tbody');
     if (tbody && tbody.querySelector('.skel')) {
-      tbody.innerHTML = `<tr><td colspan="10">
+      tbody.innerHTML = `<tr><td colspan="9">
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-wifi-slash w-5 h-5"></i></div>
           <div class="empty__title">Couldn't load inventory</div>
@@ -266,8 +266,16 @@ export function renderInventoryMetrics(items) {
   });
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   set('inv-metric-total', visible.length);
-  set('inv-metric-stock', `${units.toLocaleString()} ${t('inv.stat_units', 'units on hand')}`);
+  const unitsLabel = units === 1 ? t('inv.stat_unit_single', 'unit on hand') : t('inv.stat_units', 'units on hand');
+  set('inv-metric-stock', `${units.toLocaleString()} ${unitsLabel}`);
   set('inv-metric-in', inStock);
+  // The subtitle is static "healthy levels", which read as a lie under a 0 —
+  // if all on-hand units are at/below reorder point, clarify it's below alert level
+  // rather than claiming "nothing on hand" when units actually exist.
+  const inMeta = inStock > 0
+    ? t('inv.stat_healthy', 'healthy levels')
+    : (units > 0 ? t('inv.stat_low_only', 'below alert level') : t('inv.stat_none', 'nothing on hand'));
+  set('inv-metric-in-meta', inMeta);
   set('inv-metric-low', low);
   set('inv-metric-out', out);
 }
@@ -680,7 +688,7 @@ export function renderInventoryTable(items) {
   if (visibleItems.length === 0) {
     const hint = escHtml(t('inv.empty_catalog_hint', 'Adjust the filter, or add a new item to the catalog.'));
     tbody.innerHTML = `
-      <tr><td colspan="10">
+      <tr><td colspan="9">
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-package w-5 h-5"></i></div>
           <div class="empty__title">${escHtml(t('inv.empty_title', 'No items in catalog yet'))}</div>
@@ -695,13 +703,6 @@ export function renderInventoryTable(items) {
   tbody.innerHTML = visibleItems.map(item => {
     const isOut = item.stock_quantity <= 0;
     const isLow = item.stock_quantity > 0 && item.stock_quantity <= item.min_stock_alert;
-    const statusBadge = item.archived
-      ? `<span class="tag">Archived</span>`
-      : (isOut
-        ? `<span class="badge-rose px-2 py-0.5 text-xs font-semibold">Out of stock</span>`
-        : (isLow
-          ? `<span class="badge-amber px-2 py-0.5 text-xs font-semibold">Low stock</span>`
-          : `<span class="badge-emerald px-2 py-0.5 text-xs font-semibold">In stock</span>`));
 
     // Price/part editing is manager-only: hide (not just re-prompt) for a
     // plain staff session. Stock adjust and history stay for everyone.
@@ -720,8 +721,8 @@ export function renderInventoryTable(items) {
           <span class="block foot-note uppercase">${escHtml(item.brand)}</span>
         </td>
         <td>
-          ${escHtml(item.part_type)}
-          ${item.location ? `<span class="block foot-note">${escHtml(item.location)}</span>` : ''}
+          <span class="tag tag--subtle font-mono uppercase text-xs">${escHtml(item.part_type)}</span>
+          ${item.location ? `<span class="block foot-note mt-0.5">${escHtml(item.location)}</span>` : ''}
         </td>
         <td class="is-num">
           <button type="button" class="cell-btn font-mono" data-action="reveal-cost" title="Click to unlock/view cost prices">${formatCostPrice(item.cost_price)}</button>
@@ -730,17 +731,20 @@ export function renderInventoryTable(items) {
         <td class="is-num font-mono font-bold">${fmtMoney(Number(item.price_technician))}</td>
         <td class="is-mid"><span class="stock${isOut ? ' stock--out' : (isLow ? ' stock--low' : '')}">${item.stock_quantity}</span></td>
         <td class="is-mid font-mono" style="color: var(--txt-2);">${item.min_stock_alert ?? 0}</td>
-        <td class="is-mid">${statusBadge}</td>
         <td class="is-mid">
           <span class="inline-flex items-center gap-1">
-            ${canEditParts ? `<button data-action="edit-part" data-part-id="${item.id}" class="btn-mini" title="Edit part / set stock" aria-label="Edit part / set stock">
-              <i class="ph ph-pencil w-3.5 h-3.5"></i>
+            ${canEditParts ? `<button data-action="edit-part" data-part-id="${item.id}" class="btn-mini btn-inv-action" title="Edit part / set stock" aria-label="Edit part / set stock">
+              <i class="ph ph-pencil-simple w-3.5 h-3.5"></i>
             </button>` : ''}
-            <button data-action="adjust-stock" data-part-id="${item.id}" class="btn-mini" title="Adjust / receive with reason">Adj</button>
-            <button data-action="movement-history" data-part-id="${item.id}" class="btn-mini" title="Stock movement history">Hist</button>
+            <button data-action="adjust-stock" data-part-id="${item.id}" class="btn-mini btn-inv-action" title="Adjust / receive with reason" aria-label="Adjust stock">
+              <i class="ph ph-sliders-horizontal w-3.5 h-3.5"></i> Adj
+            </button>
+            <button data-action="movement-history" data-part-id="${item.id}" class="btn-mini btn-inv-action" title="Stock movement history" aria-label="Stock movement history">
+              <i class="ph ph-clock-counter-clockwise w-3.5 h-3.5"></i> Hist
+            </button>
             ${canEditParts ? (item.archived
-              ? `<button data-action="unarchive-part" data-part-id="${item.id}" class="btn-mini" title="Restore this part to the active catalog">Unarch</button>`
-              : `<button data-action="archive-part" data-part-id="${item.id}" class="btn-mini btn-mini--danger" title="Archive: hide from catalog and POS, keep stock and history">Arch</button>`) : ''}
+              ? `<button data-action="unarchive-part" data-part-id="${item.id}" class="btn-mini btn-inv-action" title="Restore this part to the active catalog" aria-label="Unarchive part"><i class="ph ph-arrow-u-up-left w-3.5 h-3.5"></i> Unarch</button>`
+              : `<button data-action="archive-part" data-part-id="${item.id}" class="btn-mini btn-mini--danger btn-inv-action" title="Archive: hide from catalog and POS, keep stock and history" aria-label="Archive part"><i class="ph ph-archive w-3.5 h-3.5"></i> Arch</button>`) : ''}
           </span>
         </td>
       </tr>

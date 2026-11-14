@@ -1,14 +1,9 @@
-﻿# What is New in TechParts POS (v1.1)
+﻿# What is New in TechParts POS (v1.2)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- General: Updated README.md
-- Updater & Packaging: generateReleaseHighlights summarizes real git diff and ignores untouched features; generate-changelog CLI --stdout outputs notes without writing CHANGELOG.md or RELEASE_NOTES.md (TechPartsPOS.iss, publish.bat, generate-changelog.js)
-- Counter UI: Low-stock alert threshold, Min Stock Alert, Min. Stock Alert (index.html, i18n.js)
-- Inventory & Import: openImportPreview displays Min Stock Alert and swaps Brand/Model when clicked; inventory table renders an explicit Min Stock Alert column; Brand and Model look swapped, Swap Brand & Model, Download template (importer.js, inventory.js)
-- Repair Counter (POS): renderBrandChips skips out-of-stock brands when posInStockOnly is on and CSS bounds chip height; isInstanceLockLive rejects prior-boot locks and recycled non-POS Windows PIDs (pos.js, styles.css)
-- Server & Database: Updated currentBootEpochMs, isPosProcessPidAlive, isInstanceLockLive (server.js)
+- Maintenance and stability improvements across POS counter, inventory, and backups.
 
 ---
 
@@ -108,6 +103,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-Setup-1.1.exe` below.
+  1. Download `TechPartsPOS-Setup-1.2.exe` below.
   2. Run the installer to install TechParts POS as a protected background service.
   3. Launch TechParts POS from the Start Menu or Desktop shortcut.

@@ -803,7 +803,8 @@ button:disabled {
 .rail-tool {
   display: grid;
   place-items: center;
-  min-height: 30px;
+  /* 44px touch target; the rail scrolls (overflow-y), so six tools fit. */
+  min-height: 44px;
   padding: 6px 0;
   border: 0;
   border-radius: 6px;
@@ -2543,13 +2544,15 @@ html.light .modal-backdrop {
 .copy-btn {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  /* 44px touch target; the summary head's 12px padding absorbs the 10px bleed. */
+  width: 44px;
+  height: 44px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 10px;
   background: none;
   color: var(--txt-4);
   cursor: pointer;
+  margin: -10px;
 }
 
 .copy-btn:hover {
@@ -2604,8 +2607,11 @@ html.light .modal-backdrop {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-top: 6px;
-  padding: 0;
+  /* 44px touch target via invisible padding; the negative margins return the
+     old footprint to the layout, so the text renders exactly where it did. */
+  margin-top: -6px;
+  margin-bottom: -12px;
+  padding: 12px 0;
   border: 0;
   background: none;
   color: var(--accent-hi);
@@ -2695,14 +2701,19 @@ html.light .modal-backdrop {
 .sumline__x {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  /* Destructive remove on a dense cart line, so the hit box fills the row
+     (padding bleed, never into neighbouring lines) and stops there: a 44px
+     target here would overlap the line above or below and risk removing the
+     wrong part. ponytail: documented ceiling, true 44 needs taller rows. */
+  width: 30px;
+  height: 30px;
   flex: none;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: none;
   color: var(--txt-4);
   cursor: pointer;
+  margin: -5px 0;
 }
 
 .sumline__x i.ph {
@@ -2800,6 +2811,7 @@ html.light .modal-backdrop {
 }
 
 .btn-primary--pos {
+  min-height: 44px;
   background: var(--surface-2);
   color: var(--txt-3);
   border: 1px solid var(--line);
@@ -2997,7 +3009,6 @@ html.light .modal-backdrop {
 /* ---- counter at narrower widths (maintains 2 columns down to 820px tablet breakpoint) ---- */
 @media (max-width: 1420px) {
   .counter {
-    grid-template-columns: minmax(0, 1fr) 324px;
     gap: 12px;
   }
 
@@ -3216,14 +3227,18 @@ html.light .modal-backdrop {
 .modal-card__x {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  /* 44px touch target per the counter UI spec. The negative margins give the
+     old 26px footprint back to the layout: every modal head has 13px padding,
+     which absorbs the 9px bleed without moving the row. */
+  width: 44px;
+  height: 44px;
   flex: none;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: none;
   color: var(--txt-4);
   cursor: pointer;
+  margin: -9px;
 }
 
 .modal-card__x:hover {
@@ -3534,14 +3549,15 @@ input[type="password"]::-ms-clear {
 
 .gate__close {
   position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 32px;
-  height: 32px;
+  /* 44px touch target; top/right step in 8px so the visual center stays put. */
+  top: 6px;
+  right: 6px;
+  width: 44px;
+  height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: 10px;
   border: 1px solid var(--line);
   background: var(--surface-2);
   color: var(--txt-3);
@@ -3646,6 +3662,11 @@ a.btn-mini {
   color: var(--info);
 }
 
+/* Compact chip, used standalone (settings panes, toolbars) and embedded in
+   dense table rows. Row-embedded instances keep this size: a 44px hit box in a
+   table row overlaps the neighbouring row's buttons and removes the wrong
+   thing. ponytail: documented ceiling. Standalone instances get 44px through
+   the touch-target block near the drawer rules. */
 .btn-mini {
   display: inline-flex;
   align-items: center;
@@ -3898,7 +3919,7 @@ a.btn-mini {
 
 .summary__scroll {
   flex: 1 1 auto !important;
-  min-height: 140px !important;
+  min-height: 100px !important;
   padding: 8px 12px !important;
   overflow-y: auto !important;
   gap: 8px !important;
@@ -3910,6 +3931,58 @@ a.btn-mini {
   background: var(--field) !important;
   border: 1px solid var(--line-soft) !important;
   gap: 6px !important;
+}
+
+/* Empty state device compaction: when no device is chosen, drop the bulky card */
+.unit--compact:not(.has-device) {
+  padding: 3px 8px !important;
+  background: transparent !important;
+  border: 1px dashed var(--line-soft) !important;
+  opacity: 0.75;
+}
+
+.unit--compact:not(.has-device) .unit__meta {
+  display: none !important;
+}
+
+/* Progressive disclosure: collapse payment panel & tender inputs on empty cart */
+.checkout-panel.is-idle .paypanel {
+  display: none !important;
+}
+
+.checkout-panel.is-idle .pay-grid {
+  opacity: 0.85;
+}
+
+/* Tabular numerals on all running summary money values (P5) */
+.trow__v,
+.tgrand__v,
+#pos-subtotal,
+#pos-total,
+#pos-change,
+#pos-tendered,
+#sum-parts-total,
+.sumgroup__amt,
+.sumline__a,
+.pay-change-box strong {
+  font-variant-numeric: tabular-nums lining-nums !important;
+  font-feature-settings: "tnum" 1, "lnum" 1 !important;
+}
+
+/* Sub-action buttons hit area expansion (WCAG 2.2 AA >=44px) (P4) */
+.checkout-sub-actions button {
+  position: relative;
+  min-height: 32px;
+}
+
+.checkout-sub-actions button::after {
+  content: "";
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  left: 0;
+  right: 0;
+  min-height: 44px;
 }
 
 .totals {
@@ -3925,7 +3998,7 @@ a.btn-mini {
   font-weight: 650 !important;
   border-radius: 6px !important;
   text-align: center !important;
-  min-height: 40px !important;
+  min-height: 44px !important;
 }
 
 .pay-cash-row {
@@ -4083,89 +4156,94 @@ a.btn-mini {
   }
 
   /* POS running summary & cart: compact gaps, prominent numbers */
+  .counter {
+    gap: 8px 10px !important;
+  }
+
   .summary__head {
-    padding: 7px 10px !important;
+    padding: 6px 10px !important;
   }
 
   .summary__scroll {
-    padding: 8px 10px !important;
-    gap: 6px !important;
+    padding: 6px 8px !important;
+    gap: 5px !important;
+    min-height: 80px !important;
   }
 
   .unit {
-    padding: 8px !important;
-    gap: 8px !important;
+    padding: 6px !important;
+    gap: 6px !important;
   }
 
   .unit__name {
-    font-size: 0.90625rem !important;
+    font-size: 0.84375rem !important;
     font-weight: 700 !important;
   }
 
   .unit__meta {
-    font-size: 0.78125rem !important;
+    font-size: 0.75rem !important;
     font-weight: 550 !important;
   }
 
   .sumgroup__head {
-    padding-bottom: 4px !important;
+    padding-bottom: 2px !important;
   }
 
   .sumgroup__title {
-    font-size: 0.8125rem !important;
+    font-size: 0.75rem !important;
     font-weight: 700 !important;
     text-transform: uppercase !important;
   }
 
   .sumgroup__amt {
-    font-size: 0.90625rem !important;
+    font-size: 0.84375rem !important;
     font-weight: 750 !important;
   }
 
   .sumline {
-    padding: 3px 0 !important;
-    gap: 6px !important;
+    padding: 2px 0 !important;
+    gap: 4px !important;
   }
 
   .sumline__t {
-    font-size: 0.84375rem !important;
+    font-size: 0.8125rem !important;
     font-weight: 600 !important;
-    line-height: 1.3 !important;
+    line-height: 1.25 !important;
   }
 
   .sumline__qty {
-    font-size: 0.8125rem !important;
+    font-size: 0.75rem !important;
     font-weight: 700 !important;
-    padding: 2px 7px !important;
+    padding: 1px 6px !important;
   }
 
   .sumline__a {
-    font-size: 0.90625rem !important;
+    font-size: 0.84375rem !important;
     font-weight: 750 !important;
   }
 
   .totals {
-    padding: 8px 10px 10px !important;
+    padding: 6px 10px 8px !important;
   }
 
   .trow {
-    padding: 2px 0 !important;
-    font-size: 0.84375rem !important;
+    padding: 1px 0 !important;
+    font-size: 0.8125rem !important;
   }
 
   .trow__v {
-    font-size: 0.9375rem !important;
+    font-size: 0.875rem !important;
     font-weight: 750 !important;
   }
 
   .trow input {
-    font-size: 0.84375rem !important;
-    padding: 3px 6px !important;
+    font-size: 0.8125rem !important;
+    padding: 2px 5px !important;
   }
 
   .tgrand {
-    margin-top: 6px !important;
-    padding-top: 6px !important;
+    margin-top: 4px !important;
+    padding-top: 4px !important;
   }
 
   .tgrand__l {
@@ -4188,10 +4266,10 @@ a.btn-mini {
 
   /* Payment & Tender Panel */
   .pay-btn {
-    padding: 7px 4px !important;
-    font-size: 0.8125rem !important;
+    padding: 5px 3px !important;
+    font-size: 0.78125rem !important;
     font-weight: 700 !important;
-    min-height: 42px !important;
+    min-height: 38px !important;
   }
 
   .tender-chips {
@@ -4329,6 +4407,19 @@ a.btn-mini {
 }
 
 @media (max-width: 1280px) {
+  .topbar {
+    padding: 6px 10px !important;
+    gap: 6px !important;
+  }
+
+  .topbar__tools {
+    gap: 4px !important;
+  }
+
+  .live-pill span:last-child {
+    display: none;
+  }
+
   .parts-tools .field-search {
     flex: 1 1 150px;
     min-width: 140px;
@@ -4493,19 +4584,25 @@ a.btn-mini {
   transform: scale(0.98);
 }
 
-/* Stat strip: 2x2 cards with crisp 1px borders and aligned baselines */
+/* Stat strip: 4 columns on desktop drawer, 2 on narrow phone */
 .drawer .drawer-stats {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
-  padding: 12px 20px;
+  padding: 10px 18px;
   background: var(--surface-2);
   border-top: 1px solid var(--line-soft);
   border-bottom: 1px solid var(--line-soft);
 }
 
+@media (max-width: 520px) {
+  .drawer .drawer-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
 .drawer .drawer-stat {
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
@@ -4523,13 +4620,38 @@ a.btn-mini {
 .drawer .drawer-stat .stat__v {
   margin-top: 3px;
   font-family: var(--font-numeric);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums lining-nums;
   font-size: 0.9375rem;
   font-weight: 700;
   color: var(--txt);
   min-height: 22px;
   display: flex;
   align-items: center;
+}
+
+#modal-customer-ledger [data-action="edit-credit-limit"],
+#modal-customer-ledger .settle-full-btn {
+  position: relative;
+}
+
+#modal-customer-ledger [data-action="edit-credit-limit"]::after,
+#modal-customer-ledger .settle-full-btn::after {
+  content: "";
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  left: -6px;
+  right: -6px;
+  min-height: 44px;
+}
+
+#ledger-credit-balance,
+#ledger-credit-limit,
+#ledger-orders-count,
+#ledger-total-purchases,
+#ledger-total-paid {
+  font-variant-numeric: tabular-nums lining-nums !important;
+  font-feature-settings: "tnum" 1, "lnum" 1 !important;
 }
 
 /* Settle form: unified control height (34px), clear currency prefix, embedded full button */
@@ -4654,6 +4776,68 @@ a.btn-mini {
 .drawer .settle-method-select:focus {
   border-color: var(--txt-2);
   box-shadow: 0 0 0 2px var(--line-soft);
+}
+
+/* Paid-up drawer: input/select disabled state matches the global 0.5 the
+   settle button already gets from button:disabled, so the whole row reads
+   as one disabled unit instead of native-grey inputs beside a faded button. */
+.drawer .settle-amount-input:disabled,
+.drawer .settle-method-select:disabled {
+  opacity: 0.5;
+}
+
+/* Drawer chips (Limit, Receipt, Return) stand alone, so they take the full
+   44px touch target. Dense table rows elsewhere keep .btn-mini compact: a 44px
+   hit box there would overlap the neighbouring row's buttons. */
+.drawer .btn-mini {
+  min-height: 44px;
+}
+
+/* Same 44px rule for the other standalone chip sites: settings panes, the
+   update banner, the license gate, the import preview and the dashboard
+   banner. Row-embedded chips keep the compact base above. */
+#modal-settings .btn-mini,
+#btn-banner-apply-update,
+#btn-copy-machine-id,
+#import-settings-btn,
+#import-swap-btn,
+#import-download-sample-btn,
+#dash-cloud-banner .btn-mini,
+.btn-lg {
+  min-height: 44px;
+}
+
+/* Inventory toolbars: chips and filter pills sit alone in roomy rows, same
+   standalone treatment as the settings panes. */
+.parts-tools .btn-mini,
+.parts-tools .check--pill,
+#inv-reorder-panel .btn-mini,
+#inv-bulk-bar button {
+  min-height: 44px;
+}
+
+/* Dashboard reorder card: one row per below-minimum part, and a catalog-only
+   shop can have hundreds, so the card scrolls instead of stretching the page
+   (same cap as the inventory view's reorder panel). */
+#dash-reorder {
+  max-height: 384px;
+  overflow-y: auto;
+}
+
+/* The standing "Low stock parts" row is a jump link into the filtered
+   inventory list; the hover + text give it a non-color affordance. */
+.kv--link {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.kv--link:hover {
+  background: var(--surface-2);
 }
 
 .drawer .settle-ref-input {
@@ -5155,9 +5339,15 @@ html[data-density='roomy'] .ptable th {
 #view-pos .btn-mini,
 #view-pos .mini-link,
 #view-pos .linkish,
+#view-pos .checkout-sub-actions .btn-quiet,
 #view-pos .sumline__x {
   min-height: 44px;
   min-width: 44px;
+}
+
+/* Claim stub wraps to two lines in the 350px column; keep the row one line tall. */
+#view-pos .checkout-sub-actions .btn-quiet span {
+  white-space: nowrap;
 }
 
 /* ---- Tablet: ≤ 820px — rail becomes a slide-out drawer ---- */
@@ -5696,12 +5886,12 @@ html[data-density='roomy'] .ptable th {
   font-family: var(--font-numeric);
   font-size: 0.65625rem;
   font-weight: 600;
-  opacity: 0;
+  opacity: 0.92;
   pointer-events: none;
   transition: opacity 0.12s var(--ease-out);
 }
 .chart__bucket:hover .chart__value,
-.chart__bucket:focus-visible .chart__value { opacity: 1; }
+.chart__bucket:focus-visible .chart__value { opacity: 1; font-weight: 700; }
 
 /* Screen-reader-only (used by the chart's accessible data table; kept here
    rather than as a Tailwind utility so it never depends on a CSS rebuild). */
@@ -5825,4 +6015,91 @@ a {
   color: var(--txt);
   font-size: 0.78125rem;
 }
+
+/* Customers / Utang table polish & touch targets */
+.btn-ledger-trigger {
+  position: relative;
+  font-family: inherit;
+  font-weight: 600;
+  border-radius: var(--radius-sm, 6px);
+}
+
+.btn-ledger-trigger::after {
+  content: '';
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  left: -8px;
+  right: -8px;
+}
+
+#customers-tbody td {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Inventory toolbar compact search & right-anchored actions */
+#view-inventory .parts-tools .field-search {
+  flex: 0 1 180px;
+  min-width: 140px;
+  max-width: 200px;
+}
+
+/* Redundant topbar search hidden when active view has its own toolbar search or is dashboard */
+body[data-tab="dashboard"] .topbar .search,
+body[data-tab="inventory"] .topbar .search,
+body[data-tab="credits"] .topbar .search,
+body[data-tab="returns"] .topbar .search,
+body[data-tab="sales"] .topbar .search,
+body[data-tab="pos"] .topbar .search {
+  display: none !important;
+}
+
+/* Operating expenses input fields in dashboard */
+.dash-expense-input {
+  height: 32px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  font-weight: 560;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--line);
+  background: var(--surface-field, var(--surface));
+  color: var(--txt);
+  outline: none;
+}
+
+.dash-expense-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--line-soft);
+}
+
+.sales-action-btn {
+  position: relative;
+}
+
+.sales-action-btn::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  left: -4px;
+  right: -4px;
+}
+
+.btn-inv-action {
+  position: relative;
+  font-family: inherit;
+  font-weight: 600;
+  border-radius: var(--radius-sm, 6px);
+}
+
+.btn-inv-action::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  left: -4px;
+  right: -4px;
+}
+
+
 
