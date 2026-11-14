@@ -364,9 +364,12 @@ function normalizeRow(r) {
   return res;
 }
 
-// CSV import: hoisted prepares, one txn, all-or-nothing. A client op_id makes
-// the whole file idempotent: a timeout retry re-answers the first summary
-// instead of receiving every row's quantity a second time.
+// CSV import: hoisted prepares, one txn. Refused rows no longer refuse the
+// whole file (client complaint, 2026-11-14): every good row applies and every
+// bad row comes back in result.errors as "Row N: reason" so the caller can
+// state it. A client op_id still makes the whole file idempotent: a timeout
+// retry re-answers the first summary instead of receiving every row's
+// quantity a second time.
 function importInventory(db, rows, ctx = {}, meta = {}) {
   if (!Array.isArray(rows) || rows.length === 0) throw new Error('No rows to import');
   const defaultRet = meta.retail_markup != null && meta.retail_markup !== '' ? Number(meta.retail_markup) : getDefaultRetailMarkup(db);
@@ -426,21 +429,27 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
             rowData.price_technician = money(costVal * (1 + defaultWho / 100));
           }
         }
+        // The sheet may carry no separate item-name column: hand the existing
+        // General fallbacks in validateInventory the model name to fall back
+        // from, so a name + quantity sheet imports without brand/type columns.
+        if (!str(rowData.item_name) && str(rowData.model_name)) rowData.item_name = rowData.model_name;
         validateInventory({ ...rowData, stock_quantity: qty });
         const snap = { ...rowData, stock_quantity: qty };
         steps.push(() => { createInventoryItem(db, snap, { reason: 'receive', note: 'CSV import' }, ctx); return 'created'; });
       }
     } catch (err) { errors.push(`Row ${idx + 1}: ${err.message}`); }
   });
-  if (errors.length) throw new Error(errors.join(' | '));
+  // Nothing applied at all: report without burning the op_id, so a corrected
+  // file can still land.
+  if (steps.length === 0) return { created: 0, updated: 0, errors };
   return txn(db, () => {
     const opId = opIdOf(meta.op_id);
     if (opId && opReplayed(db, opId)) return { created: 0, updated: 0, errors: [], replayed: true };
     let created = 0, updated = 0;
     for (const s of steps) (s() === 'created' ? created++ : updated++);
     if (opId) opRecord(db, opId);
-    audit(db, ctx.actor, ctx.elevated, 'inventory', 'import', { created, updated });
-    return { created, updated, errors: [] };
+    audit(db, ctx.actor, ctx.elevated, 'inventory', 'import', { created, updated, rejected: errors.length });
+    return { created, updated, errors };
   });
 }
 

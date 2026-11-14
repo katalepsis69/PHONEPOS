@@ -498,17 +498,21 @@ serverTest('Duplicate SKU returns 409, and inventory CSV export imports back rou
   assert.strictEqual(after[0].price_retail, 95);
   assert.strictEqual(after[0].supplier, 'Greenleaf');
 
-  // Bad import: row-numbered error, nothing written.
+  // Bad import: the good row lands, the refused row is stated by number and
+  // reason (client complaint, 2026-11-14: refused rows no longer refuse the
+  // whole file).
   const before = await (await fetch(`${baseUrl}/api/inventory`, { headers: auth })).json();
   const resBad = await fetch(`${baseUrl}/api/inventory/import`, {
     method: 'POST',
     headers: { ...auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rows: [{ brand: 'Realme', model_name: 'C55', part_type: 'LCD', stock_quantity: '1' }, { brand: '', model_name: 'Bad', part_type: 'LCD' }] })
+    body: JSON.stringify({ rows: [{ brand: 'Realme', model_name: 'C55', part_type: 'LCD', stock_quantity: '1' }, { brand: 'Blank', model_name: '', part_type: '', stock_quantity: 'oops' }] })
   });
-  assert.strictEqual(resBad.status, 400);
-  assert.match((await resBad.json()).error, /Row 2: Brand is required/);
+  assert.strictEqual(resBad.status, 200);
+  const badSummary = await resBad.json();
+  assert.strictEqual(badSummary.created, 1);
+  assert.deepStrictEqual(badSummary.errors, ['Row 2: stock_quantity must be an integer']);
   const unchanged = await (await fetch(`${baseUrl}/api/inventory`, { headers: auth })).json();
-  assert.strictEqual(unchanged.length, before.length);
+  assert.strictEqual(unchanged.length, before.length + 1);
 });
 
 serverTest('POST /api/inventory/bulk-edit and auto-pricing import via REST API', async (baseUrl, db, auth) => {

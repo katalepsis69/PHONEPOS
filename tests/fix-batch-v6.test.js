@@ -182,7 +182,7 @@ test('inventory frontend: import and bulk edit carry a retry-stable op_id', () =
   const fs = require('node:fs');
   const path = require('node:path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'views', 'inventory.js'), 'utf8');
-  assert.match(src, /importState = \{ rows, header, op_id: crypto\.randomUUID\(\) \}/,
+  assert.match(src, /importState = \{ rows, header, op_id: crypto\.randomUUID\(\), applied: false \}/,
     'the import preview session must mint its op_id once');
   assert.match(src, /op_id: importState\.op_id/, 'applyImport must reuse the preview session op_id');
   assert.ok(!/op_id: crypto\.randomUUID\(\),\s*\n\s*auto_price/.test(src),

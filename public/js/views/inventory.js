@@ -67,10 +67,10 @@ export function setupInventoryEnhancements() {
         <span id="inv-metric-low" class="stat__value">0</span>
         <span class="stat__meta" data-i18n="inv.stat_reorder">${t('inv.stat_reorder', 'at or below reorder point')}</span>
       </div>
-      <div class="stat stat--danger">
+      <div id="inv-metric-out-card" class="stat stat--danger">
         <span class="stat__label" data-i18n="inv.stat_out_stock">${t('inv.stat_out_stock', 'Out of stock')}</span>
         <span id="inv-metric-out" class="stat__value">0</span>
-        <span class="stat__meta" data-i18n="inv.stat_restock">${t('inv.stat_restock', 'needs restock')}</span>
+        <span id="inv-metric-out-meta" class="stat__meta" data-i18n="inv.stat_restock">${t('inv.stat_restock', 'needs restock')}</span>
       </div>
     `;
     view.prepend(metrics);
@@ -208,7 +208,7 @@ export async function loadInventoryTable() {
   const partType = document.getElementById('inv-type-filter')?.value || '';
   const lowStock = document.getElementById('inv-low-stock-check')?.checked || false;
   const showArchived = document.getElementById('inv-archived-check')?.checked || false;
-  showSkeleton('inventory-tbody', 10);
+  showSkeleton('inventory-tbody', 9);
 
   let url = `/api/inventory?search=${encodeURIComponent(search)}`;
   if (brand) url += `&brand=${encodeURIComponent(brand)}`;
@@ -278,6 +278,14 @@ export function renderInventoryMetrics(items) {
   set('inv-metric-in-meta', inMeta);
   set('inv-metric-low', low);
   set('inv-metric-out', out);
+  // The OUT card reads as a standing alarm in a catalog-only shop (hundreds of
+  // items intentionally at zero). Red means "you stock things and these are
+  // missing"; while nothing at all is on hand, the count is a catalog fact.
+  const outCard = document.getElementById('inv-metric-out-card');
+  if (outCard) outCard.classList.toggle('stat--danger', units > 0 && out > 0);
+  set('inv-metric-out-meta', out === 0
+    ? t('inv.stat_out_ok', 'all stocked')
+    : (units > 0 ? t('inv.stat_restock', 'needs restock') : t('inv.stat_out_catalog', 'catalog entries, not stocked')));
 }
 
 // -------------------------------------------------------------
@@ -1163,7 +1171,8 @@ export async function archiveInventoryItemPrompt(id, isArchived) {
   }
 }
 
-// ---- CSV import (client parse, server-side atomic apply) ----
+// ---- CSV import (client parse; the server applies every good row and
+// reports each refused one by number and reason) ----
 // Quoted-CSV state machine: handles quotes, embedded commas/quotes/newlines.
 export function parseCsv(text) {
   const rows = [];
@@ -1194,7 +1203,10 @@ export function parseCsv(text) {
   return rows;
 }
 
-const IMPORT_REQUIRED = ['brand', 'model_name', 'part_type', 'stock_quantity'];
+// Only a name column and a quantity are required: brand and part type fall
+// back to "General" server-side, so a sheet missing those columns imports
+// instead of being refused outright (client complaint, 2026-11-14).
+const IMPORT_REQUIRED = ['model_name', 'stock_quantity'];
 const IMPORT_PRICE_COLS = ['cost_price', 'price_retail', 'price_technician'];
 let importState = null; // { rows, header } for the mapping preview
 
@@ -1217,7 +1229,7 @@ export function importCsvFile(event) {
 }
 
 // ---- Import preview: shows auto-matched parts and calculated selling prices.
-// Anything the server rejects is reported row-wise (all-or-nothing).
+// Anything the server refuses is reported row-wise; the good rows still land.
 function ensureImportPreviewModal() {
   if (document.getElementById('modal-import-preview')) return;
   document.body.insertAdjacentHTML('beforeend', `
@@ -1354,7 +1366,7 @@ export function openImportPreview(rows) {
   ensureImportPreviewModal();
   const errBox = document.getElementById('import-errors');
   if (errBox) { errBox.innerHTML = ''; errBox.classList.add('hidden'); }
-  importState = { rows, header, op_id: crypto.randomUUID() };
+  importState = { rows, header, op_id: crypto.randomUUID(), applied: false };
   const auto = matchHeaders(header);
   importState.auto = auto;
 
@@ -1383,6 +1395,7 @@ export function openImportPreview(rows) {
     document.getElementById('import-preview-note').textContent = `${rows.length - 1} data row(s) detected.`;
     okBtn.disabled = true;
     okBtn.textContent = 'Missing columns';
+    okBtn.onclick = null;
     openModal('modal-import-preview');
     return;
   }
@@ -1399,6 +1412,7 @@ export function openImportPreview(rows) {
 
   okBtn.disabled = false;
   okBtn.textContent = `Import ${rows.length - 1} part(s)`;
+  okBtn.onclick = null;
   openModal('modal-import-preview');
 }
 
@@ -1411,7 +1425,7 @@ function showImportErrors(messages) {
 
 let importInFlight = false;
 async function applyImport() {
-  if (importInFlight) return;
+  if (importInFlight || importState.applied) return;
   const auto = importState.auto || matchHeaders(importState.header);
   let rows;
   try {
@@ -1456,12 +1470,28 @@ async function applyImport() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Import failed');
-    closeModal('modal-import-preview');
     loadInventoryTable();
     loadPosCatalog();
-    showToast(data.replayed
-      ? 'Import was already applied (duplicate submit)'
-      : `Import complete: ${data.created} created, ${data.updated} updated`, 'success');
+    const skipped = Array.isArray(data.errors) ? data.errors.length : 0;
+    if (data.replayed) {
+      closeModal('modal-import-preview');
+      showToast('Import was already applied (duplicate submit)', 'success');
+    } else if (skipped > 0) {
+      // The good rows landed; every refused row is stated here by number and
+      // reason. The modal stays open so the list stays readable, and the
+      // button becomes a plain Close: re-submitting would double the stock.
+      showImportErrors(data.errors);
+      showToast(`Imported ${data.created + data.updated} part(s), skipped ${skipped}: see the list below`, 'error');
+      if (btn) {
+        importState.applied = true;
+        btn.disabled = false;
+        btn.textContent = 'Close';
+        btn.onclick = () => { importState.applied = false; closeModal('modal-import-preview'); };
+      }
+    } else {
+      closeModal('modal-import-preview');
+      showToast(`Import complete: ${data.created} created, ${data.updated} updated`, 'success');
+    }
   } catch (err) {
     showImportErrors(err.message.split(' | '));
     showToast('Import failed: fix the highlighted rows and try again', 'error');

@@ -272,14 +272,24 @@ dbTest('CSV import creates new parts, tops up stock, writes movements, stays ato
     assert.strictEqual(sum, inv.stock_quantity, `ledger drift on item ${inv.id}`);
   }
 
-  // A bad row rejects the whole import: row-numbered error, no partial writes.
+  // A bad row no longer refuses the file: good rows land, refused rows come
+  // back by number with their reason (client complaint, 2026-11-14). A row
+  // with no brand falls back to General from its model name instead.
   const before = db.prepare('SELECT COUNT(*) AS n FROM inventory').get().n;
-  assert.throws(() => importInventory(db, [
+  const partial = importInventory(db, [
     { brand: 'Vivo', model_name: 'Y21', part_type: 'LCD', stock_quantity: '1' },
     { brand: '', model_name: 'X', part_type: 'LCD', stock_quantity: '1' },
     { brand: 'Oppo', model_name: 'A5s', part_type: 'LCD', stock_quantity: 'not-a-number' }
-  ]), /Row 2: Brand is required \| Row 3: stock_quantity must be an integer/);
-  assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM inventory').get().n, before);
+  ]);
+  assert.deepStrictEqual(partial, { created: 2, updated: 0, errors: ['Row 3: stock_quantity must be an integer'] });
+  assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM inventory').get().n, before + 2);
+  const generalRow = db.prepare(`SELECT * FROM inventory WHERE model_name = 'X'`).get();
+  assert.strictEqual(generalRow.brand, 'General', 'a brandless row falls back to General from its model name');
+
+  // A file where every row is bad applies nothing and reports every row.
+  const allBad = importInventory(db, [{ brand: '', model_name: '', part_type: '', stock_quantity: 'x' }]);
+  assert.deepStrictEqual(allBad, { created: 0, updated: 0, errors: ['Row 1: stock_quantity must be an integer'] });
+  assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM inventory').get().n, before + 2);
 });
 
 dbTest('text bounds: catalog columns cap, movement notes keep what the manager typed', (db) => {
