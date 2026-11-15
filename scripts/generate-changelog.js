@@ -1,407 +1,458 @@
-// phone-repair-pos/scripts/generate-changelog.js
-// Plain English, cashier-friendly automated changelog generator for TechParts POS.
-// Zero runtime dependencies (Node 22 stdlib only: node:fs, node:path, node:child_process).
+'use strict';
+
+// Changelog generator for TechParts POS.
+// Uses Git history and the complete diff from the previous release tag to the
+// current working tree, including committed, staged, unstaged, and untracked files.
+// Runtime dependencies: Node.js built-ins only.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
+const MAX_DIFF_BUFFER = 50 * 1024 * 1024;
+const AUTO_START = '<!-- AUTO-GENERATED:START -->';
+const AUTO_END = '<!-- AUTO-GENERATED:END -->';
 
-function getPackageVersion() {
-  try {
-    return (require('../package.json').version || '1.0.0').replace(/^v/i, '');
-  } catch {
-    return '1.0.0';
-  }
-}
-
-function parseVersionParts(v) {
-  if (!v || typeof v !== 'string') return [0, 0, 0];
-  const clean = v.trim().replace(/^[vV]/, '').split(/[+-]/)[0];
-  const parts = clean.split('.').map(p => {
-    const n = parseInt(p, 10);
-    return Number.isFinite(n) ? n : 0;
-  });
-  while (parts.length < 3) parts.push(0);
-  return parts;
-}
-
-function isPriorVersion(candidateVer, targetVer) {
-  const c = parseVersionParts(candidateVer);
-  const t = parseVersionParts(targetVer);
-  const len = Math.max(c.length, t.length);
-  for (let i = 0; i < len; i++) {
-    const cv = c[i] || 0;
-    const tv = t[i] || 0;
-    if (cv < tv) return true;
-    if (cv > tv) return false;
-  }
-  return false;
-}
-
-function getPriorReleaseBullets(currentVersion, changelogPath = path.join(ROOT_DIR, 'CHANGELOG.md')) {
-  if (!fs.existsSync(changelogPath)) return new Set();
-  try {
-    const content = fs.readFileSync(changelogPath, 'utf8');
-    const cleanCurrent = (currentVersion || '').replace(/^v/i, '');
-    const bullets = new Set();
-    const sections = content.split(/(?=^##\s*\[)/m);
-    for (const sec of sections) {
-      const headerMatch = sec.match(/^##\s*\[v?([^\]]+)\]/m);
-      if (headerMatch) {
-        const secVer = headerMatch[1].trim().replace(/^v/i, '');
-        if (isPriorVersion(secVer, cleanCurrent)) {
-          const lines = sec.split('\n');
-          for (const line of lines) {
-            const m = line.trim().match(/^-\s+(.+)$/);
-            if (m) {
-              bullets.add(m[1].trim());
-              const prefixMatch = m[1].match(/^([^:]+):/);
-              if (prefixMatch) {
-                bullets.add(prefixMatch[1].trim().toLowerCase());
-              }
-            }
-          }
-        }
-      }
-    }
-    return bullets;
-  } catch {
-    return new Set();
-  }
-}
-
-function runGit(args, cwd = ROOT_DIR) {
+function runGit(args, cwd = ROOT_DIR, options = {}) {
   try {
     return execFileSync('git', args, {
       cwd,
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      maxBuffer: 10 * 1024 * 1024
-    }).trimEnd();
-  } catch {
-    return '';
+      input: options.input,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: MAX_DIFF_BUFFER,
+      windowsHide: true
+    });
+  } catch (error) {
+    if (options.allowFailure) return '';
+    const detail = error.stderr ? String(error.stderr).trim() : error.message;
+    throw new Error(`Git command failed (${args.join(' ')}): ${detail}`);
   }
+}
+
+function hasHead(cwd = ROOT_DIR) {
+  return Boolean(runGit(['rev-parse', '--verify', 'HEAD'], cwd, { allowFailure: true }).trim());
+}
+
+function getPackageVersion(repoDir = ROOT_DIR) {
+  const packagePath = path.join(repoDir, 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+  if (!pkg.version || typeof pkg.version !== 'string') {
+    throw new Error('package.json does not contain a valid version string.');
+  }
+  return pkg.version.replace(/^v/i, '');
+}
+
+function parseVersionParts(version) {
+  const match = String(version || '').trim().replace(/^v/i, '').match(/^(\d+(?:\.\d+){0,2})(?:[-+].*)?$/);
+  if (!match) return null;
+  const parts = match[1].split('.').map(Number);
+  while (parts.length < 3) parts.push(0);
+  return parts;
+}
+
+function compareVersions(left, right) {
+  const a = parseVersionParts(left);
+  const b = parseVersionParts(right);
+  if (!a || !b) return null;
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] < b[i]) return -1;
+    if (a[i] > b[i]) return 1;
+  }
+  return 0;
+}
+
+function isPriorVersion(candidateVersion, targetVersion) {
+  return compareVersions(candidateVersion, targetVersion) === -1;
 }
 
 function tagExistsInGit(tag, cwd = ROOT_DIR) {
   if (!tag) return false;
-  return Boolean(runGit(['rev-parse', '--verify', `${tag}^{commit}`], cwd));
+  return Boolean(runGit(['rev-parse', '--verify', `${tag}^{commit}`], cwd, { allowFailure: true }).trim());
 }
 
-/**
- * Find the newest git tag strictly older than `currentVersion`.
- * Never returns the current release tag itself.
- */
-function getPreviousTag(currentVersion, cwd = ROOT_DIR) {
-  const cleanCurrent = (currentVersion || '').replace(/^v/i, '');
-  const tags = runGit(['tag', '--sort=-v:refname'], cwd)
-    .split('\n')
-    .map(t => t.trim())
-    .filter(Boolean);
-
-  for (const tag of tags) {
-    const cleanTag = tag.replace(/^v/i, '');
-    if (isPriorVersion(cleanTag, cleanCurrent)) {
-      return tag;
-    }
+function isAncestorOfHead(ref, cwd = ROOT_DIR) {
+  if (!ref || !hasHead(cwd)) return false;
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', ref, 'HEAD'], {
+      cwd,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    return true;
+  } catch {
+    return false;
   }
-  return '';
+}
+
+function getPreviousTag(currentVersion, cwd = ROOT_DIR) {
+  if (!hasHead(cwd)) return '';
+  const target = String(currentVersion || '').replace(/^v/i, '');
+
+  // Use the newest reachable release tag, not simply the newest tag whose
+  // version is numerically lower than package.json. Local customer builds can
+  // have a stale package version; restricting by version would then compare
+  // against the empty tree and treat the entire repository as a new release.
+  const tags = runGit(['tag', '--list'], cwd)
+    .split(/\r?\n/)
+    .map(tag => tag.trim())
+    .filter(Boolean)
+    .filter(tag => parseVersionParts(tag) && compareVersions(tag, target) !== 0)
+    .filter(tag => tagExistsInGit(tag, cwd) && isAncestorOfHead(tag, cwd));
+
+  tags.sort((a, b) => compareVersions(b, a));
+  return tags[0] || '';
 }
 
 function getGitCommitsSinceTag(tag, cwd = ROOT_DIR) {
-  if (!tagExistsInGit(tag, cwd)) return [];
-  const raw = runGit(['log', `${tag}..HEAD`, '--pretty=format:%s'], cwd);
-  if (!raw) return [];
-  return raw
-    .split('\n')
-    .map(l => l.trim())
-    .filter(msg => {
-      if (!msg) return false;
-      if (/^(merge|chore|bump|publish|test(\(.*\))?:)/i.test(msg)) return false;
-      if (/publish-release/i.test(msg)) return false;
-      if (/^Release\s+v/i.test(msg)) return false;
-      return true;
-    })
-    .map(msg => {
-      let clean = msg;
-      const match = msg.match(/^(feat|fix|refactor|docs)(\([^)]+\))?:\s*(.+)$/i);
-      if (match) clean = match[3];
-      return clean.charAt(0).toUpperCase() + clean.slice(1);
-    });
+  if (!hasHead(cwd)) return [];
+  const range = tag ? `${tag}..HEAD` : 'HEAD';
+  return runGit(['log', '--no-merges', '--format=%s', range], cwd)
+    .split(/\r?\n/)
+    .map(subject => subject.trim())
+    .filter(Boolean)
+    .filter(subject => !/^(?:merge\b|release\s+v?\d|chore\(release\)|bump\s+version\b)/i.test(subject));
 }
 
 const IGNORED_DIFF_PATHS = [
   /^CHANGELOG\.md$/i,
   /^RELEASE_NOTES\.md$/i,
-  /^package(-lock)?\.json$/i,
-  /^public\/tailwind\.build\.css$/,
-  /^(dist|release|publish|updates|node_modules|\.git)\//,
-  /^tests\/t_/
+  /^public\/tailwind\.build\.css$/i,
+  /^(?:dist|release|publish|updates|node_modules|\.git)\//i,
+  /^scripts\/generate-changelog\.js$/i,
+  /\.(?:exe|dll|pdb|db|sqlite|sqlite3|sha256|zip)$/i
 ];
 
 function isRelevantRepoPath(relPath) {
   const normalized = String(relPath || '').replace(/\\/g, '/').trim();
-  if (!normalized) return false;
-  return !IGNORED_DIFF_PATHS.some(re => re.test(normalized));
+  return Boolean(normalized) && !IGNORED_DIFF_PATHS.some(pattern => pattern.test(normalized));
 }
 
-const AREA_RULES = [
-  { area: 'Repair Counter (POS)', match: p => /pos\.js$|pos-helpers|^public\/styles\.css$/.test(p) },
-  { area: 'Inventory & Import', match: p => /inventory|importer|catalog/.test(p) },
-  { area: 'Customer Credit (Utang)', match: p => /credits?\.js$/.test(p) },
-  { area: 'Thermal Printing', match: p => /printer\.js$|receipts\.js$/.test(p) },
-  { area: 'Reports & Analytics', match: p => /reports?\.|dashboard/.test(p) },
-  { area: 'Cloud Sync', match: p => /^cloud/.test(p) },
-  { area: 'Security & Licensing', match: p => /auth\.js$|license/.test(p) },
-  { area: 'Updater & Packaging', match: p => /updater\.js$|^scripts\/|^installer\/|publish\.bat$/.test(p) },
-  { area: 'Server & Database', match: p => /^src\//.test(p) },
-  { area: 'Counter UI', match: p => /^public\//.test(p) }
-];
+function isVersionOnlyChange(entry) {
+  const file = String(entry.path || '').replace(/\\/g, '/').toLowerCase();
+  const changedLines = [...(entry.addedLines || []), ...(entry.removedLines || [])]
+    .map(line => line.trim())
+    .filter(Boolean);
+  if (changedLines.length === 0) return false;
 
-function classifyFileArea(relPath) {
-  for (const rule of AREA_RULES) {
-    if (rule.match(relPath)) return rule.area;
+  if (file === 'package.json' || file === 'package-lock.json') {
+    return changedLines.every(line => /^"version"\s*:/.test(line));
   }
-  return 'General';
+  if (file === 'src/updater.js') {
+    return changedLines.every(line => /^const CURRENT_VERSION\s*=/.test(line));
+  }
+  if (/\.iss$/i.test(file)) {
+    return changedLines.every(line => /^#define MyAppVersion\s+/.test(line));
+  }
+  return false;
 }
 
-function parseUnifiedDiffByFile(rawDiff) {
+function getEmptyTreeHash(cwd) {
+  // Write only the canonical empty tree object into .git/objects. This gives
+  // first-release repositories a real baseline, rather than looking only at
+  // uncommitted changes in the current checkout.
+  return runGit(['hash-object', '-t', 'tree', '-w', '--stdin'], cwd, { input: '' }).trim();
+}
+
+function parseNameStatus(raw) {
+  const tokens = String(raw || '').split('\0');
+  const result = new Map();
+  for (let i = 0; i < tokens.length;) {
+    const status = tokens[i++];
+    if (!status) continue;
+    const firstPath = tokens[i++];
+    if (!firstPath) continue;
+    // --no-renames is used by the caller, so each status has one path.
+    result.set(firstPath, status[0]);
+  }
+  return result;
+}
+
+function parseUnifiedDiffByFile(rawDiff, statuses = new Map()) {
   const byFile = new Map();
   let current = null;
+
   for (const line of String(rawDiff || '').split(/\r?\n/)) {
-    const fileMatch = line.match(/^diff --git a\/.+ b\/(.+)$/);
+    const fileMatch = line.match(/^diff --git a\/(.+) b\/(.+)$/);
     if (fileMatch) {
-      const file = fileMatch[1].replace(/\\/g, '/');
-      current = { path: file, addedLines: [], hunkContexts: [] };
-      byFile.set(file, current);
+      const relPath = fileMatch[2].replace(/\\/g, '/');
+      current = {
+        path: relPath,
+        status: statuses.get(relPath) || 'M',
+        addedLines: [],
+        removedLines: [],
+        hunkContexts: []
+      };
+      byFile.set(relPath, current);
       continue;
     }
     if (!current) continue;
+
+    if (line.startsWith('new file mode')) current.status = 'A';
+    if (line.startsWith('deleted file mode')) current.status = 'D';
     if (line.startsWith('@@')) {
-      const ctxMatch = line.match(/^@@[^@]+@@\s*(.+)$/);
-      if (ctxMatch && ctxMatch[1].trim()) current.hunkContexts.push(ctxMatch[1].trim());
-      continue;
-    }
-    if (line.startsWith('+') && !line.startsWith('+++')) {
+      const context = line.match(/^@@[^@]+@@\s*(.*)$/);
+      if (context && context[1].trim()) current.hunkContexts.push(context[1].trim());
+    } else if (line.startsWith('+') && !line.startsWith('+++')) {
       current.addedLines.push(line.slice(1));
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      current.removedLines.push(line.slice(1));
     }
   }
+
   return byFile;
 }
 
-/**
- * Collect actual git diff hunks and untracked files relative to `baseRef`
- * (or working tree against HEAD when no base tag exists).
- */
 function collectDiffEntries(baseRef, cwd = ROOT_DIR) {
-  const ref = tagExistsInGit(baseRef, cwd) ? baseRef : (tagExistsInGit('HEAD', cwd) ? 'HEAD' : '');
-  const byFile = new Map();
+  if (!hasHead(cwd)) return [];
 
-  if (ref) {
-    const changed = runGit(['diff', '--name-only', ref], cwd)
-      .split(/\r?\n/)
-      .map(s => s.trim())
-      .filter(isRelevantRepoPath);
-    if (changed.length > 0) {
-      const rawDiff = runGit(['diff', '-U0', '--no-color', ref, '--', ...changed], cwd);
-      for (const [k, v] of parseUnifiedDiffByFile(rawDiff)) {
-        byFile.set(k, v);
-      }
+  const base = baseRef && tagExistsInGit(baseRef, cwd) ? baseRef : getEmptyTreeHash(cwd);
+  const statuses = parseNameStatus(runGit(
+    ['diff', '--name-status', '--no-renames', '-z', base, '--'], cwd
+  ));
+  const changedPaths = [...statuses.keys()].filter(isRelevantRepoPath);
+  const patch = runGit(
+    ['diff', '--no-color', '--no-ext-diff', '--no-renames', '--unified=0', base, '--'], cwd
+  );
+  const parsed = parseUnifiedDiffByFile(patch, statuses);
+  const byPath = new Map();
+
+  // Use Git's NUL-delimited file list as the source of truth. This also keeps
+  // binary, deleted, and otherwise unparsable paths visible in the summary.
+  for (const relPath of changedPaths) {
+    const entry = parsed.get(relPath) || {
+      path: relPath,
+      status: statuses.get(relPath) || 'M',
+      addedLines: [],
+      removedLines: [],
+      hunkContexts: []
+    };
+    entry.status = statuses.get(relPath) || entry.status;
+    if (!isVersionOnlyChange(entry)) byPath.set(relPath, entry);
+  }
+
+  // `git diff` intentionally does not include untracked files.
+  const untracked = runGit(
+    ['ls-files', '--others', '--exclude-standard', '-z'], cwd
+  ).split('\0').filter(Boolean).filter(isRelevantRepoPath);
+
+  for (const relPath of untracked) {
+    if (byPath.has(relPath)) continue;
+    try {
+      const filePath = path.join(cwd, relPath);
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile() || stat.size > 1024 * 1024) continue;
+      const content = fs.readFileSync(filePath, 'utf8');
+      if (content.includes('\0')) continue;
+      byPath.set(relPath, {
+        path: relPath,
+        status: 'A',
+        addedLines: content.split(/\r?\n/),
+        removedLines: [],
+        hunkContexts: []
+      });
+    } catch {
+      // Ignore files that disappear or become unreadable during collection.
     }
   }
 
-  const untracked = runGit(['ls-files', '--others', '--exclude-standard'], cwd)
-    .split(/\r?\n/)
-    .map(s => s.trim())
-    .filter(isRelevantRepoPath);
-  for (const rel of untracked) {
-    try {
-      const content = fs.readFileSync(path.join(cwd, rel), 'utf8');
-      byFile.set(rel, { path: rel, addedLines: content.split(/\r?\n/).slice(0, 120), hunkContexts: [] });
-    } catch {}
-  }
-
-  return [...byFile.values()];
+  return [...byPath.values()];
 }
 
-function extractAddedSignals(entry) {
+function extractSignals(entry) {
   const tests = [];
-  const uiLabels = [];
+  const labels = [];
   const symbols = [];
   const seen = new Set();
-  const pushUnique = (arr, val, maxLen = 80) => {
-    const clean = String(val || '').replace(/—/g, ' - ').replace(/\s+/g, ' ').trim();
-    if (!clean || clean.length < 3 || clean.length > maxLen) return;
-    if (seen.has(clean.toLowerCase())) return;
-    seen.add(clean.toLowerCase());
-    arr.push(clean);
+
+  const add = (list, value, maxLength = 100) => {
+    const clean = String(value || '').replace(/\s+/g, ' ').trim();
+    const key = clean.toLowerCase();
+    if (!clean || clean.length < 3 || clean.length > maxLength || seen.has(key)) return;
+    seen.add(key);
+    list.push(clean);
   };
 
-  for (const line of entry.addedLines) {
-    const testMatch = line.match(/^\s*(?:test|it)\s*\(\s*(['"`])(.+?)\1/);
-    if (testMatch) {
-      pushUnique(tests, testMatch[2], 140);
-      continue;
+  for (const line of entry.addedLines || []) {
+    const testMatch = line.match(/^\s*(?:test|it|describe)\s*\(\s*(['"`])(.+?)\1/);
+    if (testMatch) add(tests, testMatch[2], 140);
+
+    const translationMatch = line.match(/['"][a-z][a-z0-9_.-]*['"]\s*:\s*['"]([^'"]+)['"]/i);
+    if (translationMatch) add(labels, translationMatch[1], 70);
+
+    const attrMatch = line.match(/\b(?:title|aria-label|placeholder)="([^"\n]{4,70})"/i);
+    if (attrMatch) add(labels, attrMatch[1], 70);
+
+    for (const match of line.matchAll(/<(?:button|strong|th|h[1-6])[^>]*>([^<$]{3,60})<\//gi)) {
+      if (!match[1].includes('{')) add(labels, match[1].replace(/&amp;/g, '&'), 70);
     }
 
-    const i18nMatch = line.match(/['"][a-z]+\.[a-z0-9_]+['"]\s*:\s*['"]([^'"]+)['"]/i);
-    if (i18nMatch) pushUnique(uiLabels, i18nMatch[1], 60);
+    const functionMatch = line.match(/^\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z0-9_]+)/);
+    if (functionMatch) add(symbols, functionMatch[1], 55);
 
-    const htmlTitle = line.match(/\btitle="([^"]{4,60})"/i);
-    if (htmlTitle) pushUnique(uiLabels, htmlTitle[1], 60);
-
-    for (const m of line.matchAll(/<(?:button|strong|th|h[1-6])[^>]*>([^<$]{3,50})<\//gi)) {
-      if (!m[1].includes('{')) {
-        pushUnique(uiLabels, m[1].replace(/&amp;/g, '&'), 60);
-      }
-    }
-
-    const fnMatch = line.match(/^\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z0-9_]+)/);
-    if (fnMatch) pushUnique(symbols, fnMatch[1], 50);
-
-    const routeMatch = line.match(/['"](\/api\/[a-z0-9_\/:-]+)['"]/i);
-    if (routeMatch) pushUnique(symbols, routeMatch[1], 60);
+    const routeMatch = line.match(/['"](\/api\/[a-z0-9_/:.-]+)['"]/i);
+    if (routeMatch) add(symbols, routeMatch[1], 70);
 
     const cssMatch = line.match(/^\s*\.([a-z][a-z0-9_-]{2,})\s*\{/i);
-    if (cssMatch) pushUnique(symbols, `.${cssMatch[1]}`, 40);
+    if (cssMatch) add(symbols, `.${cssMatch[1]}`, 50);
   }
 
-  for (const ctx of entry.hunkContexts) {
-    const fnCtx = ctx.match(/(?:function\s+)([a-zA-Z0-9_]+)/);
-    if (fnCtx) pushUnique(symbols, fnCtx[1], 50);
+  for (const context of entry.hunkContexts || []) {
+    const functionContext = context.match(/\bfunction\s+([a-zA-Z0-9_]+)/);
+    if (functionContext) add(symbols, functionContext[1], 55);
   }
 
-  return { tests, uiLabels, symbols };
+  return { tests, labels, symbols };
 }
 
-function matchTestArea(testDesc, testPath) {
-  const hay = `${testPath} ${testDesc}`.toLowerCase();
-  if (/brandchip|brand chips|posinstock|repair counter|\bpos\b/.test(hay)) return 'Repair Counter (POS)';
-  if (/import|min stock|min_stock|inventory|template|wholesale|capital/.test(hay)) return 'Inventory & Import';
-  if (/utang|credit/.test(hay)) return 'Customer Credit (Utang)';
-  if (/print|receipt|esc\/pos|drawer/.test(hay)) return 'Thermal Printing';
-  if (/report|dashboard|analytics|profit/.test(hay)) return 'Reports & Analytics';
-  if (/cloud/.test(hay)) return 'Cloud Sync';
-  if (/pin|license|recovery|auth/.test(hay)) return 'Security & Licensing';
-  if (/updater|installer|changelog|publish/.test(hay)) return 'Updater & Packaging';
-  return '';
+function classifyFileArea(relPath) {
+  const file = String(relPath || '').replace(/\\/g, '/').toLowerCase();
+  const base = path.posix.basename(file);
+
+  if (file.startsWith('tests/')) return 'Quality & Tests';
+  if (/pos\.js$|pos-helpers|checkout|cart|payment/.test(file)) return 'Repair Counter (POS)';
+  if (/inventory|importer|catalog|parts-template|bulk-edit/.test(file)) return 'Inventory & Import';
+  if (/credit|utang|ledger/.test(file)) return 'Customer Credit (Utang)';
+  if (/printer|receipt|escpos|claim-stub/.test(file)) return 'Thermal Printing';
+  if (/report|dashboard|analytics|sales-history/.test(file)) return 'Reports & Analytics';
+  if (/cloud|sync/.test(file)) return 'Cloud Sync';
+  if (/auth|license|security|pin|recovery/.test(file)) return 'Security & Licensing';
+  if (/updater|installer|publish|changelog|package(-lock)?\.json|tailwind/.test(file) || file.startsWith('scripts/')) return 'Build & Release';
+  if (file.startsWith('src/')) return 'Server & Database';
+  if (file.startsWith('public/')) return 'Counter UI';
+  if (/readme|\.md$/i.test(base)) return 'Documentation';
+  return 'General';
 }
 
-/**
- * Summarize actual changed files and added diff hunks into plain-English bullets.
- */
 function summarizeDiffEntries(entries) {
   if (!entries || entries.length === 0) return [];
 
-  const areaBuckets = new Map();
-  const areaTests = new Map();
-  const unassignedTests = [];
-
+  const buckets = new Map();
   for (const entry of entries) {
-    const sig = extractAddedSignals(entry);
-    if (entry.path.startsWith('tests/')) {
-      for (const td of sig.tests) {
-        const area = matchTestArea(td, entry.path);
-        if (area) {
-          if (!areaTests.has(area)) areaTests.set(area, []);
-          areaTests.get(area).push(td);
-        } else {
-          unassignedTests.push(td);
-        }
-      }
-      continue;
-    }
-
     const area = classifyFileArea(entry.path);
-    if (!areaBuckets.has(area)) {
-      areaBuckets.set(area, { files: new Set(), uiLabels: [], symbols: [] });
+    if (!buckets.has(area)) {
+      buckets.set(area, { files: new Set(), tests: [], labels: [], symbols: [], statuses: [] });
     }
-    const bucket = areaBuckets.get(area);
-    bucket.files.add(path.basename(entry.path));
-    for (const lbl of sig.uiLabels) {
-      if (!bucket.uiLabels.includes(lbl)) bucket.uiLabels.push(lbl);
-    }
-    for (const sym of sig.symbols) {
-      if (!bucket.symbols.includes(sym)) bucket.symbols.push(sym);
-    }
+    const bucket = buckets.get(area);
+    bucket.files.add(entry.path);
+    bucket.statuses.push(entry.status || 'M');
+
+    const signals = extractSignals(entry);
+    for (const item of signals.tests) if (!bucket.tests.includes(item)) bucket.tests.push(item);
+    for (const item of signals.labels) if (!bucket.labels.includes(item)) bucket.labels.push(item);
+    for (const item of signals.symbols) if (!bucket.symbols.includes(item)) bucket.symbols.push(item);
   }
 
   const bullets = [];
-  for (const [area, bucket] of areaBuckets.entries()) {
-    const files = [...bucket.files].slice(0, 3);
-    const tests = (areaTests.get(area) || []).slice(0, 2);
-    const details = [];
-    if (tests.length > 0) details.push(tests.join('; '));
-    const labels = bucket.uiLabels.slice(0, 3);
-    if (labels.length > 0) details.push(labels.join(', '));
-    else if (tests.length === 0 && bucket.symbols.length > 0) details.push(`Updated ${bucket.symbols.slice(0, 3).join(', ')}`);
+  for (const [area, bucket] of buckets) {
+    const files = [...bucket.files].sort();
+    const fileSummary = files.slice(0, 4).join(', ') + (files.length > 4 ? ` and ${files.length - 4} more` : '');
+    const allAdded = bucket.statuses.every(status => status === 'A');
+    const allDeleted = bucket.statuses.every(status => status === 'D');
+    let detail = '';
 
-    const summary = details.length > 0
-      ? `${details.join('; ')} (${files.join(', ')})`
-      : `Updated ${files.join(', ')}`;
-    bullets.push(`${area}: ${summary}`.replace(/—/g, ' - '));
-  }
-
-  if (bullets.length === 0 && unassignedTests.length > 0) {
-    for (const td of unassignedTests.slice(0, 3)) {
-      bullets.push(`Verified: ${td}`.replace(/—/g, ' - '));
+    if (bucket.tests.length) {
+      detail = `Updated test coverage for ${bucket.tests.slice(0, 3).join('; ')}`;
+    } else if (bucket.labels.length) {
+      detail = `Updated interface text for ${bucket.labels.slice(0, 3).map(label => `"${label}"`).join(', ')}`;
+    } else if (bucket.symbols.length) {
+      detail = `Updated ${bucket.symbols.slice(0, 3).join(', ')}`;
+    } else if (allAdded) {
+      detail = `Added ${files.length === 1 ? 'a new file' : 'new files'}`;
+    } else if (allDeleted) {
+      detail = `Removed ${files.length === 1 ? 'a file' : 'files'}`;
+    } else {
+      detail = 'Updated';
     }
+
+    bullets.push(`${area}: ${detail} (${fileSummary})`);
   }
 
   return bullets;
 }
 
-/**
- * Generate release highlight bullets from custom notes, git commits since `prevTag`,
- * and actual working-tree/branch git diff hunks.
- */
-function generateReleaseHighlights({ version, prevTag, customNote, changelogPath, repoDir } = {}) {
+function normalizeCommitSubject(subject) {
+  const clean = String(subject || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return '';
+
+  const match = clean.match(/^(feat|fix|perf|refactor|docs|build|chore|test|ci|style|security)(?:\([^)]*\))?(!)?:\s*(.+)$/i);
+  if (!match) return clean.charAt(0).toUpperCase() + clean.slice(1);
+
+  const type = match[1].toLowerCase();
+  let summary = match[3].trim().replace(/[.!?]+$/, '');
+  const redundantLead = {
+    feat: /^(?:add|create|introduce)\s+/i,
+    fix: /^(?:fix|resolve|prevent)\s+/i,
+    perf: /^(?:improve|optimi[sz]e)\s+/i,
+    refactor: /^(?:refactor|rework|clean up)\s+/i,
+    docs: /^(?:update|add|document)\s+/i,
+    build: /^(?:update|add|configure)\s+/i,
+    chore: /^(?:update|clean up|remove)\s+/i,
+    test: /^(?:add|update|expand)\s+/i,
+    ci: /^(?:update|fix|add)\s+/i,
+    style: /^(?:update|fix|adjust)\s+/i,
+    security: /^(?:improve|fix|harden)\s+/i
+  }[type];
+  if (redundantLead) summary = summary.replace(redundantLead, '');
+  const lowerSummary = summary.charAt(0).toLowerCase() + summary.slice(1);
+  const verb = {
+    feat: 'Added',
+    fix: 'Fixed',
+    perf: 'Improved performance for',
+    refactor: 'Refined',
+    docs: 'Updated documentation for',
+    build: 'Updated build tooling for',
+    chore: 'Updated',
+    test: 'Expanded tests for',
+    ci: 'Updated release automation for',
+    style: 'Updated styling for',
+    security: 'Improved security for'
+  }[type];
+  return `${verb} ${lowerSummary}`;
+}
+
+function generateReleaseHighlights({ version, prevTag, customNote, repoDir } = {}) {
   const cwd = repoDir || ROOT_DIR;
-  const ver = (version || getPackageVersion()).replace(/^v/i, '');
-  const previous = prevTag !== undefined ? prevTag : getPreviousTag(ver, cwd);
-  const priorBullets = getPriorReleaseBullets(ver, changelogPath);
+  const targetVersion = (version || getPackageVersion(cwd)).replace(/^v/i, '');
+  if (!hasHead(cwd)) {
+    throw new Error('This project has no Git commit yet. Commit the project before generating a release changelog.');
+  }
 
+  const previousTag = prevTag !== undefined ? prevTag : getPreviousTag(targetVersion, cwd);
+  const commits = getGitCommitsSinceTag(previousTag, cwd);
+  // This is deliberately a diff from the previous release tag, not from HEAD.
+  // It therefore includes all committed changes in the release plus working-tree edits.
+  const diffEntries = collectDiffEntries(previousTag, cwd);
+  const rawBullets = [];
+
+  if (customNote && String(customNote).trim()) {
+    rawBullets.push(String(customNote).trim());
+  }
+  rawBullets.push(...commits.map(normalizeCommitSubject).filter(Boolean));
+  rawBullets.push(...summarizeDiffEntries(diffEntries));
+
+  const seen = new Set();
   const bullets = [];
-  const pushBullet = (text) => {
-    const clean = String(text || '').replace(/—/g, ' - ').trim();
-    if (!clean) return;
-    if (priorBullets.has(clean) || bullets.includes(clean)) return;
+  for (const item of rawBullets) {
+    const clean = String(item || '').replace(/\s+/g, ' ').trim();
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
     bullets.push(clean);
-  };
-
-  if (customNote && customNote.trim()) {
-    pushBullet(customNote.trim());
-  }
-
-  const gitCommits = getGitCommitsSinceTag(previous, cwd);
-  for (const c of gitCommits) {
-    pushBullet(c);
-  }
-
-  // Always inspect uncommitted changes; when no new commits exist since `previous`,
-  // inspect the full diff from `previous` (covering both branch commits and working tree).
-  const hasDirtyFiles = Boolean(runGit(['status', '--porcelain'], cwd));
-  if (gitCommits.length === 0 || hasDirtyFiles) {
-    const diffBase = gitCommits.length === 0 ? previous : 'HEAD';
-    const diffEntries = collectDiffEntries(diffBase, cwd);
-    for (const b of summarizeDiffEntries(diffEntries)) {
-      pushBullet(b);
-    }
   }
 
   if (bullets.length === 0) {
-    pushBullet('Maintenance and stability improvements across POS counter, inventory, and backups.');
+    bullets.push(`No source changes detected since ${previousTag || 'the beginning of Git history'}.`);
   }
 
-  return bullets;
+  return bullets.slice(0, 15);
 }
 
 function buildReleaseNotesMarkdown(versionTag, highlights) {
-  const tag = versionTag.startsWith('v') ? versionTag : `v${versionTag}`;
+  const tag = /^v/i.test(versionTag) ? versionTag : `v${versionTag}`;
   const cleanVer = tag.replace(/^v/, '');
-  const bulletLines = highlights.map(b => `- ${b}`).join('\n');
+  const bulletLines = highlights.map(item => `- ${item}`).join('\n');
 
   return `# What is New in TechParts POS (${tag})
 
@@ -477,7 +528,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
 
 * **Finding Parts & Customers:**
   - \`/\`: Jump directly to the parts search and barcode box
-  - \`Ctrl + K\` or \`Ctrl + F\`: Open global search palette
   - \`Alt + C\`: Jump to Customer Name field
   - \`Alt + T\`: Toggle Retail vs Wholesale price tier
   - \`Alt + N\`: Add or open Job Note (faults, unlock code, physical condition)
@@ -493,7 +543,7 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
 
 * **Holding Jobs & Stubs:**
   - \`Alt + P\`: Print Claim Stub before the repair starts
-  - \`Alt + H\`: Hold current job as a draft (frees counter for the next customer)
+  - \`Alt + H\`: Hold current job (files a repair ticket and frees the counter for the next customer)
   - \`Alt + R\`: Resume previously held job
   - \`Alt + X\`: Clear cart / cancel current order
   - \`Escape\`: Close any open window or confirmation dialog
@@ -514,6 +564,28 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
 `;
 }
 
+function localDateString(date = new Date()) {
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function getVersionSectionBounds(content, versionTag) {
+  const normalizedTag = String(versionTag).replace(/^v/i, '').toLowerCase();
+  const headings = [...content.matchAll(/^##\s+\[([^\]]+)\].*$/gm)];
+  const index = headings.findIndex(match => match[1].replace(/^v/i, '').toLowerCase() === normalizedTag);
+  if (index < 0) return null;
+  const start = headings[index].index;
+  const end = index + 1 < headings.length ? headings[index + 1].index : content.length;
+  return { start, end };
+}
+
+function makeAutoBlock(highlights) {
+  const bullets = highlights.map(item => `- ${item}`).join('\n');
+  return `${AUTO_START}\n${bullets}\n${AUTO_END}`;
+}
+
+// Starter history for a brand-new CHANGELOG.md, kept from the v2.x era of the
+// product so a fresh install still shows where the features came from.
 const HISTORICAL_CHANGELOG = `## [v2.1] - 2026-11-02
 
 ### Added & Improved
@@ -549,113 +621,141 @@ const HISTORICAL_CHANGELOG = `## [v2.1] - 2026-11-02
 `;
 
 function updateChangelogFile(versionTag, highlights, changelogPath = path.join(ROOT_DIR, 'CHANGELOG.md')) {
-  const tag = versionTag.startsWith('v') ? versionTag : `v${versionTag}`;
-  const today = new Date().toISOString().split('T')[0];
+  const tag = /^v/i.test(versionTag) ? versionTag : `v${versionTag}`;
+  const date = localDateString();
+  const autoBlock = makeAutoBlock(highlights);
+  const entry = `## [${tag}] - ${date}\n\n### Highlights & Changes\n${autoBlock}\n`;
+  const header = '# Changelog\n\nAll notable changes to TechParts POS and Phone Repair Management System are documented in this file.\n\nThe format is based on Keep a Changelog, and this project adheres to Semantic Versioning.\n\n';
 
-  const bulletLines = highlights.map(b => `- ${b}`).join('\n');
-  const newEntry = `## [${tag}] - ${today}
+  let content = fs.existsSync(changelogPath) ? fs.readFileSync(changelogPath, 'utf8').replace(/^\uFEFF/, '') : '';
+  content = content.replace(/\r\n/g, '\n');
 
-### Highlights & Changes
-${bulletLines}
-`;
-
-  let currentContent = '';
-  if (fs.existsSync(changelogPath)) {
-    currentContent = fs.readFileSync(changelogPath, 'utf8');
-  }
-
-  let finalContent = '';
-  const header = `# Changelog
-
-All notable changes to TechParts POS and Phone Repair Management System are documented in this file.
-
-The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
-
-`;
-
-  if (!currentContent || !currentContent.includes('# Changelog')) {
-    finalContent = header + newEntry + '\n' + HISTORICAL_CHANGELOG;
+  if (!content.trim()) {
+    content = header + entry + '\n' + HISTORICAL_CHANGELOG;
   } else {
-    // If the version header already exists, replace its block to keep it idempotent
-    const escapedTag = tag.replace(/\./g, '\\.');
-    const sectionRegex = new RegExp(`##\\s*\\[${escapedTag}\\][\\s\\S]*?(?=\\n##\\s*\\[|$)`, 'i');
+    if (!/^# Changelog\b/m.test(content)) content = header + content.replace(/^\s+/, '');
+    const bounds = getVersionSectionBounds(content, tag);
 
-    if (sectionRegex.test(currentContent)) {
-      finalContent = currentContent.replace(sectionRegex, newEntry.trim() + '\n\n');
-    } else {
-      // Insert after top header
-      const headerIndex = currentContent.indexOf('## [');
-      if (headerIndex !== -1) {
-        finalContent = currentContent.slice(0, headerIndex) + newEntry + '\n' + currentContent.slice(headerIndex);
+    if (!bounds) {
+      const firstVersion = content.search(/^##\s+\[/m);
+      if (firstVersion >= 0) {
+        content = content.slice(0, firstVersion) + entry + '\n' + content.slice(firstVersion);
       } else {
-        finalContent = currentContent.trimEnd() + '\n\n' + newEntry;
+        content = content.trimEnd() + '\n\n' + entry;
       }
+    } else {
+      let section = content.slice(bounds.start, bounds.end);
+      const markerStart = section.indexOf(AUTO_START);
+      const markerEnd = section.indexOf(AUTO_END);
+
+      if (markerStart >= 0 && markerEnd > markerStart) {
+        section = section.slice(0, markerStart) + autoBlock + section.slice(markerEnd + AUTO_END.length);
+      } else {
+        const heading = /^###\s+Highlights\s*&\s*Changes\s*$/m.exec(section);
+        if (heading) {
+          const bodyStart = heading.index + heading[0].length;
+          const nextHeadingMatch = /^###\s+/gm;
+          nextHeadingMatch.lastIndex = bodyStart;
+          const nextHeading = nextHeadingMatch.exec(section);
+          const bodyEnd = nextHeading ? nextHeading.index : section.length;
+          section = section.slice(0, bodyStart) + '\n' + autoBlock + '\n' + section.slice(bodyEnd);
+        } else {
+          section = section.trimEnd() + '\n\n### Highlights & Changes\n' + autoBlock + '\n';
+        }
+      }
+
+      // Refresh the displayed date while preserving the rest of this release section.
+      section = section.replace(/^(##\s+\[[^\]]+\]\s+-\s+)\d{4}-\d{2}-\d{2}/m, `$1${date}`);
+      content = content.slice(0, bounds.start) + section + content.slice(bounds.end);
     }
   }
 
-  // Anti-slop normalization (zero em dashes, standard windows line endings)
-  const normalized = finalContent.replace(/—/g, ' - ').replace(/(?<!\r)\n/g, '\r\n');
+  const normalized = content.replace(/\n+$/g, '\n').replace(/(?<!\r)\n/g, '\r\n');
+  fs.mkdirSync(path.dirname(changelogPath), { recursive: true });
   fs.writeFileSync(changelogPath, normalized, 'utf8');
   return normalized;
 }
 
 function updateReleaseNotesFile(versionTag, highlights, notesPath = path.join(ROOT_DIR, 'RELEASE_NOTES.md')) {
-  const tag = versionTag.startsWith('v') ? versionTag : `v${versionTag}`;
-  const markdown = buildReleaseNotesMarkdown(tag, highlights);
-  const normalized = markdown.replace(/—/g, ' - ').replace(/(?<!\r)\n/g, '\r\n');
+  const markdown = buildReleaseNotesMarkdown(versionTag, highlights);
+  const normalized = markdown.replace(/\n+$/g, '\n').replace(/(?<!\r)\n/g, '\r\n');
+  fs.mkdirSync(path.dirname(notesPath), { recursive: true });
   fs.writeFileSync(notesPath, normalized, 'utf8');
   return normalized;
 }
 
-function runCli() {
-  const args = process.argv.slice(2);
-  let version = getPackageVersion();
-  let customNote = '';
-  let dryRun = false;
-  let stdoutOnly = false;
-  let changelogOnly = false;
+function parseArgs(args) {
+  const options = {
+    version: getPackageVersion(),
+    customNote: '',
+    dryRun: false,
+    stdoutOnly: false,
+    changelogOnly: false,
+    help: false
+  };
 
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--version' && args[i + 1]) {
-      version = args[++i];
-    } else if (args[i] === '--note' && args[i + 1]) {
-      customNote = args[++i];
-    } else if (args[i] === '--dry-run') {
-      dryRun = true;
-    } else if (args[i] === '--stdout') {
-      stdoutOnly = true;
-    } else if (args[i] === '--changelog-only') {
-      changelogOnly = true;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--help' || arg === '-h' || arg === '/?') options.help = true;
+    else if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--stdout') options.stdoutOnly = true;
+    else if (arg === '--changelog-only') options.changelogOnly = true;
+    else if (arg === '--version' && args[i + 1]) options.version = args[++i];
+    else if (arg.startsWith('--version=')) options.version = arg.slice('--version='.length);
+    else if (arg === '--note' && args[i + 1]) options.customNote = args[++i];
+    else if (arg.startsWith('--note=')) options.customNote = arg.slice('--note='.length);
+    else throw new Error(`Unknown or incomplete option: ${arg}`);
+  }
+
+  options.version = String(options.version).replace(/^v/i, '');
+  if (!parseVersionParts(options.version)) {
+    throw new Error(`Invalid release version: ${options.version}`);
+  }
+  return options;
+}
+
+function runCli(args = process.argv.slice(2)) {
+  try {
+    const options = parseArgs(args);
+    if (options.help) {
+      console.log('Usage: node scripts/generate-changelog.js [options]\n');
+      console.log('  --version <version>  Generate for a release version (defaults to package.json).');
+      console.log('  --note <text>        Add a custom release highlight.');
+      console.log('  --dry-run            Preview without writing files.');
+      console.log('  --stdout             Print release notes only; never write files.');
+      console.log('  --changelog-only     Update CHANGELOG.md without changing RELEASE_NOTES.md.');
+      console.log('  --help               Show this help.');
+      return 0;
     }
-  }
 
-  const tag = version.startsWith('v') ? version : `v${version}`;
-  const highlights = generateReleaseHighlights({ version, customNote });
+    const tag = `v${options.version}`;
+    const highlights = generateReleaseHighlights({ version: options.version, customNote: options.customNote });
 
-  if (stdoutOnly) {
-    process.stdout.write(buildReleaseNotesMarkdown(tag, highlights).replace(/—/g, ' - '));
-    return;
-  }
+    if (options.stdoutOnly) {
+      process.stdout.write(buildReleaseNotesMarkdown(tag, highlights));
+      return 0;
+    }
 
-  console.log(`[generate-changelog] Generating changelog for ${tag}...`);
-  for (const h of highlights) {
-    console.log(`  * ${h}`);
-  }
+    console.log(`[generate-changelog] ${options.dryRun ? 'Previewing' : 'Updating'} changelog for ${tag}...`);
+    for (const highlight of highlights) console.log(`  - ${highlight}`);
 
-  if (dryRun) {
-    console.log('[generate-changelog] Dry run requested. No files written.');
-    return;
-  }
+    if (options.dryRun) {
+      console.log('[generate-changelog] Dry run: no files were changed.');
+      return 0;
+    }
 
-  updateChangelogFile(tag, highlights);
-  if (!changelogOnly) {
-    updateReleaseNotesFile(tag, highlights);
+    updateChangelogFile(tag, highlights);
+    if (!options.changelogOnly) updateReleaseNotesFile(tag, highlights);
+    console.log(`[generate-changelog] Updated CHANGELOG.md${options.changelogOnly ? '' : ' and RELEASE_NOTES.md'}.`);
+    return 0;
+  } catch (error) {
+    console.error(`[generate-changelog] ERROR: ${error.message}`);
+    return 1;
   }
-  console.log(`[generate-changelog] Successfully updated CHANGELOG.md${changelogOnly ? '' : ' and RELEASE_NOTES.md'} for ${tag}.`);
 }
 
 if (require.main === module) {
-  runCli();
+  process.exitCode = runCli();
 }
 
 module.exports = {
@@ -665,5 +765,10 @@ module.exports = {
   updateReleaseNotesFile,
   getPackageVersion,
   getPreviousTag,
-  summarizeDiffEntries
+  getGitCommitsSinceTag,
+  collectDiffEntries,
+  summarizeDiffEntries,
+  isVersionOnlyChange,
+  parseVersionParts,
+  isPriorVersion
 };

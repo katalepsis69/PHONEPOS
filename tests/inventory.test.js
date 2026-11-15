@@ -544,3 +544,18 @@ dbTest('edit-modal stock set refuses a stale form and dedups a retry', (db) => {
   assert.strictEqual(replay.stock_quantity, 6, 'the replay returns the saved row, not a second edit');
   assert.strictEqual(getInventoryItem(db, item.id).stock_quantity, 6, 'the op log swallowed the duplicate');
 });
+
+dbTest('import pre-validates the adjustStock floor per row (audit 2026-11-14-b finding 1)', (db) => {
+  createInventoryItem(db, { brand: 'Floor', model_name: 'Test', part_type: 'LCD', stock_quantity: 5, sku_barcode: 'FLOOR-1' });
+  const mixed = importInventory(db, [
+    { sku_barcode: 'FLOOR-1', stock_quantity: '-10' },
+    { brand: 'Good', model_name: 'Row', part_type: 'LCD', stock_quantity: '2' }
+  ]);
+  assert.deepStrictEqual(mixed, {
+    created: 1,
+    updated: 0,
+    errors: ['Row 1: Insufficient stock: cannot reduce Floor Test - LCD by 10 (current: 5)']
+  });
+  assert.strictEqual(db.prepare(`SELECT stock_quantity FROM inventory WHERE sku_barcode = 'FLOOR-1'`).get().stock_quantity, 5, 'the floored row touched nothing');
+  assert.strictEqual(db.prepare(`SELECT stock_quantity FROM inventory WHERE model_name = 'Row'`).get().stock_quantity, 2, 'the good row still landed');
+});

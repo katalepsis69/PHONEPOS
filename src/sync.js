@@ -107,6 +107,24 @@ let syncLogSink = null;
 function setSyncLogSink(fn) { syncLogSink = typeof fn === 'function' ? fn : null; }
 const syncLog = (msg) => { if (syncLogSink) { try { syncLogSink(msg); return; } catch (_) {} } console.log(msg); };
 
+// Quarantine (drop) outbox rows inside one transaction. Shared by the
+// unreadable-payload drop and the whole-batch-400 rejected list: same table,
+// same contract, the shop's own rows are never touched. Plain BEGIN, not
+// txn(): audit.js requires this module, so requiring txn() back from audit
+// would be a broken require cycle.
+function quarantineIds(db, ids) {
+  if (!ids.length) return;
+  const drop = db.prepare('DELETE FROM sync_outbox WHERE id = ?');
+  db.exec('BEGIN');
+  try {
+    for (const id of ids) drop.run(id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 // A command that failed DETERMINISTICALLY (part missing, validation refusal,
 // floor refusal, duplicate SKU, a SQL constraint such as NOT NULL or FOREIGN
 // KEY) is acked so a poison command cannot retry on every drain forever; the
@@ -289,23 +307,29 @@ async function drainOutbox(db, { batch = 50 } = {}) {
     events.push({ outbox_id: r.id, table: r.table_name, local_id: r.local_id, deleted, row: deleted ? null : payload });
   }
   const unreadable = unreadableIds.length;
-  if (unreadable > 0) {
-    const drop = db.prepare('DELETE FROM sync_outbox WHERE id = ?');
-    db.exec('BEGIN');
-    try {
-      for (const id of unreadableIds) drop.run(id);
-      db.exec('COMMIT');
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    }
-  }
+  quarantineIds(db, unreadableIds);
   if (events.length === 0) {
     return { synced: 0, unreadable, quarantined: unreadable };
   }
 
   const res = await postBatch(url, token, shopId, events);
-  if (!res.ok) throw new Error(`cloud sync responded ${res.status}`);
+  if (!res.ok) {
+    // The cloud answers a whole-batch 400 when NOTHING in the window
+    // validated, and that body still carries the per-row rejected list.
+    // Quarantine those rows instead of wedging the oldest-first window
+    // behind backoff forever (measured shape, 2026-11-14 soak audit);
+    // any other non-200 still feeds the normal failure backoff.
+    const body = await res.json().catch(() => null);
+    const windowIds = new Set(rows.map(r => r.id));
+    const rejectedIds = (body && Array.isArray(body.rejected) ? body.rejected : [])
+      .map(rj => Number(rj && rj.outbox_id))
+      .filter(id => windowIds.has(id));
+    if (rejectedIds.length > 0) {
+      quarantineIds(db, rejectedIds);
+      return { synced: 0, unreadable: 0, quarantined: rejectedIds.length };
+    }
+    throw new Error(`cloud sync responded ${res.status}`);
+  }
   const ack = await res.json().catch(() => ({}));
   const acked = new Set(ack.ok_ids || []);
   const bulkOk = ack.ok === true && !Array.isArray(ack.ok_ids);

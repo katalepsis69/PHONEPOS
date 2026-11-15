@@ -160,13 +160,6 @@
           <h1 class="topbar__title" id="page-title">Repair counter</h1>
         </div>
 
-        <div class="search">
-          <i class="ph ph-magnifying-glass w-4 h-4"></i>
-          <label class="sr-only" for="global-search">Search the section you are in</label>
-          <input type="text" id="global-search" autocomplete="off"
-            placeholder="Search this view…">
-        </div>
-
         <div class="topbar__tools">
           <button type="button" id="draft-chip" class="draft-chip hidden" data-action="resume-draft"
             title="Resume the held repair job">
@@ -202,25 +195,6 @@
           </button>
         </div>
       </header>
-
-      <!-- UPDATE NOTIFICATION BANNER (hidden per counter ergonomics; topbar chip and modal used instead) -->
-      <div id="update-notification-banner" class="hidden no-print px-4 py-2 bg-emerald-950/90 border-b border-emerald-500/40 text-emerald-200 text-xs flex items-center justify-between transition-all" style="display: none !important;">
-        <div class="flex items-center gap-2">
-          <i class="ph ph-arrow-circle-up text-emerald-400 w-4 h-4"></i>
-          <span id="update-banner-text">A new version is available!</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <button type="button" id="btn-banner-apply-update" class="btn-mini btn-primary" data-action="apply-update">
-            <i class="ph ph-download-simple w-3.5 h-3.5"></i> <span>Update Now</span>
-          </button>
-          <a id="update-banner-notes" href="https://github.com/katalepsis69/PHONEPOS/releases" target="_blank" rel="noopener noreferrer" class="linkish text-xs">
-            Release Notes
-          </a>
-          <button type="button" id="btn-banner-dismiss-update" class="btn-quiet text-xs px-2 py-0.5" data-action="dismiss-update-banner" title="Dismiss for this session">
-            Later
-          </button>
-        </div>
-      </div>
 
       <!-- MAIN APPLICATION BODY -->
       <main id="workspace" class="workspace no-print">
@@ -2399,7 +2373,7 @@
             <span id="modal-update-progress-pct" class="font-bold text-[var(--pos)]">0%</span>
           </div>
           <div class="w-full h-2 rounded-full bg-[var(--surface-3)] border border-[var(--line)] overflow-hidden">
-            <div id="modal-update-progress-bar" class="h-full bg-[var(--pos)] transition-all duration-300" style="width: 0%;"></div>
+            <div id="modal-update-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" class="h-full bg-[var(--pos)] transition-all duration-300" style="width: 0%;"></div>
           </div>
           <p id="modal-update-progress-detail" class="text-[11px] text-[var(--txt-3)] font-mono"></p>
         </div>

@@ -1,10 +1,21 @@
-﻿# What is New in TechParts POS (v1.3)
+﻿# What is New in TechParts POS (v1.4)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- Counter UI: Applying UpdateΓÇª, The register has not come back (index.html, main.js, backoffice.js)
-- Repair Counter (POS): Updated styles.css
+- Fixed inventory import applies good rows and states every refused row
+- Expanded tests for soak spawns must never open a browser window
+- Fixed quarantine unreadable outbox rows on first sync window
+- Expanded tests for sync soak harness (env-gated)
+- Documentation: Updated (README.md, docs/audit-2026-11-14-b.md, docs/audit-2026-11-14.md, docs/code-audit-prompt.md and 5 more)
+- Cloud Sync: Updated quarantineIds, enqueue, drainOutbox (docs/sync-soak-2026-11-14.md, src/sync.js)
+- Build & Release: Updated interface text for "1.4" (package.json, publish-release.bat, publish.bat, scripts/publish-release.ps1 and 1 more)
+- Counter UI: Updated interface text for "Update %s is available!", "Update %s", "You are up to date! (v%s)" (public/index.html, public/js/i18n.js, public/js/main.js, public/js/ui.js and 2 more)
+- Security & Licensing: Updated /api/auth/staff, renderStaffPanel (public/js/auth.js)
+- Inventory & Import: Updated setupInventoryEnhancements, loadInventoryTable, renderInventoryMetrics (public/js/views/inventory.js, src/inventory.js)
+- Repair Counter (POS): Updated resetPosFilters (public/js/views/pos.js)
+- Server & Database: Updated runInstalledLauncher (src/server.js)
+- Quality & Tests: Updated test coverage for i18n: every en key is referenced somewhere in the frontend; i18n: PROFILE_VOCAB only overrides keys the main en table defines; shipped docs carry no mojibake and the release pipeline guards against it (tests/audit-regressions.test.js, tests/barcode-scan.test.js, tests/fix-batch-v6.test.js, tests/frontend-regressions.test.js and 9 more)
 
 ---
 
@@ -73,7 +84,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
 
 * **Finding Parts & Customers:**
   - `/`: Jump directly to the parts search and barcode box
-  - `Ctrl + K` or `Ctrl + F`: Open global search palette
   - `Alt + C`: Jump to Customer Name field
   - `Alt + T`: Toggle Retail vs Wholesale price tier
   - `Alt + N`: Add or open Job Note (faults, unlock code, physical condition)
@@ -89,7 +99,7 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
 
 * **Holding Jobs & Stubs:**
   - `Alt + P`: Print Claim Stub before the repair starts
-  - `Alt + H`: Hold current job as a draft (frees counter for the next customer)
+  - `Alt + H`: Hold current job (files a repair ticket and frees the counter for the next customer)
   - `Alt + R`: Resume previously held job
   - `Alt + X`: Clear cart / cancel current order
   - `Escape`: Close any open window or confirmation dialog
@@ -104,6 +114,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-Setup-1.3.exe` below.
+  1. Download `TechPartsPOS-Setup-1.4.exe` below.
   2. Run the installer to install TechParts POS as a protected background service.
   3. Launch TechParts POS from the Start Menu or Desktop shortcut.

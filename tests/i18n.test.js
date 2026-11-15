@@ -54,3 +54,44 @@ test('i18n: index.html has language toggle button and data-i18n tags', () => {
   assert.match(html, /data-i18n="part\.edit_title"/, 'edit part modal has data-i18n');
   assert.match(html, /data-i18n="stock\.adjust_title"/, 'adjust stock modal has data-i18n');
 });
+
+test('i18n: every en key is referenced somewhere in the frontend', () => {
+  // The 2026-11-14 cleaning removed 24 dead lines (8 keys that survived three
+  // passes because nothing pinned usage; inv.th_status was orphaned the day the
+  // STATUS column left the inventory table). This guard keeps the dictionary
+  // honest: a key nobody references is a bug in the table, not a reserve.
+  const vm = require('node:vm');
+  const context = { localStorage: { getItem: () => 'en', setItem: () => {} }, document: { documentElement: {} } };
+  const loaded = vm.runInNewContext(`${i18nSource.replace(/^export /gm, '')}\n; ({ I18N, PROFILE_VOCAB })`, context);
+
+  let corpus = '';
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (entry.name.endsWith('.js') && entry.name !== 'i18n.js') corpus += fs.readFileSync(p, 'utf8');
+    }
+  })(path.join(__dirname, '../public/js'));
+  corpus += fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
+  corpus += fs.readFileSync(path.join(__dirname, '../public/report.html'), 'utf8');
+
+  // Two families are looked up with computed keys, so a literal grep cannot see
+  // them: repairs.status_${s} (views/repairs.js) and title.${tab} (main.js).
+  const dynamicPrefixes = ['repairs.status_', 'title.'];
+  const dead = Object.keys(loaded.I18N.en).filter(key =>
+    !corpus.includes(key) && !dynamicPrefixes.some(prefix => key.startsWith(prefix)));
+  assert.deepStrictEqual(dead, [], `i18n keys referenced nowhere: ${dead.join(', ')}`);
+});
+
+test('i18n: PROFILE_VOCAB only overrides keys the main en table defines', () => {
+  const vm = require('node:vm');
+  const context = { localStorage: { getItem: () => 'en', setItem: () => {} }, document: { documentElement: {} } };
+  const loaded = vm.runInNewContext(`${i18nSource.replace(/^export /gm, '')}\n; ({ I18N, PROFILE_VOCAB })`, context);
+  const orphans = [];
+  for (const [profile, vocab] of Object.entries(loaded.PROFILE_VOCAB)) {
+    for (const key of Object.keys(vocab.en)) {
+      if (!(key in loaded.I18N.en)) orphans.push(`${profile}:${key}`);
+    }
+  }
+  assert.deepStrictEqual(orphans, [], `profile vocab keys with no base key: ${orphans.join(', ')}`);
+});

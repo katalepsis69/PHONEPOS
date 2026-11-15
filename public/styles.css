@@ -4264,12 +4264,13 @@ a.btn-mini {
     min-height: 46px !important;
   }
 
-  /* Payment & Tender Panel */
+  /* Payment & Tender Panel. Height stays 44px in this compact band: the
+     money-path touch-target invariant holds at every width (AGENTS.md spec). */
   .pay-btn {
     padding: 5px 3px !important;
     font-size: 0.78125rem !important;
     font-weight: 700 !important;
-    min-height: 38px !important;
+    min-height: 44px !important;
   }
 
   .tender-chips {
@@ -4794,10 +4795,9 @@ a.btn-mini {
 }
 
 /* Same 44px rule for the other standalone chip sites: settings panes, the
-   update banner, the license gate, the import preview and the dashboard
-   banner. Row-embedded chips keep the compact base above. */
+   license gate, the import preview and the dashboard banner. Row-embedded
+   chips keep the compact base above. */
 #modal-settings .btn-mini,
-#btn-banner-apply-update,
 #btn-copy-machine-id,
 #import-settings-btn,
 #import-swap-btn,
@@ -6044,16 +6044,6 @@ a {
   max-width: 200px;
 }
 
-/* Redundant topbar search hidden when active view has its own toolbar search or is dashboard */
-body[data-tab="dashboard"] .topbar .search,
-body[data-tab="inventory"] .topbar .search,
-body[data-tab="credits"] .topbar .search,
-body[data-tab="returns"] .topbar .search,
-body[data-tab="sales"] .topbar .search,
-body[data-tab="pos"] .topbar .search {
-  display: none !important;
-}
-
 /* Operating expenses input fields in dashboard */
 .dash-expense-input {
   height: 32px;
@@ -6101,12 +6091,52 @@ body[data-tab="pos"] .topbar .search {
   right: -4px;
 }
 
-/* Update notification banner permanently hidden per counter ergonomics & user directive;
-   topbar status chip & Software Update modal provide clean, official feedback instead. */
-#update-notification-banner {
-  display: none !important;
+/* ---- Short-viewport band (<= 700px tall): 1366x768 laptops and POS boxes
+   running app-mode Edge. The app title bar plus the Windows taskbar leave
+   roughly 690px of viewport, and the 1366/860 compact band alone still
+   starves the counter at that height. This band reclaims vertical chrome:
+   tighter topbar, workspace, panel heads and table cells. Touch targets do
+   NOT shrink here: the 44px money-path and control invariant holds. ---- */
+@media (max-height: 700px) {
+  .topbar {
+    padding: 3px 12px !important;
+    gap: 6px !important;
+  }
+
+  .workspace {
+    padding: 5px 8px 7px !important;
+  }
+
+  .rail {
+    padding: 10px 10px 8px;
+    gap: 10px;
+  }
+
+  .counter {
+    gap: 6px 10px !important;
+  }
+
+  .counter__main {
+    gap: 6px !important;
+  }
+
+  .panel__head {
+    padding: 5px 10px 4px !important;
+    gap: 6px !important;
+  }
+
+  /* The one-line catalog hint costs a full row at 690px; the counter keeps
+     its guidance, the other views keep their hints. */
+  .counter .panel__hint {
+    display: none !important;
+  }
+
+  .ptable tbody td {
+    padding: 4px 8px !important;
+  }
+
+  .summary__scroll {
+    padding: 5px 10px !important;
+    gap: 6px !important;
+  }
 }
-
-
-
-

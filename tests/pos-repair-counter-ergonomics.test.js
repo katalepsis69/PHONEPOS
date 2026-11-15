@@ -155,6 +155,12 @@ test('inventory view: honest metric copy, screen tech badges, and action hit are
   assert.match(invJs, /units === 1 \? t\('inv\.stat_unit_single'/);
   assert.match(invJs, /units > 0 \? t\('inv\.stat_low_only', 'below alert level'\) : t\('inv\.stat_none', 'nothing on hand'\)/);
 
+  // OUT card: red only when the shop actually stocks things (units > 0); a
+  // catalog-only shelf of zero-stock entries is a fact, not an alarm
+  assert.match(invJs, /stat--danger', units > 0 && out > 0\)/);
+  assert.match(invJs, /t\('inv\.stat_out_ok', 'all stocked'\)/);
+  assert.match(invJs, /t\('inv\.stat_out_catalog', 'catalog entries, not stocked'\)/);
+
   // Screen tech rendered with uppercase badge
   assert.match(invJs, /<span class="tag tag--subtle font-mono uppercase text-xs">\$\{escHtml\(item\.part_type\)\}<\/span>/);
 
@@ -164,7 +170,6 @@ test('inventory view: honest metric copy, screen tech badges, and action hit are
   assert.match(invJs, /ph-clock-counter-clockwise/);
   assert.match(styles, /\.btn-inv-action::after\s*\{/);
   assert.match(styles, /#view-inventory \.parts-tools \.field-search\s*\{[\s\S]*?max-width:\s*200px/);
-  assert.match(styles, /body\[data-tab="inventory"\] \.topbar \.search/);
 });
 
 test('installer script: version expansion and clean task hierarchy', () => {
@@ -175,12 +180,10 @@ test('installer script: version expansion and clean task hierarchy', () => {
   assert.doesNotMatch(iss, /GroupDescription:\s*"{cm:AdditionalIcons}"/);
 });
 
-test('sales and returns ergonomics: no orphaned timestamp wrap, action hit areas, and hidden topbar search', () => {
+test('sales and returns ergonomics: no orphaned timestamp wrap and action hit areas', () => {
   assert.match(backofficeJs, /<td class="font-mono whitespace-nowrap text-xs">\$\{formatDateTime\(s\.created_at\)\}<\/td>/);
   assert.match(backofficeJs, /<td class="font-mono whitespace-nowrap text-xs">\$\{formatDateTime\(r\.created_at\)\}<\/td>/);
   assert.match(styles, /\.sales-action-btn::after\s*\{/);
-  assert.match(styles, /body\[data-tab="sales"\] \.topbar \.search/);
-  assert.match(styles, /body\[data-tab="returns"\] \.topbar \.search/);
 });
 
 test('reports & profit ergonomics: currency sign placement, honest pluralization, expense form, and chart clarity', () => {
@@ -197,9 +200,6 @@ test('reports & profit ergonomics: currency sign placement, honest pluralization
   // Expense form input class and width
   assert.match(indexHtml, /id="expense-amount"[^>]*class="dash-expense-input w-28"/);
   assert.match(styles, /\.dash-expense-input\s*\{/);
-
-  // Dashboard topbar search hidden
-  assert.match(styles, /body\[data-tab="dashboard"\] \.topbar \.search/);
 
   // Chart values visible by default on readable series
   assert.match(styles, /\.chart__value\s*\{[\s\S]*?opacity:\s*0\.92/);

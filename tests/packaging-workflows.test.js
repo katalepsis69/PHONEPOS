@@ -204,6 +204,30 @@ test('publish-release provides non-technical user release notes with zero em das
   assert.doesNotMatch(ps1, /—/, 'publish-release.ps1 must not contain em dashes');
 });
 
+test('shipped docs carry no mojibake and the release pipeline guards against it', () => {
+  // The v1.3 run published double-encoded characters (an ellipsis became
+  // 'ΓÇª') into CHANGELOG.md, RELEASE_NOTES.md, README.md and the live GitHub
+  // release body. These markers do not occur in the app's own copy; any hit
+  // means UTF-8 was read through a legacy codepage somewhere upstream.
+  const markers = /Ã|Γ|â€/;
+  for (const rel of ['CHANGELOG.md', 'RELEASE_NOTES.md', 'README.md']) {
+    const text = fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8');
+    assert.doesNotMatch(text, markers, `${rel} must not contain mojibake sequences`);
+  }
+
+  // The pipeline fails fast on mojibake in operator-supplied notes instead of
+  // propagating it into the changelog and the published release body. The ps1
+  // has no BOM, so the guard must test char codes rather than literals.
+  const guard = fs.readFileSync(path.join(ROOT_DIR, 'scripts', 'publish-release.ps1'), 'utf8');
+  assert.match(guard, /Release notes contain mojibake/, 'publish-release.ps1 must abort on mojibake notes');
+  assert.ok(guard.includes('IndexOfAny([char[]]@(0x00C3, 0x0393))'), 'mojibake guard must detect by char code');
+
+  // 'Spreadsheet Import' is the marker deciding whether custom release notes
+  // keep the cashier guide or get regenerated; pin it so a guide rewrite that
+  // drops the phrase cannot silently break that branch.
+  assert.match(guard, /\$releaseNotes -notmatch 'Spreadsheet Import'/, 'guide-preservation marker must stay pinned');
+});
+
 test('cloud rotate-pin writes the new manager PIN only to its 0600 file, never stdout', () => {
   // The PIN must not land in a systemd journal or tmux pane: the mint paths
   // print the credential file's PATH only. Both copies of the cloud server
@@ -325,3 +349,30 @@ test('publish-release.ps1 builds and uploads Setup installer without zip packagi
   assert.doesNotMatch(ps1, /—/, 'publish-release.ps1 must contain zero em dashes');
 });
 
+
+test('publish-release.ps1 syncs CHANGELOG.md before the npm test gate', () => {
+  // The suite pins CHANGELOG.md's newest heading to package.json
+  // (tests/changelog.test.js), and the pipeline bumps package.json before it
+  // tests. A changelog sync that runs after the gate deadlocks every real
+  // release: the gate can never pass on a version bump. Measured live
+  // 2026-11-14: v1.4 attempt died at tests/changelog.test.js with
+  // "CHANGELOG.md newest heading (v1.3) must match package.json (v1.4)".
+  const ps1 = fs.readFileSync(path.join(ROOT_DIR, 'scripts', 'publish-release.ps1'), 'utf8');
+  const syncIdx = ps1.indexOf('Sync-ChangelogFile $tag');
+  const testIdx = ps1.indexOf('& npm test');
+  assert.ok(syncIdx !== -1, 'the pipeline must sync CHANGELOG.md');
+  assert.ok(testIdx !== -1, 'the pipeline must run npm test');
+  assert.ok(syncIdx < testIdx, 'CHANGELOG.md must be synced before npm test');
+  assert.strictEqual(ps1.split('Sync-ChangelogFile $tag').length - 1, 1, 'exactly one changelog sync call site');
+});
+
+test('publish-release.ps1 reads every rewritten file as UTF-8, never ANSI Get-Content', () => {
+  // Windows PowerShell 5.1's Get-Content -Raw decodes a no-BOM UTF-8 file
+  // with the ANSI codepage, and the version-bump rewrite then writes the
+  // mangled text back. Measured twice live during the v1.4 attempts:
+  // README.md's arrows became double-encoded after two failed runs and had
+  // to be repaired with two reverse cp1252 passes. ReadAllText sniffs the
+  // BOM and defaults to UTF-8.
+  const ps1 = fs.readFileSync(path.join(ROOT_DIR, 'scripts', 'publish-release.ps1'), 'utf8');
+  assert.doesNotMatch(ps1, /Get-Content \$\w+(\.\w+)? -Raw/, 'file reads that feed a rewrite must use [System.IO.File]::ReadAllText');
+});

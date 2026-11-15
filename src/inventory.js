@@ -395,6 +395,12 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
       }
       const qty = allowFrac ? roundQty(rawQty) : rawQty;
       if (match) {
+        // Pre-validate the floor adjustStock enforces (audit 2026-11-14-b,
+        // finding 1): a reduction past the part's stock is a row error now
+        // instead of a transaction abort that refuses the whole file.
+        if (qty < 0 && Number(match.stock_quantity) + qty < 0) {
+          throw new Error(`Insufficient stock: cannot reduce ${partLabel(match)} by ${Math.abs(qty)} (current: ${match.stock_quantity})`);
+        }
         const fields = {};
         for (const k of ['cost_price', 'price_retail', 'price_technician', 'min_stock_alert']) if (str(r[k]) !== '') fields[k] = Number(r[k]);
         for (const k of ['sku_barcode', 'supplier', 'location', 'item_name', 'category', 'uom']) if (str(r[k]) !== '') fields[k] = str(r[k]);

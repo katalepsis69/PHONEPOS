@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process');
 const { getBaseDir } = require('./db');
 
 const REPO = 'katalepsis69/PHONEPOS';
-const CURRENT_VERSION = '1.3';
+const CURRENT_VERSION = '1.4';
 
 /**
  * Parses a version string into an array of integers.
@@ -320,7 +320,6 @@ async function checkForUpdatesInner(currentVer = CURRENT_VERSION) {
     latestVersion: '',
     notes: '',
     downloadUrl: '',
-    zipUrl: '',
     htmlUrl: '',
     expectedBytes: 0,
     checkError: ''
@@ -368,8 +367,6 @@ async function checkForUpdatesInner(currentVer = CURRENT_VERSION) {
         if (name === 'techpartspos.exe' && isTrustedReleaseUrl(dl)) {
           result.downloadUrl = dl;
           result.expectedBytes = Number(a.size) || 0;
-        } else if (name.endsWith('.zip') && isTrustedReleaseUrl(dl) && !result.zipUrl) {
-          result.zipUrl = dl;
         }
       }
     }

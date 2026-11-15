@@ -41,7 +41,6 @@ export const I18N = {
     'inv.th_wholesale': 'Wholesale (₱)',
     'inv.th_stock': 'Stock Qty',
     'inv.th_min_alert': 'Min Stock Alert',
-    'inv.th_status': 'Status',
     'inv.th_actions': 'Actions',
 
     // POS & Counter
@@ -95,6 +94,12 @@ export const I18N = {
     'update.downloading_btn': 'Downloading…',
     'update.downloading_chip': 'Downloading update…',
     'update.available': 'A new version (%s) is available!',
+    'update.available_toast': 'Update %s is available!',
+    'update.chip': 'Update %s',
+    'update.up_to_date': 'You are up to date! (v%s)',
+    'update.up_to_date_app': 'TechParts POS is up to date (v%s)',
+    'update.check_failed_status': 'Could not check for updates.',
+    'update.check_failed': 'Failed to check for updates',
     'stub.no_identity': 'Claim stub not printed: shop identity is still the placeholder. Save real shop details in Settings.',
     'stub.nothing': 'Enter a device, job note, or part before printing a claim stub',
     'stub.fallback': 'Printed through the browser dialog: this window was opened manually. Reopen the POS from its desktop icon for one-touch printing.',
@@ -114,6 +119,8 @@ export const I18N = {
     'inv.stat_reorder': 'at or below reorder point',
     'inv.stat_out_stock': 'Out of stock',
     'inv.stat_restock': 'needs restock',
+    'inv.stat_out_ok': 'all stocked',
+    'inv.stat_out_catalog': 'catalog entries, not stocked',
     'inv.all_types': 'All Part Types',
 
     // Add & Edit Part Modals
@@ -145,12 +152,10 @@ export const I18N = {
 
     // Import & Inventory Hints
     'inv.import_tt': 'Import parts from Excel or CSV (uses markup from Settings > Store)',
-    'inv.import_note': 'Upload Excel or CSV. Blank prices are calculated from capital using store markup (set in Store tab).',
     'inv.import_auto_note': 'Blank prices use store markup (%s% retail, %s% wholesale) for new parts, and for existing parts when their capital changed. Set in Settings > Store.',
     'inv.settings_store': 'Settings > Store',
     'inv.open_store_settings': 'Open Store Settings to adjust default markup',
     'inv.bulk_hint': 'Check parts to edit prices, recalculate markup, or change location.',
-    'inv.delete_has_sales': 'Parts with sales history cannot be deleted. Archive the part instead to hide it from the counter.',
     'inv.download_template': 'Download template',
     'inv.parts_count': 'part(s)',
     'inv.reorder_btn': 'Reorder list',
@@ -173,23 +178,18 @@ export const I18N = {
     'inv.reorder_empty': 'No parts sold in this window.',
     'inv.reorder_error': "Couldn't load the reorder list.",
     'inv.reorder_group_total': 'Est. cost',
-    'part.gen_barcode': 'Create barcode',
 
     // POS & Counter Hints
     'pos.tier_retail_tt': 'Regular retail price',
     'pos.tier_wholesale_tt': 'Wholesale price',
     'pos.cust_search_ph': 'Customer name',
-    'pos.credit_require_name': 'Requires a customer name and phone number.',
     'pos.claim_stub_tt': 'Print claim stub before repair starts',
     'pos.search_ph': 'Scan barcode or type part (press Enter to add)',
 
     // Credit Settlement Hints
-    'credit.settle_partial_note': 'Enter amount to pay. Partial payments are accepted.',
-    'credit.pin_needed': 'Payments over %s require Manager PIN.',
 
     // Returns Hints
     'returns.search_ph': 'Search by receipt number, customer name, or barcode',
-    'returns.restock_note': 'Returning a part puts it back into inventory stock.',
 
     // Settings Hints
     'settings.markup_note': 'Markup applied when importing parts with blank prices or recalculating in bulk.',
@@ -225,7 +225,7 @@ export const I18N = {
     'pos.processing_payment': 'Processing payment…',
     'inv.empty_catalog_hint': 'Adjust the filter, or add a new item to the catalog.',
     'inv.part_added_toast': 'Item added to catalog',
-    'inv.search_ph': 'Search parts, model, SKU…',
+    'inv.search_ph': 'Search parts or SKU…',
     'inv.all_brands': 'All Brands',
     'dash.top_title': 'Top performing parts',
     'dash.trend_hint_day': 'Per day, hover a bar for detail.',
@@ -329,7 +329,6 @@ export const I18N = {
     'inv.th_wholesale': 'Wholesale (₱)',
     'inv.th_stock': 'Dami sa Stock',
     'inv.th_min_alert': 'Min. Stock Alert',
-    'inv.th_status': 'Katayuan',
     'inv.th_actions': 'Aksyon',
     'inv.reorder_btn': 'Listahan ng Reorder',
     'inv.reorder_tt': 'Mga piyesang nabenta kamakailan, nakaayos ayon sa supplier, may suhestiyong dami ng order',
@@ -403,6 +402,12 @@ export const I18N = {
     'update.downloading_btn': 'Nagda-download…',
     'update.downloading_chip': 'Nagda-download ng update…',
     'update.available': 'May bagong bersyon (%s)!',
+    'update.available_toast': 'May bagong update (%s)!',
+    'update.chip': 'Update %s',
+    'update.up_to_date': 'Aktual na! (bersyon %s)',
+    'update.up_to_date_app': 'Aktual na ang TechParts POS (bersyon %s)',
+    'update.check_failed_status': 'Hindi ma-check ang mga update.',
+    'update.check_failed': 'Hindi na-check ang mga update',
     'stub.no_identity': 'Hindi na-print ang claim stub: ang identity ng tindahan ay placeholder pa rin. I-save ang totoong detalye sa Settings.',
     'stub.nothing': 'Maglagay ng device, job note, o parte bago mag-print ng claim stub',
     'stub.fallback': 'Na-print sa browser dialog: binuksan nang mano-ano ang window. Buksan muli ang POS mula sa desktop icon para sa one-touch printing.',
@@ -422,6 +427,8 @@ export const I18N = {
     'inv.stat_reorder': 'dapat nang mag-reorder',
     'inv.stat_out_stock': 'Ubos na ang stock',
     'inv.stat_restock': 'kailangan ng restock',
+    'inv.stat_out_ok': 'lahat may stock',
+    'inv.stat_out_catalog': 'mga entry sa katalogo, walang stock',
     'inv.all_types': 'Lahat ng Uri ng Piyesa',
 
     // Add & Edit Part Modals
@@ -453,31 +460,24 @@ export const I18N = {
 
     // Import & Inventory Hints
     'inv.import_tt': 'Mag-import ng piyesa mula sa Excel o CSV (gamit ang markup sa Settings > Store)',
-    'inv.import_note': 'Mag-upload ng Excel o CSV. Ang blangkong presyo ay kukuwentahin mula sa puhunan (mababago sa Store tab).',
     'inv.import_auto_note': 'Ang blangkong presyo ay gagamit ng markup ng tindahan (%s% retail, %s% wholesale) para sa mga bagong parte, at sa mga parte kapag nagbago ang capital. Mababago sa Settings > Store.',
     'inv.settings_store': 'Settings > Store',
     'inv.open_store_settings': 'Buksan ang Store Settings para baguhin ang markup',
     'inv.bulk_hint': 'Lagyan ng tsek ang mga piyesa para magbago ng presyo, magkuwenta ng tubo, o magpalit ng pwesto.',
-    'inv.delete_has_sales': 'Hindi maaaring burahin ang piyesang may benta na. I-archive ito para maitago sa counter.',
     'inv.download_template': 'I-download ang template',
     'inv.parts_count': 'piyesa',
-    'part.gen_barcode': 'Gumawa ng barcode',
 
     // POS & Counter Hints
     'pos.tier_retail_tt': 'Karaniwang presyo sa retail',
     'pos.tier_wholesale_tt': 'Presyong wholesale',
     'pos.cust_search_ph': 'Pangalan ng customer',
-    'pos.credit_require_name': 'Kailangan ng pangalan at numero ng customer.',
     'pos.claim_stub_tt': 'Mag-print ng stub bago simulan ang repair',
     'pos.search_ph': 'I-scan ang barcode o i-type ang piyesa (Enter para idagdag)',
 
     // Credit Settlement Hints
-    'credit.settle_partial_note': 'Ilagay ang ibabayad. Pwedeng magbayad nang hulugan.',
-    'credit.pin_needed': 'Ang bayad na higit sa %s ay kailangan ng Manager PIN.',
 
     // Returns Hints
     'returns.search_ph': 'Maghanap gamit ang resibo, pangalan, o barcode',
-    'returns.restock_note': 'Ang isinauling piyesa ay ibabalik sa stock ng imbentaryo.',
 
     // Settings Hints
     'settings.markup_note': 'Tubong idaragdag kapag nag-import ng blangkong presyo o nagkuwenta nang maramihan.',
@@ -513,7 +513,7 @@ export const I18N = {
     'pos.processing_payment': 'Pinoproseso ang bayad…',
     'inv.empty_catalog_hint': 'I-adjust ang filter, o magdagdag ng bagong item sa katalogo.',
     'inv.part_added_toast': 'Naidagdag ang item sa katalogo',
-    'inv.search_ph': 'Maghanap ng piyesa, modelo, SKU…',
+    'inv.search_ph': 'Maghanap ng piyesa o SKU…',
     'inv.all_brands': 'Lahat ng Brand',
     'dash.top_title': 'Pinakamabentang mga piyesa',
     'dash.trend_hint_day': 'Bawat araw, i-hover ang bar para sa detalye.',
@@ -607,7 +607,6 @@ export const PROFILE_VOCAB = {
       'pos.cart_empty': 'No items in current sale',
       'pos.search_ph': 'Scan barcode or type product (press Enter to add)',
       'pos.qa_add_item': 'Add a product',
-      'returns.restock_note': 'Returning a product puts it back into inventory stock.',
       'inv.search_ph': 'Search product name, category, or barcode...',
       'inv.all_brands': 'All Brands',
       'dash.top_title': 'Top performing products',
@@ -653,7 +652,6 @@ export const PROFILE_VOCAB = {
       'pos.cart_empty': 'Walang item sa benta na ito',
       'pos.search_ph': 'I-scan ang barcode o i-type ang produkto (Enter para idagdag)',
       'pos.qa_add_item': 'Magdagdag ng produkto',
-      'returns.restock_note': 'Ang isinauling produkto ay ibabalik sa stock ng imbentaryo.',
       'inv.search_ph': 'Maghanap ng produkto, kategorya, o barcode...',
       'inv.all_brands': 'Lahat ng Brand',
       'dash.top_title': 'Pinakamabentang mga produkto',
@@ -701,7 +699,6 @@ export const PROFILE_VOCAB = {
       'pos.cart_empty': 'No items in current order',
       'pos.search_ph': 'Scan barcode or type component (press Enter to add)',
       'pos.qa_add_item': 'Add a component',
-      'returns.restock_note': 'Returning a component puts it back into inventory stock.',
       'inv.search_ph': 'Search component, model, specs, or SKU...',
       'inv.all_brands': 'All Brands',
       'dash.top_title': 'Top performing components',
@@ -747,7 +744,6 @@ export const PROFILE_VOCAB = {
       'pos.cart_empty': 'Walang item sa trabaho na ito',
       'pos.search_ph': 'I-scan ang barcode o i-type ang component (Enter para idagdag)',
       'pos.qa_add_item': 'Magdagdag ng component',
-      'returns.restock_note': 'Ang isinauling component ay ibabalik sa stock ng imbentaryo.',
       'inv.search_ph': 'Maghanap ng component, modelo, specs, o SKU...',
       'inv.all_brands': 'Lahat ng Brand',
       'dash.top_title': 'Pinakamabentang mga component',
@@ -795,7 +791,6 @@ export const PROFILE_VOCAB = {
       'pos.cart_empty': 'No items in current sale',
       'pos.search_ph': 'Scan barcode or type item (press Enter to add)',
       'pos.qa_add_item': 'Add an item',
-      'returns.restock_note': 'Returning an item puts it back into inventory stock.',
       'inv.search_ph': 'Search item name, brand, or SKU...',
       'inv.all_brands': 'All Brands',
       'dash.top_title': 'Top performing items',
@@ -841,7 +836,6 @@ export const PROFILE_VOCAB = {
       'pos.cart_empty': 'Walang item sa benta na ito',
       'pos.search_ph': 'I-scan ang barcode o i-type ang item (Enter para idagdag)',
       'pos.qa_add_item': 'Magdagdag ng item',
-      'returns.restock_note': 'Ang isinauling item ay ibabalik sa stock ng imbentaryo.',
       'inv.search_ph': 'Maghanap ng item, brand, o SKU...',
       'inv.all_brands': 'Lahat ng Brand',
       'dash.top_title': 'Pinakamabentang mga item',
@@ -889,7 +883,6 @@ export const PROFILE_VOCAB = {
       'pos.cart_empty': 'No items in current order',
       'pos.search_ph': 'Scan barcode or type item (press Enter to add)',
       'pos.qa_add_item': 'Add item or part',
-      'returns.restock_note': 'Returning an item puts it back into inventory stock.',
       'inv.search_ph': 'Search item, part, model, or SKU...',
       'inv.all_brands': 'All Brands',
       'dash.top_title': 'Top performing catalog items',
@@ -935,7 +928,6 @@ export const PROFILE_VOCAB = {
       'pos.cart_empty': 'Walang item sa order na ito',
       'pos.search_ph': 'I-scan ang barcode o i-type ang item (Enter para idagdag)',
       'pos.qa_add_item': 'Magdagdag ng item o piyesa',
-      'returns.restock_note': 'Ang isinauling item ay ibabalik sa stock ng imbentaryo.',
       'inv.search_ph': 'Maghanap ng item, piyesa, modelo, o SKU...',
       'inv.all_brands': 'Lahat ng Brand',
       'dash.top_title': 'Pinakamabentang mga item sa katalogo',

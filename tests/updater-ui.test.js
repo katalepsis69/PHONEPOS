@@ -11,32 +11,24 @@ const backofficeJs = fs.readFileSync(path.join(ROOT, 'public/js/views/backoffice
 test('updater antislop iconography: ph-sparkle eliminated in favor of purposeful arrow-circle-up', () => {
   // Hard Gate / Antislop tell: sparkles are generic AI decoration
   assert.ok(!indexHtml.includes('ph-sparkle'), 'index.html must not contain generic ph-sparkle icons');
-  
-  // Status chip in header
+
+  // Status chip in header is the single passive update surface (the top
+  // notification banner was deleted: it was permanently display:none while
+  // JS still maintained it — dead UI)
   assert.match(
     indexHtml,
     /<button[^>]*id="update-status-chip"[^>]*>[\s\S]*?<i class="ph ph-arrow-circle-up/
   );
-
-  // Top notification banner
-  assert.match(
-    indexHtml,
-    /<div[^>]*id="update-notification-banner"[\s\S]*?<i class="ph ph-arrow-circle-up text-emerald-400 w-4 h-4"><\/i>/
-  );
+  assert.ok(!indexHtml.includes('update-notification-banner'), 'the dead update banner must stay deleted');
 });
 
-test('updater DOM ergonomics: banner control IDs, span wrappers, and aria-live announcements', () => {
-  // Banner apply and dismiss buttons have dedicated IDs
-  assert.match(indexHtml, /id="btn-banner-apply-update"/);
-  assert.match(indexHtml, /id="btn-banner-dismiss-update"/);
-
+test('updater DOM ergonomics: modal control IDs, span wrappers, and aria-live announcements', () => {
   // Status message has polite live region
   assert.match(indexHtml, /<p id="update-status-msg"[^>]*aria-live="polite">/);
 
   // Button text is wrapped in span for icon-safe text manipulation
   assert.match(indexHtml, /<button[^>]*id="btn-check-updates"[^>]*>[\s\S]*?<span>Check for updates<\/span>/);
   assert.match(indexHtml, /<button[^>]*id="btn-apply-update"[^>]*>[\s\S]*?<span>Update Now<\/span>/);
-  assert.match(indexHtml, /<button[^>]*id="btn-banner-apply-update"[^>]*>[\s\S]*?<span>Update Now<\/span>/);
 });
 
 test('updater motion ergonomics: spin animation with reduced-motion compliance', () => {
@@ -100,7 +92,7 @@ test('software update modal ergonomics: popup dialog on available update with ac
   assert.match(backofficeJs, /btn-modal-apply-update/);
 });
 
-test('automatic update detection: topbar chip, banner, and periodic background timer', () => {
+test('automatic update detection: topbar chip only on silent checks, full prompt on manual, background timer', () => {
   const mainJs = fs.readFileSync(path.join(ROOT, 'public/js/main.js'), 'utf8');
 
   // Background timer checks every 30m and on network reconnect
@@ -110,10 +102,65 @@ test('automatic update detection: topbar chip, banner, and periodic background t
   // Status chip is revealed automatically when update is ready without requiring manual !silent
   assert.match(backofficeJs, /if \(chip\) \{\s*if \(chipIcon\) chipIcon\.className/);
 
-  // Top banner is revealed unless explicitly dismissed without requiring manual !silent
-  assert.match(backofficeJs, /if \(banner && !_bannerDismissed\) \{/);
+  // Modal and toast fire on manual checks only: a popup over the counter on
+  // every boot interrupted the shift for a notification. The toast previously
+  // fired on every 30-minute poll, all day, while an update sat unapplied.
+  assert.match(backofficeJs, /if \(!silent\) \{\s*openModal\('modal-update'\);\s*showToast\(/);
 
-  // Session-scoped modal prompt key
-  assert.match(backofficeJs, /const sessionPromptKey = `tp_update_prompted_\$\{data\.latestVersion\}`;/);
-  assert.match(backofficeJs, /if \(!silent \|\| !sessionStorage\.getItem\(sessionPromptKey\)\) \{/);
+  // No session-scoped prompt key and no dead banner reveal: both deleted
+  assert.ok(!backofficeJs.includes('tp_update_prompted_'), 'the session prompt key must stay deleted');
+  assert.ok(!backofficeJs.includes('_bannerDismissed'), 'the banner dismissal state must stay deleted');
+});
+
+test('update check strings are translated: t() with keys in both en and tl tables', () => {
+  const i18nJs = fs.readFileSync(path.join(ROOT, 'public/js/i18n.js'), 'utf8');
+  const keys = [
+    'update.available_toast',
+    'update.up_to_date',
+    'update.up_to_date_app',
+    'update.chip',
+    'update.check_failed_status',
+    'update.check_failed',
+  ];
+  for (const key of keys) {
+    const hits = i18nJs.split(`'${key}':`).length - 1;
+    assert.equal(hits, 2, `${key} must exist in both the en and tl tables`);
+  }
+
+  // The controller routes every user-visible check outcome through t(); scope
+  // to the check function so unrelated literals elsewhere in backoffice.js
+  // (exceptions panel, report errors) do not trip the negatives.
+  const fnStart = backofficeJs.indexOf('export async function checkForAppUpdates');
+  assert.ok(fnStart > -1, 'checkForAppUpdates must exist');
+  const fnBody = backofficeJs.slice(fnStart, backofficeJs.indexOf('\nexport ', fnStart + 8));
+  assert.match(fnBody, /t\('update\.available_toast'/);
+  assert.match(fnBody, /t\('update\.chip'/);
+  assert.match(fnBody, /t\('update\.up_to_date'/);
+  assert.match(fnBody, /t\('update\.up_to_date_app'/);
+  assert.match(fnBody, /t\('update\.check_failed_status'/);
+  assert.match(fnBody, /t\('update\.check_failed'/);
+  // The old raw literals must not come back in their direct-use forms.
+  assert.ok(!fnBody.includes('`Update ${'), 'hardcoded update-available toast must stay translated');
+  assert.ok(!fnBody.includes('`You are up to date!'), 'hardcoded up-to-date status must stay translated');
+  assert.ok(!fnBody.includes('`TechParts POS is up to date'), 'hardcoded up-to-date toast must stay translated');
+  assert.ok(!fnBody.includes("textContent = 'Could not"), 'hardcoded check-failure status must stay translated');
+  assert.ok(!fnBody.includes("showToast('Failed to check"), 'hardcoded check-failure toast must stay translated');
+  // setApplyLoading renders the idle chip label too; it lives in another function.
+  assert.match(backofficeJs, /t\('update\.chip', 'Update %s'\)/);
+});
+
+test('debouncedViewLoad stays deleted: no public/js source references the dead export', () => {
+  const jsDir = path.join(ROOT, 'public/js');
+  const files = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (entry.name.endsWith('.js')) files.push(p);
+    }
+  })(jsDir);
+  for (const file of files) {
+    const src = fs.readFileSync(file, 'utf8');
+    assert.ok(!src.includes('debouncedViewLoad'), `${path.relative(jsDir, file)} must not reference the deleted export`);
+  }
 });

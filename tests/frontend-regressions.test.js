@@ -68,7 +68,10 @@ test('POS search stays local and printable reports keep counts non-monetary', ()
   const pos = source('public/js/views/pos.js');
   const receipts = source('public/js/receipts.js');
 
-  assert.match(main, /pos: \{ input: 'pos-search-input', load: \(\) => renderPartsTable\(\) \}/);
+  // The topbar global search was deleted (every view has its own search; the
+  // field was CSS-hidden on all of them while JS still fed it). POS search
+  // stays local: one input wiring, no global routing left in main.js.
+  assert.ok(!main.includes('routeGlobalSearch'), 'the global search routing must stay deleted');
   assert.equal((main.match(/on\('pos-search-input', 'input'/g) || []).length, 1);
   assert.equal((pos.match(/pos-search-input'\)\?\.addEventListener\('input'/g) || []).length, 0);
   assert.match(receipts, /moneyRow\('Parts', c\.parts_revenue\)/);
@@ -469,7 +472,10 @@ test('inventory table renders an explicit Min Stock Alert column', () => {
   const html = source('public/index.html');
   const inv = source('public/js/views/inventory.js');
   assert.match(html, /data-i18n="inv\.th_min_alert"[^>]*>Min Stock Alert<\/th>/);
-  assert.match(inv, /showSkeleton\('inventory-tbody', 10\)/);
+  // The Status column was removed (the badge lives in the stock cell), so the
+  // table has 9 columns and the loading skeleton must render 9 cells too.
+  assert.match(inv, /showSkeleton\('inventory-tbody', 9\)/);
+  assert.ok(!inv.includes("showSkeleton('inventory-tbody', 10)"), 'stale 10-column skeleton must stay gone');
   assert.match(inv, /<td class="is-mid font-mono" style="color: var\(--txt-2\);">\$\{item\.min_stock_alert \?\? 0\}<\/td>/);
 });
 

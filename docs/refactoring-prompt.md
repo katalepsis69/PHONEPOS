@@ -44,9 +44,14 @@ pass.
 
 BASELINE RITUAL (first, no exceptions)
 1. The gates are fixed for this project; do not re-detect them:
-   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-13 at c91f354: 661 tests,
-     661 pass, 0 fail, about 30 seconds across 55 tracked test files (640/640 at ab5de08 the same
-     night, 638/638 at cf06069 on 2026-11-13,
+   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-14 at bbab7d4 with the
+     uncommitted Stage Build rewrite graft batch in the tree: 682 tests,
+     681 pass + 1 skipped (the env-gated sync soak, skips by design without SYNC_SOAK=1),
+     0 fail, about 28 seconds across 57 tracked test files
+     (670/670 at 3d8dc46 earlier the same
+     day, 661/661 at c91f354 on
+     2026-11-13, 640/640 at ab5de08 and 638/638 at cf06069 that same
+     night,
      610/610 on 2026-11-12,
      568/568 on 2026-11-11,
      560/560 on 2026-11-10, 536/536 on 2026-11-09, 505/505 on 2026-11-05, 423/423 on
@@ -57,8 +62,9 @@ BASELINE RITUAL (first, no exceptions)
      covers publish-release.ps1, batch entry points, and installer/TechPartsPOS.iss.
 2. Run the gate. Record the exact result INCLUDING failures. IDENTICAL before and
    after means the same set of pass and fail, not all-green. Pre-existing reds:
-   none known (661/661 on 2026-11-13 at c91f354; 640/640 at ab5de08 and 638/638 at cf06069
-     the same day; 610/610 on 2026-11-12). A new red is a
+   none known (682 tests, 681 pass + 1 gated skip, 0 fail on 2026-11-14 at bbab7d4; 670/670 at
+     3d8dc46 earlier the same day; 661/661 at c91f354 and 640/640 at ab5de08 and 638/638 at cf06069
+     the day before; 610/610 on 2026-11-12). A new red is a
    stop condition, not a baseline entry. A hung run is a rerun, not a regression.
    always take helper.js's serverTest, because the default dbPath resolves to the real
    data/shop.db (src/server.js:278) and sendRaw is only patched by the harness. If you find a
@@ -73,7 +79,7 @@ BASELINE RITUAL (first, no exceptions)
    backups/code-pre-refactor-YYYY-MM-DD/ convention as belt-and-braces for
    multi-file steps, preserving relative paths (the established code-pre-* pattern).
    To find what is new and therefore where the structure is still soft: git log
-   --stat and git diff 94d1206..cf06069 instead of guessing.
+   --stat and git diff 94d1206..3d8dc46 instead of guessing.
 4. The suite must never print paper: tests/helper.js enforces the sentinel printer
    queue and a sendRaw patch that refuses every other queue. A refactor step that
    makes any test open a real queue is a stop condition.

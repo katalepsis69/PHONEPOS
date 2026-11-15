@@ -199,7 +199,7 @@ test('opening a new repair leaves the caret where a scan is useful', async () =>
   const main = read('public/js/main.js');
   const slice = main.slice(
     main.indexOf('export async function startNewSale()'),
-    main.indexOf('// Top-bar search')
+    main.indexOf('// Keep background POS server alive')
   ).replace(/export /g, '');
 
   let focused = '';

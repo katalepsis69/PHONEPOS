@@ -2133,7 +2133,12 @@ async function runInstalledLauncher(hooks = {}) {
   });
   const sleepFn = hooks.sleep || ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
   const initialWaitMs = typeof hooks.initialWaitMs === 'number' ? hooks.initialWaitMs : 1500;
-  const totalTimeoutMs = typeof hooks.totalTimeoutMs === 'number' ? hooks.totalTimeoutMs : 15000;
+  // 60s, not 15s: a fresh install's first exe run is held by Windows
+  // Defender's signature scan (measured 30-60s on a slow disk, 2026-11-06
+  // release lesson), so a 15s budget answered "could not connect" on machines
+  // where the server came up seconds later. The task trigger still fires once
+  // at initialWaitMs; the extra budget only widens the polling window.
+  const totalTimeoutMs = typeof hooks.totalTimeoutMs === 'number' ? hooks.totalTimeoutMs : 60000;
 
   function getPortsToProbe() {
     const state = readRuntimeState();

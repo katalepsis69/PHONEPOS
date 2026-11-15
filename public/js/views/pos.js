@@ -166,7 +166,7 @@ export function setInStockOnly(on) {
 
 // Used by the empty states so the counter can recover in one click.
 export function resetPosFilters() {
-  ['pos-search-input', 'repair-device-input', 'global-search'].forEach(id => {
+  ['pos-search-input', 'repair-device-input'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });

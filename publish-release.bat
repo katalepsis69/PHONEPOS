@@ -5,12 +5,16 @@ cd /d "%~dp0"
 
 :: Help and --no-pause check
 set "NO_PAUSE="
+set "DRY_RUN=0"
 for %%a in (%*) do (
     if "%%~a"=="--help" goto :show_help
     if "%%~a"=="-h"     goto :show_help
     if "%%~a"=="/?"     goto :show_help
     if "%%~a"=="-?"     goto :show_help
     if "%%~a"=="--no-pause" set "NO_PAUSE=1"
+    if /i "%%~a"=="--dry-run" set "DRY_RUN=1"
+    if /i "%%~a"=="--dryrun" set "DRY_RUN=1"
+    if /i "%%~a"=="-d" set "DRY_RUN=1"
 )
 
 echo ======================================================
@@ -21,12 +25,13 @@ echo Packaging TechPartsPOS.exe, running tests, and publishing
 echo the release to GitHub with simple release notes.
 echo.
 
-:: Close any running POS executables instead of refusing: publish must win
-:: over a live exe. A settle beat follows so Windows releases the image lock.
-taskkill /f /im TechPartsPOS.exe >nul 2>&1 && echo [*] Closed running TechPartsPOS.exe
-taskkill /f /im TechPartsPOS_update.exe >nul 2>&1
-taskkill /f /im LicenseGenerator.exe >nul 2>&1 && echo [*] Closed running LicenseGenerator.exe
-ping -n 3 127.0.0.1 >nul
+:: A dry run must not close live applications or alter the current session.
+if "%DRY_RUN%"=="0" (
+    taskkill /f /im TechPartsPOS.exe >nul 2>&1 && echo [*] Closed running TechPartsPOS.exe
+    taskkill /f /im TechPartsPOS_update.exe >nul 2>&1
+    taskkill /f /im LicenseGenerator.exe >nul 2>&1 && echo [*] Closed running LicenseGenerator.exe
+    ping -n 3 127.0.0.1 >nul
+)
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\publish-release.ps1" %*
 set "EXIT_CODE=%errorlevel%"

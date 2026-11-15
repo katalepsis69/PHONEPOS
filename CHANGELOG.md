@@ -1,13 +1,32 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to TechParts POS and Phone Repair Management System are documented in this file.
 
 The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
 
+## [v1.4] - 2026-11-15
+
+### Highlights & Changes
+<!-- AUTO-GENERATED:START -->
+- Fixed inventory import applies good rows and states every refused row
+- Expanded tests for soak spawns must never open a browser window
+- Fixed quarantine unreadable outbox rows on first sync window
+- Expanded tests for sync soak harness (env-gated)
+- Documentation: Updated (README.md, docs/audit-2026-11-14-b.md, docs/audit-2026-11-14.md, docs/code-audit-prompt.md and 5 more)
+- Cloud Sync: Updated quarantineIds, enqueue, drainOutbox (docs/sync-soak-2026-11-14.md, src/sync.js)
+- Build & Release: Updated interface text for "1.4" (package.json, publish-release.bat, publish.bat, scripts/publish-release.ps1 and 1 more)
+- Counter UI: Updated interface text for "Update %s is available!", "Update %s", "You are up to date! (v%s)" (public/index.html, public/js/i18n.js, public/js/main.js, public/js/ui.js and 2 more)
+- Security & Licensing: Updated /api/auth/staff, renderStaffPanel (public/js/auth.js)
+- Inventory & Import: Updated setupInventoryEnhancements, loadInventoryTable, renderInventoryMetrics (public/js/views/inventory.js, src/inventory.js)
+- Repair Counter (POS): Updated resetPosFilters (public/js/views/pos.js)
+- Server & Database: Updated runInstalledLauncher (src/server.js)
+- Quality & Tests: Updated test coverage for i18n: every en key is referenced somewhere in the frontend; i18n: PROFILE_VOCAB only overrides keys the main en table defines; shipped docs carry no mojibake and the release pipeline guards against it (tests/audit-regressions.test.js, tests/barcode-scan.test.js, tests/fix-batch-v6.test.js, tests/frontend-regressions.test.js and 9 more)
+<!-- AUTO-GENERATED:END -->
+
 ## [v1.3] - 2026-11-14
 
 ### Highlights & Changes
-- Counter UI: Applying UpdateΓÇª, The register has not come back (index.html, main.js, backoffice.js)
+- Counter UI: Applying Update…, The register has not come back (index.html, main.js, backoffice.js)
 - Repair Counter (POS): Updated styles.css
 
 

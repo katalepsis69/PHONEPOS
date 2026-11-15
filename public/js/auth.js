@@ -1,5 +1,5 @@
 import { S } from './state.js';
-import { closeModal, confirmModal, escHtml, fmtMoney, formatDateTime, inputModal, openModal, showGate, showToast, showSkeleton, syncAppInert } from './ui.js';
+import { closeModal, confirmModal, describeLoadFailure, escHtml, fmtMoney, formatDateTime, inputModal, openModal, showGate, showToast, showSkeleton, syncAppInert } from './ui.js';
 import { loadInventoryTable, renderInvBrandFilter, renderPartTypeOptions, renderInventoryTable, setAddItemTemplate } from './views/inventory.js';
 import { syncAppearanceModal } from './theme.js';
 import { loadPosCatalog, renderBrandChips, renderCategoryOptions, renderPartsTable } from './views/pos.js';
@@ -2033,25 +2033,29 @@ export async function renderStaffPanel() {
   if (!list) return;
   let staff = [];
   let failed = false;
+  let res = null;
+  let failErr = null;
   try {
-    const res = await fetch('/api/auth/staff');
+    res = await fetch('/api/auth/staff');
     if (res.ok) {
       staff = await res.json();
       try { localStorage.setItem('pos_staff_roster', JSON.stringify(staff.map(s => ({ id: s.id, name: s.name })))); } catch (_) {}
     } else {
       failed = true;
     }
-  } catch (_) {
+  } catch (err) {
     failed = true;
+    failErr = err;
   }
   if (failed) {
     // A fetch failure rendered as "No staff yet" once and invited the manager
     // to re-add existing cashiers. Say what actually happened instead.
+    const reason = await describeLoadFailure(failErr, res);
     list.innerHTML = `
       <div class="empty">
         <div class="empty__icon"><i class="ph ph-wifi-slash w-5 h-5"></i></div>
         <div class="empty__title">Couldn't load staff</div>
-        <p class="empty__body">The server didn't answer, so this list may be out of date. Retry before adding anyone new.</p>
+        <p class="empty__body">${escHtml(reason)} This list may be out of date; retry before adding anyone new.</p>
         <button type="button" class="chip" data-action="reload-staff">Retry</button>
       </div>`;
     return;

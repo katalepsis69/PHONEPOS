@@ -1,10 +1,10 @@
 import { S } from './state.js';
-import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, debouncedViewLoad, initConfirmModal, initInputModal, initLiveClock, openModal, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
+import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, initConfirmModal, initInputModal, initLiveClock, openModal, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
 import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, syncCloudUi, openForgotPinPanel, closeForgotPinPanel, submitRecoveryPinReset, submitRecoveryPasswordChange } from './auth.js';
 import { autoPrintEnabled, calculateChange, calculateCreditBalance, clearDeviceSelection, setPosBrandFilter, clearRepairOrder, completeSale, copyRepairRef, customerComboboxInit, editCartQtyPrompt, fillExactAmount, focusImeiForScan, formatPhPhone, loadCustomerSuggestions, loadPosCatalog, newRepairRef, onCustomerNameInput, onDeviceSelected, onPartSearchKeydown, onRepairIntakeInput, printClaimStub, quickAddPart, refreshDraftChip, removeCartItem, renderCartSummary, resetPosFilters, resetRepairCounter, restoreCartRecovery, saveRepairDraft, setPartCategory, setInStockOnly, setPaymentMethod, setPriceTier, toggleRepairNote, renderPartsTable, initScanListeners, resumeRepairDraft, clearRefusedScans, openScanRefusals } from './views/pos.js';
 import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, setAddItemTemplate, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
 import { loadRepairs, wireRepairsView } from './views/repairs.js';
-import { editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, dismissUpdateBanner, openUpdateModal, downloadBackup } from './views/backoffice.js';
+import { editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, openUpdateModal, downloadBackup } from './views/backoffice.js';
 import { openShiftPrompt, closeShiftPrompt } from './views/pos.js';
 import { printModalSlip, printTestReceipt, printZReport, reprintLastReceipt } from './receipts.js';
 import './api.js'; // side effect: session/auth-aware fetch wrapper
@@ -28,16 +28,6 @@ const TAB_META = {
   sales: { title: 'Sales history' },
   dashboard: { title: 'Reports & profit' },
   audit: { title: 'Audit log' }
-};
-
-// Which input the top-bar search feeds, per view, plus the loader to re-run.
-const VIEW_SEARCH_TARGETS = {
-  pos: { input: 'pos-search-input', load: () => renderPartsTable() },
-  credits: { input: 'credit-search', load: () => loadCustomers() },
-  inventory: { input: 'inv-search', load: () => loadInventoryTable() },
-  returns: { input: 'returns-search', load: () => loadWarrantyReturnsTable() },
-  sales: { input: 'sales-search', load: () => loadSalesHistory() },
-  repairs: { input: 'repairs-search', load: () => loadRepairs() }
 };
 
 export function switchTab(tab) {
@@ -68,10 +58,6 @@ export function switchTab(tab) {
     if (titleEl) titleEl.textContent = t(`title.${tab}`, meta.title);
   }
 
-  // The top-bar query belongs to whichever view is on screen, so clear it on switch.
-  const globalSearch = document.getElementById('global-search');
-  if (globalSearch) globalSearch.value = '';
-
   if (tab === 'pos') loadPosCatalog();
   if (tab === 'repairs') loadRepairs();
   if (tab === 'credits') loadCustomers();
@@ -100,19 +86,6 @@ export async function startNewSale() {
   // Scan-ready: the counter's most common next move after opening a job is
   // scanning a part, and this box answers a typed search just as well.
   document.getElementById('pos-search-input')?.focus();
-}
-
-// Top-bar search is a single field that drives whichever view is open.
-export function routeGlobalSearch(value) {
-  let target = VIEW_SEARCH_TARGETS[S.currentTab];
-  if (!target) {
-    switchTab('pos');
-    target = VIEW_SEARCH_TARGETS.pos;
-  }
-
-  const input = document.getElementById(target.input);
-  if (input) input.value = value;
-  debouncedViewLoad(target);
 }
 
 // Keep background POS server alive while browser is open (auto-exits when tab is closed)
@@ -281,7 +254,6 @@ const ACTIONS = {
   'restore-backup': () => restoreBackup(),
   'check-updates': () => checkForAppUpdates(),
   'apply-update': () => applyAppUpdate(),
-  'dismiss-update-banner': () => dismissUpdateBanner(),
   'open-settings-updates': () => openUpdateModal(),
   'day-close-submit': () => submitDayClose(),
   'open-audit': () => { closeModal('modal-settings'); switchTab('audit'); }, // Settings → Data link lands on the tab
@@ -473,7 +445,6 @@ function initFormWiring() {
     feedbackKind = btn.dataset.feedbackKind;
     document.querySelectorAll('#modal-feedback [data-feedback-kind]').forEach(b => b.classList.toggle('is-active', b === btn));
   }));
-  on('global-search', 'input', e => routeGlobalSearch(e.target.value));
   on('login-gate-pin', 'keydown', e => { if (e.key === 'Enter') submitLoginPin(); });
   on('login-gate-name-input', 'keydown', e => { if (e.key === 'Enter') submitLoginPin(); });
   on('pin-input', 'keydown', e => { if (e.key === 'Enter') submitPinVerification(); });
@@ -509,11 +480,7 @@ function initFormWiring() {
   on('pos-credit-downpayment', 'input', calculateCreditBalance);
   on('repair-note', 'input', onRepairIntakeInput);
 
-  on('credit-search', 'input', e => {
-    const globalSearch = document.getElementById('global-search');
-    if (globalSearch && S.currentTab === 'credits') globalSearch.value = e.target.value;
-    searchCustomers();
-  });
+  on('credit-search', 'input', searchCustomers);
   on('day-close-date', 'change', loadDayClose);
   on('credit-filter', 'change', loadCustomers);
   on('inv-search', 'input', searchInventory);

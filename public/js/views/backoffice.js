@@ -1,6 +1,6 @@
 import { S } from '../state.js';
 import { t } from '../i18n.js';
-import { closeModal, confirmModal, escHtml, fmtMoney, formatDateOnly, formatDateTime, inputModal, openModal, showSkeleton, showToast, warrantyDays } from '../ui.js';
+import { closeModal, confirmModal, describeLoadFailure, escHtml, fmtMoney, formatDateOnly, formatDateTime, inputModal, openModal, showSkeleton, showToast, warrantyDays } from '../ui.js';
 import { hasElevation, requireManagerPin, syncCloudUi } from '../auth.js';
 import { autoPrintEnabled, formatPhPhone, loadCustomerSuggestions, loadPosCatalog } from '../views/pos.js';
 import { autoPrintSlip, printPeriodSummary, printSlip, renderReceipt, renderSettlementReceipt, shopIdentityIsPlaceholder } from '../receipts.js';
@@ -25,8 +25,9 @@ export async function loadWarrantyReturnsTable() {
   let url = `/api/returns?search=${encodeURIComponent(search)}`;
   if (filter) url += `&return_type=${encodeURIComponent(filter)}`;
 
+  let res = null;
   try {
-    const res = await fetch(url);
+    res = await fetch(url);
     if (!res.ok) throw new Error('Returns request failed');
     const returns = await res.json();
     if (request !== returnsRequest) return;
@@ -34,18 +35,19 @@ export async function loadWarrantyReturnsTable() {
   } catch (err) {
     if (request !== returnsRequest) return;
     console.error('Failed to load returns:', err);
+    const reason = await describeLoadFailure(err, res);
     const tbody = document.getElementById('returns-tbody');
     if (tbody && tbody.querySelector('.skel')) {
       tbody.innerHTML = `<tr><td colspan="8">
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-wifi-slash w-5 h-5"></i></div>
           <div class="empty__title">Couldn't load returns</div>
-          <p class="empty__body">The server didn't answer. Retry, or check that the POS server is running.</p>
+          <p class="empty__body">${escHtml(reason)}</p>
           <button type="button" class="chip" data-action="reload-returns">Retry</button>
         </div>
       </td></tr>`;
     }
-    showToast('Could not load returns — check the server and retry', 'error');
+    showToast(`Could not load returns: ${reason}`, 'error');
   }
 }
 
@@ -350,8 +352,9 @@ export async function loadCustomers() {
   let url = `/api/customers?search=${encodeURIComponent(search)}`;
   if (filter) url += `&filter=${encodeURIComponent(filter)}`;
 
+  let res = null;
   try {
-    const res = await fetch(url);
+    res = await fetch(url);
     if (!res.ok) throw new Error('Customers request failed');
     const customers = await res.json();
     if (request !== customersRequest) return;
@@ -361,18 +364,19 @@ export async function loadCustomers() {
   } catch (err) {
     if (request !== customersRequest) return;
     console.error('Failed to load customers:', err);
+    const reason = await describeLoadFailure(err, res);
     const tbody = document.getElementById('customers-tbody');
     if (tbody && tbody.querySelector('.skel')) {
       tbody.innerHTML = `<tr><td>
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-wifi-slash w-5 h-5"></i></div>
           <div class="empty__title">Couldn't load customers</div>
-          <p class="empty__body">The server didn't answer. Retry, or check that the POS server is running.</p>
+          <p class="empty__body">${escHtml(reason)}</p>
           <button type="button" class="chip" data-action="reload-customers">Retry</button>
         </div>
       </td></tr>`;
     }
-    showToast('Could not load customers — check the server and retry', 'error');
+    showToast(`Could not load customers: ${reason}`, 'error');
   }
 }
 
@@ -485,7 +489,7 @@ export function renderCustomersTable(customers) {
           </span>
           <div class="min-w-0">
             <span class="font-semibold text-sm text-[var(--txt)]">${escHtml(c.customer_name)}</span>
-            ${c.customer_phone ? `<span class="foot-note font-mono text-xs ml-2 text-[var(--txt-3)]">${escHtml(c.customer_phone)}</span>` : ''}
+            ${c.customer_phone ? `<span class="foot-note font-mono text-xs ml-2 text-[var(--txt-3)]">${escHtml(formatPhPhone(c.customer_phone))}</span>` : ''}
           </div>
         </div>
       </td>
@@ -971,8 +975,9 @@ export async function loadSalesHistory(more = false) {
   if (method) url += `&payment_method=${encodeURIComponent(method)}`;
   if (date) url += `&date=${encodeURIComponent(date)}`;
 
+  let res = null;
   try {
-    const res = await fetch(url);
+    res = await fetch(url);
     if (!res.ok) throw new Error('Sales history request failed');
     const page = await res.json();
     if (request !== salesRequest) return;
@@ -988,18 +993,19 @@ export async function loadSalesHistory(more = false) {
   } catch (err) {
     if (request !== salesRequest) return;
     console.error('Failed to load sales history:', err);
+    const reason = await describeLoadFailure(err, res);
     const tbody = document.getElementById('sales-tbody');
     if (tbody && tbody.querySelector('.skel')) {
       tbody.innerHTML = `<tr><td colspan="9">
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-wifi-slash w-5 h-5"></i></div>
           <div class="empty__title">Couldn't load sales history</div>
-          <p class="empty__body">The server didn't answer. Retry, or check that the POS server is running.</p>
+          <p class="empty__body">${escHtml(reason)}</p>
           <button type="button" class="chip" data-action="reload-sales">Retry</button>
         </div>
       </td></tr>`;
     }
-    showToast('Could not load sales history — check the server and retry', 'error');
+    showToast(`Could not load sales history: ${reason}`, 'error');
   }
 }
 
@@ -2034,7 +2040,6 @@ export async function shutdownServer() {
 }
 
 let _lastUpdateCheck = null;
-let _bannerDismissed = false;
 let _updateCheckInFlight = false;
 let _updateApplyInFlight = false;
 let _updateProgressTimer = null;
@@ -2063,14 +2068,12 @@ function renderUpdateProgressState(p) {
     detailLabel = `Downloading update… ${mb(p.downloadedBytes)} MB${retryNote}`;
   }
 
-  for (const id of ['btn-apply-update', 'btn-banner-apply-update', 'btn-modal-apply-update']) {
+  for (const id of ['btn-apply-update', 'btn-modal-apply-update']) {
     const lbl = document.getElementById(id)?.querySelector('span');
     if (lbl) lbl.textContent = shortLabel;
   }
   const chipText = document.getElementById('update-chip-text');
   if (chipText) chipText.textContent = shortLabel;
-  const bannerText = document.getElementById('update-banner-text');
-  if (bannerText) bannerText.textContent = detailLabel;
   const statusEl = document.getElementById('update-status-msg');
   if (statusEl) {
     statusEl.textContent = detailLabel;
@@ -2085,7 +2088,10 @@ function renderUpdateProgressState(p) {
   const modalBadge = document.getElementById('modal-update-badge');
   if (modalProgressWrap) {
     modalProgressWrap.classList.remove('hidden');
-    if (modalProgressBar && pct !== null) modalProgressBar.style.width = `${pct}%`;
+    if (modalProgressBar && pct !== null) {
+      modalProgressBar.style.width = `${pct}%`;
+      modalProgressBar.setAttribute('aria-valuenow', String(pct));
+    }
     if (modalProgressPct && pct !== null) modalProgressPct.textContent = `${pct}%`;
     if (modalProgressDetail) modalProgressDetail.textContent = detailLabel;
     if (modalBadge) {
@@ -2129,15 +2135,12 @@ function setApplyLoading(loading) {
     }, 400);
   }
   const settingsBtn = document.getElementById('btn-apply-update');
-  const bannerBtn = document.getElementById('btn-banner-apply-update');
   const modalBtn = document.getElementById('btn-modal-apply-update');
-  const dismissBtn = document.getElementById('btn-banner-dismiss-update');
   const checkBtn = document.getElementById('btn-check-updates');
   const chip = document.getElementById('update-status-chip');
   const chipText = document.getElementById('update-chip-text');
   const chipIcon = chip?.querySelector('i');
 
-  if (dismissBtn) dismissBtn.disabled = loading;
   if (checkBtn) checkBtn.disabled = loading;
 
   const updateBtnState = (btn, normalText = t('update.now', 'Update Now')) => {
@@ -2156,7 +2159,6 @@ function setApplyLoading(loading) {
   };
 
   updateBtnState(settingsBtn);
-  updateBtnState(bannerBtn);
   updateBtnState(modalBtn);
 
   if (!loading) {
@@ -2170,19 +2172,9 @@ function setApplyLoading(loading) {
       chipText.textContent = t('update.downloading_chip', 'Downloading update…');
     } else if (_lastUpdateCheck?.latestVersion) {
       chipIcon.className = 'ph ph-arrow-circle-up w-3.5 h-3.5 text-emerald-400';
-      chipText.textContent = `Update ${_lastUpdateCheck.latestVersion}`;
+      chipText.textContent = t('update.chip', 'Update %s').replace('%s', _lastUpdateCheck.latestVersion);
     }
   }
-  if (!loading && _lastUpdateCheck?.latestVersion) {
-    const bannerText = document.getElementById('update-banner-text');
-    if (bannerText) bannerText.textContent = t('update.available', 'A new version (%s) is available!').replace('%s', _lastUpdateCheck.latestVersion);
-  }
-}
-
-export function dismissUpdateBanner() {
-  if (_updateApplyInFlight) return;
-  _bannerDismissed = true;
-  document.getElementById('update-notification-banner')?.classList.add('hidden');
 }
 
 export function openUpdateModal() {
@@ -2241,7 +2233,7 @@ export async function checkForAppUpdates(silent = false) {
 
     if (data.hasUpdate) {
       if (statusEl) {
-        statusEl.textContent = `Update ${data.latestVersion} is available!`;
+        statusEl.textContent = t('update.available_toast', 'Update %s is available!').replace('%s', data.latestVersion);
         statusEl.className = 'foot-note text-[var(--pos)] font-medium';
       }
       if (applyBtn) applyBtn.classList.remove('hidden');
@@ -2250,23 +2242,13 @@ export async function checkForAppUpdates(silent = false) {
         releaseLink.classList.remove('hidden');
       }
 
-      // Top notification banner
-      const banner = document.getElementById('update-notification-banner');
-      const bannerText = document.getElementById('update-banner-text');
-      const bannerNotes = document.getElementById('update-banner-notes');
-      if (banner && !_bannerDismissed) {
-        if (bannerText) bannerText.textContent = `A new version (${data.latestVersion}) is available!`;
-        if (bannerNotes) bannerNotes.href = data.htmlUrl || 'https://github.com/katalepsis69/PHONEPOS/releases';
-        banner.classList.remove('hidden');
-      }
-
       // Topbar status chip: always reveal when update is ready
       const chip = document.getElementById('update-status-chip');
       const chipText = document.getElementById('update-chip-text');
       const chipIcon = chip?.querySelector('i');
       if (chip) {
         if (chipIcon) chipIcon.className = 'ph ph-arrow-circle-up w-3.5 h-3.5 text-emerald-400';
-        if (chipText) chipText.textContent = `Update ${data.latestVersion}`;
+        if (chipText) chipText.textContent = t('update.chip', 'Update %s').replace('%s', data.latestVersion);
         chip.classList.remove('hidden');
       }
 
@@ -2286,31 +2268,29 @@ export async function checkForAppUpdates(silent = false) {
         });
       }
 
-      // Automatically prompt once per session per version, or on manual check
-      const sessionPromptKey = `tp_update_prompted_${data.latestVersion}`;
-      if (!silent || !sessionStorage.getItem(sessionPromptKey)) {
-        sessionStorage.setItem(sessionPromptKey, '1');
+      // Boot and background checks stay chip-only: a modal over the counter on
+      // app start interrupts the shift for a notification. A manual check from
+      // Settings pops the full notification.
+      if (!silent) {
         openModal('modal-update');
+        showToast(t('update.available_toast', 'Update %s is available!').replace('%s', data.latestVersion), 'info');
       }
-
-      showToast(`Update ${data.latestVersion} is available!`, 'info');
     } else {
       if (statusEl) {
-        statusEl.textContent = `You are up to date! (v${data.currentVersion})`;
+        statusEl.textContent = t('update.up_to_date', 'You are up to date! (v%s)').replace('%s', data.currentVersion);
         statusEl.className = 'foot-note text-[var(--txt-3)]';
       }
       if (applyBtn) applyBtn.classList.add('hidden');
       if (releaseLink) releaseLink.classList.add('hidden');
-      document.getElementById('update-notification-banner')?.classList.add('hidden');
       document.getElementById('update-status-chip')?.classList.add('hidden');
-      if (!silent) showToast(`TechParts POS is up to date (v${data.currentVersion})`, 'success');
+      if (!silent) showToast(t('update.up_to_date_app', 'TechParts POS is up to date (v%s)').replace('%s', data.currentVersion), 'success');
     }
   } catch (err) {
     if (statusEl) {
-      statusEl.textContent = 'Could not check for updates.';
+      statusEl.textContent = t('update.check_failed_status', 'Could not check for updates.');
       statusEl.className = 'foot-note text-rose-500';
     }
-    if (!silent) showToast('Failed to check for updates', 'error');
+    if (!silent) showToast(t('update.check_failed', 'Failed to check for updates'), 'error');
   } finally {
     if (!silent) setCheckLoading(false);
   }

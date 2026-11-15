@@ -65,8 +65,10 @@ Set-Location $rootDir
 
 # Fail fast if TechPartsPOS.exe is running before modifying version files or building
 $runningPos = Get-Process -Name "TechPartsPOS" -ErrorAction SilentlyContinue
-if ($runningPos) {
-    throw "TechPartsPOS.exe is currently running on this machine. Close the POS application (or run 'taskkill /im TechPartsPOS.exe') before publishing."
+if ($runningPos -and -not $DryRun) {
+    throw "TechPartsPOS.exe is currently running on this machine. Close the POS application before publishing."
+} elseif ($runningPos) {
+    Write-Warning "TechPartsPOS.exe is running. Dry run will not close it; executable packaging may fail if Windows has the file locked."
 }
 
 $packageJson = Join-Path $rootDir "package.json"
@@ -93,7 +95,7 @@ if ([string]::IsNullOrWhiteSpace($token)) {
             $proc.Kill()
             throw "git credential fill did not answer within 30s"
         }
-        $credOutput = Get-Content $tempCredOut -Raw
+        $credOutput = [System.IO.File]::ReadAllText($tempCredOut)
     } catch {
         Write-Warning "Could not query Git Credential Manager: $_"
     } finally {
@@ -158,7 +160,7 @@ function Convert-ToVersionObject([string]$v) {
 
 $pkgVer = ""
 try {
-    $pkgContent = Get-Content $packageJson -Raw | ConvertFrom-Json
+    $pkgContent = [System.IO.File]::ReadAllText($packageJson) | ConvertFrom-Json
     $pkgVer = $pkgContent.version
 } catch {}
 
@@ -250,7 +252,9 @@ if ([string]::IsNullOrWhiteSpace($Version) -and -not $NonInteractive -and -not $
     }
 }
 
-# Plain-English release notes generator for TechParts POS
+# Plain-English default notes: the floor a release never goes below when the
+# Git-range generator is missing or fails. Better a generic honest guide than
+# empty notes or an engine error on the published release body.
 function Get-DefaultReleaseNotes([string]$relTag) {
     $tagStr = if ($relTag.StartsWith('v')) { $relTag } else { "v$relTag" }
     return @"
@@ -295,64 +299,41 @@ Zero Internet required with automated local database backups.
 "@
 }
 
-function Get-PlainChangelog([string]$versionTag) {
+# Generate release notes from the actual Git range, falling back to the plain
+# default notes when generation is not possible.
+function Get-PlainChangelog([string]$relTag) {
     $genScript = Join-Path $rootDir "scripts\generate-changelog.js"
     if (Test-Path $genScript) {
-        try {
-            $cmdArgs = @($genScript, "--version", $versionTag, "--stdout")
-            if (-not [string]::IsNullOrWhiteSpace($Changelog)) {
-                $cmdArgs += @("--note", $Changelog)
-            }
-            $draftOut = & node $cmdArgs 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                $joined = ($draftOut -join "`n").Trim()
-                if (-not [string]::IsNullOrWhiteSpace($joined)) {
-                    return $joined
-                }
-            }
-        } catch {}
-    }
-
-    return Get-DefaultReleaseNotes $versionTag
-}
-
-function Sync-ChangelogFile([string]$versionTag, [string]$editedNotes) {
-    $genScript = Join-Path $rootDir "scripts\generate-changelog.js"
-    if (Test-Path $genScript) {
-        $cmdArgs = @($genScript, "--version", $versionTag, "--changelog-only")
+        $cmdArgs = @($genScript, "--version", $relTag, "--stdout")
         if (-not [string]::IsNullOrWhiteSpace($Changelog)) {
             $cmdArgs += @("--note", $Changelog)
         }
-        & node $cmdArgs | Out-Null
-    }
-    if (-not [string]::IsNullOrWhiteSpace($editedNotes)) {
-        $changelogPath = Join-Path $rootDir "CHANGELOG.md"
-        if (Test-Path $changelogPath) {
-            $bulletsText = ""
-            $bulletsMatch = [regex]::Match($editedNotes, "(?s)### Highlights (?:in this update|& Changes):\s*(.*?)(?=\r?\n\r?\n---|\r?\n\r?\n###|$)")
-            if ($bulletsMatch.Success) {
-                $bulletsText = $bulletsMatch.Groups[1].Value.Trim()
-            } elseif ($editedNotes -match "(?s)##\s*\[.*?\]\s*-\s*\d{4}-\d{2}-\d{2}\s*### Highlights & Changes\s*(.*)") {
-                $bulletsText = $matches[1].Trim()
-            }
-            if (-not [string]::IsNullOrWhiteSpace($bulletsText)) {
-                $today = (Get-Date).ToString("yyyy-MM-dd")
-                $newEntry = "## [$versionTag] - $today`r`n`r`n### Highlights & Changes`r`n$bulletsText`r`n"
-                $clContent = [System.IO.File]::ReadAllText($changelogPath, [System.Text.Encoding]::UTF8)
-                $secRegex = "(?s)##\s*\[" + [regex]::Escape($versionTag) + "\].*?(?=\r?\n##\s*\[|$)"
-                if ($clContent -match $secRegex) {
-                    $clContent = [regex]::Replace($clContent, $secRegex, $newEntry.Trim() + "`r`n`r`n")
-                } else {
-                    $idx = $clContent.IndexOf("## [")
-                    if ($idx -ge 0) {
-                        $clContent = $clContent.Substring(0, $idx) + $newEntry + "`r`n" + $clContent.Substring($idx)
-                    } else {
-                        $clContent = $clContent.TrimEnd() + "`r`n`r`n" + $newEntry
-                    }
-                }
-                [System.IO.File]::WriteAllText($changelogPath, $clContent, [System.Text.Encoding]::UTF8)
+
+        $draftOut = & node @cmdArgs 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $joined = ($draftOut -join "`n").Trim()
+            if (-not [string]::IsNullOrWhiteSpace($joined)) {
+                return $joined
             }
         }
+    }
+
+    return Get-DefaultReleaseNotes $relTag
+}
+
+function Sync-ChangelogFile([string]$versionTag) {
+    $genScript = Join-Path $rootDir "scripts\generate-changelog.js"
+    if (-not (Test-Path $genScript)) {
+        throw "Changelog generator not found at $genScript"
+    }
+
+    $cmdArgs = @($genScript, "--version", $versionTag, "--changelog-only")
+    if (-not [string]::IsNullOrWhiteSpace($Changelog)) {
+        $cmdArgs += @("--note", $Changelog)
+    }
+    & node @cmdArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Writing CHANGELOG.md failed (exit code $LASTEXITCODE). Release was not published."
     }
 }
 
@@ -368,11 +349,7 @@ if ($DryRun) {
     # A dry run validates the build end-to-end and mutates NOTHING: no version
     # rewrite, no changelog, no commit, no tag, no network writes. The exe it
     # builds therefore carries the CURRENT package.json version, not $tag.
-    $previewNotes = if (Test-Path $releaseNotesPath) {
-        [System.IO.File]::ReadAllText($releaseNotesPath, [System.Text.Encoding]::UTF8)
-    } else {
-        Get-DefaultReleaseNotes $tag
-    }
+    $previewNotes = Get-PlainChangelog $tag
     Write-Host ""
     Write-Host "[DRY RUN] Would release as $tag (current version files stay untouched)." -ForegroundColor Cyan
     Write-Host "[DRY RUN] Release notes preview:" -ForegroundColor Cyan
@@ -409,14 +386,16 @@ if ($DryRun) {
         }
     }
 
-    # Commit confirmed highlights to CHANGELOG.md and RELEASE_NOTES.md
-    Sync-ChangelogFile $tag $releaseNotes
-    if ($releaseNotes -notmatch 'Spreadsheet Import') {
-        # If user pasted raw changelog bullets, preserve standard user guide in RELEASE_NOTES.md
-        & node (Join-Path $rootDir "scripts\generate-changelog.js") "--version" $tag | Out-Null
-    } else {
-        $normalizedNotes = $releaseNotes -replace "(?<!`r)`n", "`r`n"
-        [System.IO.File]::WriteAllText($releaseNotesPath, $normalizedNotes, [System.Text.Encoding]::UTF8)
+    # Encoding guard: operator-supplied notes once carried mojibake (UTF-8 read
+    # through a legacy codepage), and it propagated into CHANGELOG.md,
+    # RELEASE_NOTES.md and the published GitHub release body. Fail before any
+    # of that happens. Char codes, not literals: this file has no BOM, so PS
+    # 5.1 would misread non-ASCII source text. 0x00C3 ('A-tilde') and 0x0393
+    # ('Gamma') do not occur in the app's own copy.
+    $mojiHits = $releaseNotes.IndexOfAny([char[]]@(0x00C3, 0x0393))
+    if ($mojiHits -ge 0) {
+        Write-Error "Release notes contain mojibake (double-encoded characters). Fix the text encoding and rerun; nothing was published."
+        exit 1
     }
 
     Write-Host "Publishing version $tag..." -ForegroundColor Cyan
@@ -424,13 +403,13 @@ if ($DryRun) {
     # 2. Update version in package.json, src/updater.js, the installer, the
     # lockfile and the README zip name. These must land BEFORE the build: the
     # exe bakes CURRENT_VERSION (updater.js) and the installer name in.
-    $pkgContent = Get-Content $packageJson -Raw
+    $pkgContent = [System.IO.File]::ReadAllText($packageJson)
     $pkgContent = $pkgContent -replace '"version":\s*"[^"]+"', "`"version`": `"$cleanVer`""
     [System.IO.File]::WriteAllText($packageJson, $pkgContent)
 
     $updaterPath = Join-Path $rootDir "src\updater.js"
     if (Test-Path $updaterPath) {
-        $updaterTxt = Get-Content $updaterPath -Raw
+        $updaterTxt = [System.IO.File]::ReadAllText($updaterPath)
         $updaterTxt = $updaterTxt -replace "const CURRENT_VERSION = '[^']+';", "const CURRENT_VERSION = '$cleanVer';"
         [System.IO.File]::WriteAllText($updaterPath, $updaterTxt)
     }
@@ -440,7 +419,7 @@ if ($DryRun) {
     # app said 1.1).
     $issPath = Join-Path $rootDir "installer\TechPartsPOS.iss"
     if (Test-Path $issPath) {
-        $issTxt = Get-Content $issPath -Raw
+        $issTxt = [System.IO.File]::ReadAllText($issPath)
         $issTxt = $issTxt -replace '#define MyAppVersion "[^"]+"', "#define MyAppVersion `"$cleanVer`""
         [System.IO.File]::WriteAllText($issPath, $issTxt)
     }
@@ -453,8 +432,8 @@ if ($DryRun) {
     # entries sit directly under "name": "<package>", which no dependency does.
     $lockPath = Join-Path $rootDir "package-lock.json"
     if (Test-Path $lockPath) {
-        $pkgName = (Get-Content $packageJson -Raw | ConvertFrom-Json).name
-        $lockTxt = Get-Content $lockPath -Raw
+        $pkgName = ([System.IO.File]::ReadAllText($packageJson) | ConvertFrom-Json).name
+        $lockTxt = [System.IO.File]::ReadAllText($lockPath)
         $lockPattern = '("name":\s*"' + [regex]::Escape($pkgName) + '",\s*[\r\n]+\s*)"version":\s*"[^"]+"'
         $lockTxt = [regex]::Replace($lockTxt, $lockPattern, "`$1`"version`": `"$cleanVer`"")
         [System.IO.File]::WriteAllText($lockPath, $lockTxt)
@@ -463,10 +442,18 @@ if ($DryRun) {
     # The README names the downloadable installer: rewrite it here.
     $readmePath = Join-Path $rootDir "README.md"
     if (Test-Path $readmePath) {
-        $readmeTxt = Get-Content $readmePath -Raw
+        $readmeTxt = [System.IO.File]::ReadAllText($readmePath)
         $readmeTxt = [regex]::Replace($readmeTxt, 'TechPartsPOS-Setup-[0-9][0-9.]*\.exe', "TechPartsPOS-Setup-$cleanVer.exe")
         [System.IO.File]::WriteAllText($readmePath, $readmeTxt)
     }
+
+    # The suite pins CHANGELOG.md's newest heading to package.json
+    # (tests/changelog.test.js), so the selected version's changelog section
+    # is generated BEFORE the test gate: the bump above already changed
+    # package.json, and a stale heading would fail every real run. The
+    # generator is idempotent per version section, so a retry after a red
+    # gate rewrites the same section. DryRun never reaches this branch.
+    Sync-ChangelogFile $tag
 }
 
 # 3. Test suite & build, BEFORE any git mutation. The old order committed
@@ -474,12 +461,12 @@ if ($DryRun) {
 Write-Host "[1/4] Running test suite & building TechPartsPOS.exe..." -ForegroundColor Yellow
 & npm test
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Test suite failed. Release aborted. (Version files were not touched.)"
+    Write-Error "Test suite failed. No changelog, commit, tag, or GitHub release was written. The selected version remains in the working tree for retry."
 }
 
 & npm run build:exe
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "build:exe failed. Release aborted. (Version files were not touched.)"
+    Write-Error "build:exe failed. No changelog, commit, tag, or GitHub release was written. The selected version remains in the working tree for retry."
 }
 
 $exePath = Join-Path $rootDir "release\customer\TechPartsPOS.exe"
@@ -512,6 +499,21 @@ if ($DryRun) {
     Write-Host "[DRY RUN] Tests, build, installer, and verify all succeeded. Nothing was committed, tagged, pushed, or published." -ForegroundColor Green
     Write-Host "[DRY RUN] A real run would release as $tag with installer TechPartsPOS-Setup-$cleanVer.exe. Run: publish-release.bat" -ForegroundColor Cyan
     exit 0
+}
+
+# RELEASE_NOTES.md is persisted only after tests, executable build, and
+# installer build pass. CHANGELOG.md was synced before the test gate: the
+# suite pins its newest heading to package.json (tests/changelog.test.js).
+if ($releaseNotes -notmatch 'Spreadsheet Import') {
+    # Operator-edited notes dropped the cashier guide: regenerate RELEASE_NOTES.md
+    # from the generator so the how-to sections still reach customers.
+    & node (Join-Path $rootDir "scripts\generate-changelog.js") "--version" $tag | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Writing RELEASE_NOTES.md failed (exit code $LASTEXITCODE). Release was not published."
+    }
+} else {
+    $normalizedNotes = $releaseNotes -replace "(?<!`r)`n", "`r`n"
+    [System.IO.File]::WriteAllText($releaseNotesPath, $normalizedNotes, [System.Text.Encoding]::UTF8)
 }
 
 # 4. Prepare release checksums

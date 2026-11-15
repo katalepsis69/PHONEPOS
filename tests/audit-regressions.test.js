@@ -50,7 +50,7 @@ test('reorder includes a zero-stock part below minimum', () => {
 
 test('new repair must not clear a cart during an in-flight sale', async () => {
   const src = read('public/js/main.js');
-  const code = src.slice(src.indexOf('export async function startNewSale()'), src.indexOf('// Top-bar search'));
+  const code = src.slice(src.indexOf('export async function startNewSale()'), src.indexOf('// Keep background POS server alive'));
   let resets = 0;
   const S = { saleInFlight: true, cart: [{ id: 1, qty: 1 }] };
   const ctx = vm.createContext({ S, confirmModal: async () => true, resetRepairCounter() { resets++; S.cart = []; }, switchTab() {}, document: { getElementById: () => null } });

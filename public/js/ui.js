@@ -8,6 +8,23 @@ export function escHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
+// State the real reason a data load failed, never one generic sentence. The
+// empty states used to say "The server didn't answer" for every failure: a
+// refused connection, a 500, and a 402 license lock all rendered the same
+// line, so an operator (and the vendor on the phone) could not tell a dead
+// server from a locked one. err is the caught exception; res is the response
+// when the fetch answered but reported !ok. The origin is included on the
+// unreachable branch on purpose: a port-drifted second server is exactly the
+// case where the page origin differs from the shortcut's port.
+export async function describeLoadFailure(err, res) {
+  if (res) {
+    let detail = '';
+    try { const body = await res.json(); if (body && body.error) detail = body.error; } catch (_) {}
+    return `The server answered ${res.status}${detail ? `: ${detail}` : ''}`;
+  }
+  return `The POS server is not reachable at ${location.host}. Start it from the desktop shortcut, then press Retry.`;
+}
+
 // One money formatter: thousands separators everywhere amounts are shown.
 //
 // The finite-number rule below is the one `money()` in src/printer.js and
@@ -118,7 +135,6 @@ export const searchCustomers = debounce(loadCustomers);
 export const searchInventory = debounce(loadInventoryTable);
 export const searchReturns = debounce(loadWarrantyReturnsTable);
 export const searchSales = debounce(loadSalesHistory);
-export const debouncedViewLoad = debounce(target => target.load());
 
 // Skeleton rows for the table views (only when empty — during a re-search the
 // stale rows stay up; flickering skeletons on every keystroke reads worse).

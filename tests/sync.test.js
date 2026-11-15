@@ -594,3 +594,83 @@ test('a transient failure from a cloud command stays pending and retries', () =>
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a whole-batch 400 with a rejected list quarantines the window instead of wedging', async () => {
+  const { db, dir } = tmpDb();
+  let batches = 0;
+  const server = require('node:http').createServer((req, res) => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      batches++;
+      const { events } = JSON.parse(body);
+      if (batches === 1) {
+        // The cloud's whole-batch 400 carries the per-row rejected list.
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'event row missing brand',
+          rejected: events.map(ev => ({ outbox_id: ev.outbox_id, error: 'event row missing brand' })),
+        }));
+      } else if (batches === 2) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'the batch could not be stored; retry later' }));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, ok_ids: events.map(ev => ev.outbox_id) }));
+      }
+    });
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(`http://127.0.0.1:${port}`);
+    const { enqueue, drainOutbox } = require('../src/sync');
+    enqueue(db, 'sales', 1, { id: 1, sale_code: 'SOAK-WEDGE', customer_name: 'A', payment_method: 'cash', total_amount: 5, created_at: new Date().toISOString() });
+
+    const r1 = await drainOutbox(db);
+    assert.deepStrictEqual(r1, { synced: 0, unreadable: 0, quarantined: 1 });
+    assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM sync_outbox').get().c, 0, 'the refused row is gone; no wedge');
+
+    // A 500 with no rejected list still feeds the failure backoff.
+    enqueue(db, 'sales', 2, { id: 2, sale_code: 'SOAK-RETRY', customer_name: 'B', payment_method: 'cash', total_amount: 6, created_at: new Date().toISOString() });
+    await assert.rejects(() => drainOutbox(db), /cloud sync responded 500/);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM sync_outbox WHERE synced_at IS NULL').get().c, 1, 'the 500 row stays queued');
+
+    const r3 = await drainOutbox(db);
+    assert.strictEqual(r3.synced, 1, 'the row lands once the cloud recovers');
+    assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM sync_outbox WHERE synced_at IS NULL').get().c, 0);
+  } finally {
+    server.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a whole-window of unreadable payloads is dropped without touching the network', async () => {
+  const { db, dir } = tmpDb();
+  let posts = 0;
+  const server = require('node:http').createServer((req, res) => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => { posts++; res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ok_ids: [] })); });
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(`http://127.0.0.1:${port}`);
+    const { drainOutbox } = require('../src/sync');
+    db.prepare('INSERT INTO sync_outbox (table_name, local_id, payload, created_at) VALUES (?, ?, ?, ?)')
+      .run('inventory', 1, 'corrupt-{', new Date().toISOString());
+    db.prepare('INSERT INTO sync_outbox (table_name, local_id, payload, created_at) VALUES (?, ?, ?, ?)')
+      .run('sales', 2, 'also-broken', new Date().toISOString());
+
+    const r = await drainOutbox(db);
+    assert.deepStrictEqual(r, { synced: 0, unreadable: 2, quarantined: 2 }, 'the whole-window drop answers its own shape, never the acked-none throw');
+    assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM sync_outbox').get().c, 0, 'both corrupt rows are gone');
+    assert.strictEqual(posts, 0, 'nothing was posted: there was nothing valid to send');
+  } finally {
+    server.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

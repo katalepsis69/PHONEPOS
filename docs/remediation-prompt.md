@@ -15,7 +15,7 @@ BASELINE RITUAL (first, no exceptions)
    differ from observed), refresh the block to today's observed state and say so in
    one line. Re-measure, do not copy a number you did not see.
 2. Run the gates and record exact results BEFORE the first change:
-   - npm test (node --test tests/*.test.js): all pass, exit 0 (661/661 on 2026-11-13,
+   - npm test (node --test tests/*.test.js): all pass, exit 0 (670/670 on 2026-11-14,
      about 30 s; today's count becomes the run baseline).
    - npm run build:css: exit 0.
    A hung run is a rerun, not a regression; rerun once before concluding anything.
@@ -76,12 +76,24 @@ A gate goes red and stays red on rerun; a fix would change behavior the finding 
 not cover; the approved list is exhausted; or the tree shows signs of concurrent
 interference (see baseline step 3). Report and stop.
 
-TREE STATE (measured 2026-11-13; refresh to observed state on every run)
-- HEAD: c91f354 (4 unpushed docs commits above origin/main 4e7d19b; measured facts unchanged from e86e347): the 2026-11-13
-  audit-pass fixes, the refactoring CLEAN record, the dead-i18n deletion, and the
-  verify/logout hardening tests). Full source is
-  tracked in git (since 2026-11-07); the release pipeline commits mid-session, so
-  never --amend.
-- Gates: npm run build:css exit 0; npm test 661/661 pass, 0 fail, exit 0 across 55 test
-  files (all tracked).
-- Working tree: clean at measurement (`git status --short` empty).
+TREE STATE (measured 2026-11-14; refresh to observed state on every run)
+- HEAD: bbab7d4 (4 commits past tag v1.3 = 3d8dc46: the env-gated sync soak harness
+  e535a58, the sync drain starvation fix 719b396, the soak browser-env test fix 9143185,
+  and the inventory import partial-apply fix bbab7d4; origin/main is behind, pushes are
+  an owner action; tags v1.2 = 8f181f7 and v1.3 = 3d8dc46). Full source is tracked in
+  git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
+- Gates: npm run build:css exit 0; npm test 682 tests, 681 pass, 1 skipped (the
+  env-gated sync soak, skips by design without SYNC_SOAK=1), 0 fail, exit 0 across 57
+  test files, about 28 s.
+- Working tree: 30 dirty tracked files plus 2 untracked (docs/audit-2026-11-14.md and
+  tests/generate-changelog.test.js): the UNCOMMITTED 2026-11-14 Stage Build rewrite
+  graft batch. An external tool rewrote generate-changelog.js/publish.bat/
+  publish-release.ps1 and the contract surfaces were grafted back (publish.bat,
+  publish-release.bat, scripts/publish-release.ps1, scripts/generate-changelog.js,
+  package.json, src/updater.js, public/index.html, public/js/i18n.js, public/js/main.js,
+  public/js/ui.js, public/js/views/backoffice.js, public/js/views/pos.js,
+  public/styles.css, public/tailwind.build.css, CHANGELOG.md, README.md,
+  RELEASE_NOTES.md, the six docs/ pass prompts, and the audit-regressions,
+  barcode-scan, frontend-regressions, i18n, packaging-workflows,
+  pos-repair-counter-ergonomics, updater-ui tests). It is unreviewed by any audit and
+  rides in every gate. Verify against `git status --short` on your run.

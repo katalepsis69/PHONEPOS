@@ -1,5 +1,5 @@
 import { S } from '../state.js';
-import { attachCombo, closeModal, confirmModal, escHtml, fmtMoney, formatDateTime, openModal, showSkeleton, showToast } from '../ui.js';
+import { attachCombo, closeModal, confirmModal, describeLoadFailure, escHtml, fmtMoney, formatDateTime, openModal, showSkeleton, showToast } from '../ui.js';
 import { formatCostPrice, hasElevation, isStaff, requireManagerPin, openSettingsModal } from '../auth.js';
 import { loadPosCatalog } from './pos.js';
 import { IMPORT_COLUMNS, matchHeaders, parseMoney, parseSku, parseXlsx } from '../importer.js';
@@ -216,8 +216,9 @@ export async function loadInventoryTable() {
   if (lowStock) url += `&low_stock=true`;
   if (showArchived) url += `&include_archived=true`;
 
+  let res = null;
   try {
-    const res = await fetch(url);
+    res = await fetch(url);
     if (!res.ok) throw new Error('Inventory request failed');
     const items = await res.json();
     if (request !== inventoryRequest) return;
@@ -231,19 +232,22 @@ export async function loadInventoryTable() {
     // If a skeleton is showing (no previous rows to keep), replace it with an
     // honest error state + retry instead of leaving "perpetual loading".
     // When older rows exist they stay on screen: stale data beats a blank
-    // table, and the toast says the refresh failed.
+    // table, and the toast says the refresh failed. The body states the REAL
+    // failure (status + server message, or not-reachable), never a generic
+    // sentence: a dead server, a 500 and a license lock read differently.
+    const reason = await describeLoadFailure(err, res);
     const tbody = document.getElementById('inventory-tbody');
     if (tbody && tbody.querySelector('.skel')) {
       tbody.innerHTML = `<tr><td colspan="9">
         <div class="empty">
           <div class="empty__icon"><i class="ph ph-wifi-slash w-5 h-5"></i></div>
           <div class="empty__title">Couldn't load inventory</div>
-          <p class="empty__body">The server didn't answer. Retry, or check that the POS server is running.</p>
+          <p class="empty__body">${escHtml(reason)}</p>
           <button type="button" class="chip" data-action="reload-inventory">Retry</button>
         </div>
       </td></tr>`;
     }
-    showToast('Could not load inventory - check the server and retry', 'error');
+    showToast(`Could not load inventory: ${reason}`, 'error');
   }
 }
 

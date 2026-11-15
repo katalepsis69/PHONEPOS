@@ -1294,3 +1294,16 @@ test('isInstanceLockLive tolerance floor, tasklist fail-open, and the no-port gu
   assert.strictEqual(isInstanceLockLive({ ...liveLock, port: 0 }, aliveHooks), false, 'a lock without a port is stale');
   assert.strictEqual(isInstanceLockLive({ ...liveLock, pid: process.pid }, aliveHooks), false, 'our own pid is not a foreign instance');
 });
+
+test('runInstalledLauncher default budget covers a Defender first-run scan (60s, not 15s)', () => {
+  // Static pin: the launcher default must stay 60000. A fresh install's first
+  // exe run is held by Defender's signature scan for a measured 30-60s on a
+  // slow disk; at the old 15000 default the desktop shortcut answered
+  // "could not connect to the background server" on machines where the
+  // server bound seconds later. The suite cannot sleep 60s to prove the
+  // default dynamically, so pin the source line.
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  assert.match(src, /const totalTimeoutMs = typeof hooks\.totalTimeoutMs === 'number' \? hooks\.totalTimeoutMs : 60000;/);
+  assert.doesNotMatch(src, /hooks\.totalTimeoutMs : 15000;/, 'the old 15s default must stay gone');
+});

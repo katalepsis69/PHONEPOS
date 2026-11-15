@@ -1,14 +1,19 @@
 # Code and System Audit Prompt (v9)
 
-[v9, 2026-11-12, measured refresh 2026-11-13, supersedes v8 of 2026-11-09 (which superseded
+[v9, 2026-11-12, measured refresh 2026-11-14, supersedes v8 of 2026-11-09 (which superseded
 v7 of 2026-11-05, v6 of 2026-11-02, v5 of 2026-10-14, v4 and v3 of 2026-10-02; a frozen v3
 sits at backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). THIS EDITION IS
-MEASURED ON 2026-11-13 at HEAD c91f354 (branch main, tag v1.1, 4 unpushed commits ahead of
-origin/main):
-npm test reports 661 tests across 55 tracked files (661/661 pass in about 30 s; the rerun
-rule in GATES stands), and npm run build:css exits 0. Version is 1.1 across package.json:3,
-CURRENT_VERSION (src/updater.js:11), and MyAppVersion (installer/TechPartsPOS.iss).]
-POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..cf06069, first-look audit targets):
+MEASURED ON 2026-11-14 at HEAD bbab7d4 (branch main, 4 commits past tag v1.3 = 3d8dc46;
+origin/main is behind, pushes are an owner action):
+npm test reports 682 tests across 57 tracked files (681 pass + 1 skipped, the env-gated
+sync soak that skips by design without SYNC_SOAK=1; 0 fail, exit 0 in about 28 s; the rerun
+rule in GATES stands), and npm run build:css exits 0. Version is 1.3 across package.json:3,
+CURRENT_VERSION (src/updater.js:11), and MyAppVersion (installer/TechPartsPOS.iss:19). The
+working tree carries 30 dirty files plus 2 untracked: the uncommitted 2026-11-14 Stage
+Build rewrite graft batch (see the GATES section). [Refreshed 2026-11-14, pre-pipeline
+update; earlier the same day this block read 670 tests across 55 files at 3d8dc46 with
+the uncommitted fix-everything batch, superseded by landing 7 below.]
+POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..3d8dc46, first-look audit targets):
 1) Universal POS & Cloud Hardening (113ebc2): store profiles (phone_repair / general_retail /
    pc_components), fractional quantities, wholesale price tiers, cloud/workstation analytics
    parity suite (tests/analytics-parity.test.js), EN/TL copy expansion (public/js/i18n.js),
@@ -54,6 +59,51 @@ POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..cf06069, first-look audit ta
    low-stock rail badge, market analysis doc (docs/market-analysis-2026-11-13.md), self-audit
    fixes (docs/self-audit-2026-11-13-night.md: expense op_id, receive op_id, toast tones,
    empty customer_name). Suite 661/661 at e86e347, pushed.
+5) Counter UI revamp, releases v1.2 and v1.3 (a4a1e7f..3d8dc46, tags v1.2 and v1.3, 2026-11-14):
+   customers & utang 5-column table with dynamic card state, inventory icon actions, screen-tech
+   badges and honest metric copy (single unit, below-alert/nothing-on-hand, OUT-card honest
+   state), sales/returns no-wrap timestamps, sign-before-peso fmtMoney, per-bucket refund data
+   on the trend (src/analytics.js), chart value labels at rest with quarter gridlines, automatic
+   update detection (30-minute poll, online listener, chip-only silent checks after the same-day
+   fix batch), themed Applying/Stalled update screens, publish.bat/publish-release.bat taskkill
+   trio with the installer always built, iss {#MyAppVersion} expansion. An external AI tool
+   (Antigravity) authored the batch and its release commits swept up previously uncommitted
+   counter rounds; the release run also mojibake'd non-ASCII text in CHANGELOG.md,
+   RELEASE_NOTES.md, README.md and the live GitHub v1.3 body, all repaired on 2026-11-14 with
+   a pipeline guard (scripts/publish-release.ps1) and a packaging test pin.
+6) Fix-everything batch 2026-11-14 (UNCOMMITTED, 18 dirty files at measurement): updater
+   prompt gated to manual checks only (modal + toast under if (!silent); session key and the
+   permanently-hidden update-notification-banner deleted end to end including tests), dead
+   topbar global search deleted (routeGlobalSearch, VIEW_SEARCH_TARGETS, mirror wiring, CSS
+   hide rules; two vm-slice tests repointed off the deleted '// Top-bar search' marker),
+   pay-btn 44px inside the 1366x768 compact band, inventory skeleton 9 columns, customers-table
+   phone through formatPhPhone, OUT-card honest state (inv.stat_out_ok / inv.stat_out_catalog,
+   en+tl), progressbar role + aria-valuenow on the update modal, inventory search placeholder
+   shortened, mojibake guard above. Suite 670/670 after the batch.
+7) Sync soak, drain fix, import partial-apply, Stage Build graft (3d8dc46..bbab7d4 plus an
+   UNCOMMITTED batch, 2026-11-14): tests/sync-soak.test.js (env-gated 50-iteration
+   kill/restart soak of the real shop+cloud sync pair, e535a58) exposed a real drain
+   starvation: retained unreadable payloads were skipped forever in mixed 50-row windows
+   (deleted only when the whole window was unreadable), accumulated about two per
+   iteration, and starved newer rows; fixed 719b396, unreadable rows quarantined on first
+   sight in src/sync.js, regression test in tests/sync.test.js. The soak's spawned
+   registers opened ~250 real browser windows because startServer's listen-callback
+   browser launch is gated only by NO_AUTO_BROWSER/NO_LAUNCH_BROWSER env, not
+   NODE_TEST_CONTEXT; 9143185 gates the soak spawn env (belt: NO_AUTO_BROWSER,
+   NO_LAUNCH_BROWSER, NO_AUTO_EXIT). Client-driven inventory import partial-apply bbab7d4:
+   importInventory returns { created, updated, errors } with "Row N: reason" instead of
+   throwing all-or-nothing, the preview requires only name + quantity columns (IMPORT_REQUIRED
+   relaxed; brand and part type fall back to General from the model name), and the modal
+   states every refused row and stays open with a Close-only button. The tree also carries
+   an UNCOMMITTED Stage Build rewrite graft batch (publish.bat, publish-release.bat,
+   scripts/publish-release.ps1, scripts/generate-changelog.js, package.json, src/updater.js,
+   public/index.html, public/js/i18n.js, main.js, ui.js, views/backoffice.js, views/pos.js,
+   public/styles.css, tailwind.build.css, CHANGELOG.md, README.md, RELEASE_NOTES.md, the six
+   pass prompts, plus tests/audit-regressions, barcode-scan, frontend-regressions, i18n,
+   packaging-workflows, pos-repair-counter-ergonomics, updater-ui) whose contract surfaces
+   were grafted back after an external tool rewrote the release pipeline; it is unreviewed
+   by any audit and rides in every gate below. Suite 682 tests, 681 pass + 1 gated skip
+   after the batch.
 
 GIT IS THE HISTORY NOW: 6834474 (2026-11-07) brought the full source tree under version
 control. git log, git diff, and git blame are primary history; git status is the
@@ -120,7 +170,7 @@ OPERATING SCALE (judge every finding against THIS)
   pushes row snapshots out; the manager phone app logs in over the internet and watches
   Server-Sent Events for live updates. Treat every cloud route as internet-facing and
   every cloud finding as higher severity than its LAN equivalent.
-- Distribution is an Inno Setup 7 installer (dist/installer/TechPartsPOS-Setup-1.1.exe)
+- Distribution is an Inno Setup 7 installer (dist/installer/TechPartsPOS-Setup-1.3.exe)
   wrapping the Node SEA executable (release/customer/TechPartsPOS.exe; verified on disk
   2026-11-12, no portable .zip archive). GitHub Releases carry TechPartsPOS-Setup-<ver>.exe
   plus TechPartsPOS.exe and TechPartsPOS.exe.sha256 for in-app auto-updates. dist/ is the
@@ -130,21 +180,22 @@ If a problem cannot manifest at this scale, it belongs in "Future Scale Notes", 
 in the findings. Do not manufacture performance problems where they cannot occur.
 
 WHAT TO AUDIT (and what to skip)
-Audit: src/ (server.js 2477, printer.js 974, updater.js 728, analytics.js 593,
-inventory.js 610, license.js 483, db.js 474, auth.js 398, sync.js 356, credits.js 310,
+Audit: src/ (server.js 2536, printer.js 1003, updater.js 728, analytics.js 621,
+inventory.js 666, license.js 483, db.js 505, auth.js 398, sync.js 357, credits.js 310,
 sales.js 295, returns.js 235, settings.js 149, seed.js 133, reconcile.js 123,
-audit.js 112, shifts.js 86, names.js 43, money.js 35; 8614 lines total across 19 files),
-public/ sources (js/ including views/ (backoffice.js 2213, inventory.js 1822, pos.js 1689),
-auth.js 2591, receipts.js 1031, main.js 1036, i18n.js 1039, ui.js 545, report.js 395,
-importer.js 154, theme.js 138, search.js 116, chart.js 84, state.js 77, api.js 58,
-cart-recovery.js 11, index.html 2719, report.html 483, styles.css 5828, report-sw.js,
+audit.js 112, repairs.js 167, expenses.js 87, shifts.js 86, names.js 43, money.js 35;
+9072 lines total across 21 files),
+public/ sources (js/ including views/ (backoffice.js 2456, inventory.js 1834, pos.js 1764,
+auth.js 2591, receipts.js 1064, main.js 1050, i18n.js 1059, ui.js 547, report.js 395,
+importer.js 154, theme.js 138, search.js 116, chart.js 93, state.js 77, api.js 58,
+cart-recovery.js 11, repairs.js 130, index.html 2772, report.html 483, styles.css 6092, report-sw.js,
 the manifests; skip fonts/ and the generated tailwind.build.css), cloud-deploy/
-(server.js 1929, public/app.js 2009, public/index.html 1613, byte-identical to cloud/ at
+(server.js 1949, public/app.js 2010, public/index.html 1613, byte-identical to cloud/ at
 measurement time; the manager app), scripts/ (generate-license.js 421, set-pin.js 67,
 mirror-backups.js 70, build-artifacts.js 90, build-exe.js 123, build-common.js 193,
 build-license-exe.js 89, build-installer.js 60, verify-exe.js 275, release-customer.js 58,
 check-repair-ui.js 110, deploy-cloud.js 82, generate-changelog.js 669, publish-release.ps1
-662), installer/TechPartsPOS.iss (379 lines), tests/ (55 tracked *.test.js files plus
+684), installer/TechPartsPOS.iss (379 lines), tests/ (55 tracked *.test.js files plus
 helper.js and cloud-hardening-harness.js), and the docs:
 README.md, RELEASE_NOTES.md, ARCHITECTURE.md,
 DATABASE_SCHEMA.md, API_REFERENCE.md, BUSINESS_LOGIC_AND_WORKFLOWS.md,
@@ -173,7 +224,7 @@ Where code and doc disagree, that is a finding.
 
 METHOD FOR SEEING WHAT CHANGED (git is the history since 2026-11-07)
 Primary tools: git log --oneline, git log --stat, git diff v1.0 (tags are now v1.0 =
-e875978 and v1.1 = cf06069),
+e875978, v1.1 = cf06069, v1.2 = 8f181f7, and v1.3 = 3d8dc46),
 git blame for a line's history, git status as the interference detector. For changes
 older than 6834474 the snapshots are the secondary record:
 backups/code-pre-v6fixes-2026-10-15/ is the last FULL pre-git snapshot (use
@@ -381,8 +432,10 @@ that the implementation still matches, then move on)
   license surface (machine id, trial seal, anti-rollback) is NEW and unaudited, see below.
 
 GATES (recount and rerun at audit time; report the current numbers)
-- npm test (node --test tests/*.test.js). Measured 2026-11-13 at c91f354: 661 tests across
-  55 tracked files; 661/661 on a parallel run, about 30 s (tests/ui-fixes.test.js
+- npm test (node --test tests/*.test.js). Measured 2026-11-14 at bbab7d4 with the uncommitted
+  Stage Build rewrite graft batch in the tree: 682 tests across
+  57 tracked files; 681 pass + 1 skipped (the env-gated sync soak, skipped by design without
+  SYNC_SOAK=1), 0 fail, about 28 s (tests/ui-fixes.test.js
   normalizes CRLF line endings inside source()). The 11-05 history stands: one parallel run that
   day produced no output for over ten minutes and was killed; the immediate rerun was
   green, so a HANG is also a rerun, not a regression. The v6
@@ -948,7 +1001,9 @@ AUDIT CATEGORIES (cover all ten; report per category)
    gitignored files is visible anywhere but a git tag.
 
 8. TEST QUALITY
-   661 tests across 55 tracked files (measured 2026-11-13 at c91f354; the cf06069 same-day
+   682 tests across 57 tracked files (measured 2026-11-14 at bbab7d4 with the uncommitted
+   Stage Build rewrite graft batch; the same-day earlier refresh counted 670 across 55 at 3d8dc46,
+   the 2026-11-13 refresh counted 661 across 55 at c91f354, the cf06069 same-day
    refresh counted 638 across 51, v9 counted 610 across
    49 at 533f07a, v8 counted 568 across 49 files including untracked universal-pos, v7
    counted 505 in 44), with mix of
@@ -956,7 +1011,9 @@ AUDIT CATEGORIES (cover all ten; report per category)
    behavioral / hybrid / pure-static split as the useful axis, and name what each group can
    actually detect. Recent additions: tests/setup.test.js, tests/backup-restore.test.js,
    tests/analytics-parity.test.js, tests/universal-pos.test.js, tests/receipt-choices.test.js,
-   tests/reorder.test.js, tests/port-drift.test.js, and tests/packaging-workflows.test.js
+   tests/reorder.test.js, tests/port-drift.test.js, tests/packaging-workflows.test.js,
+   tests/sync-soak.test.js (env-gated, adds the 1 skip), and tests/generate-changelog.test.js
+   (untracked, part of the Stage Build graft batch)
    (covering installer/TechPartsPOS.iss task XML, ssDone cleanup, installer-only releases
    without .zip, and publish-release.ps1 ordering), plus the v1.0-release additions
    tests/appearance-tones.test.js and tests/build-exe-icon.test.js. Also verify tests/ui-fixes.test.js CRLF
