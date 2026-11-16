@@ -63,6 +63,38 @@ export function setCounterText(id, value) {
   if (el) el.textContent = value;
 }
 
+const wiredPagerEls = new WeakSet();
+export function updateTablePager(prefix, total, page, pageSize, onStep) {
+  const pager = document.getElementById(prefix);
+  if (!pager) return;
+  if (total <= pageSize) {
+    pager.classList.add('hidden');
+    return;
+  }
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.max(1, Math.min(pages, page));
+  const start = (safePage - 1) * pageSize;
+  pager.classList.remove('hidden');
+  const range = document.getElementById(`${prefix}-range`);
+  const pageEl = document.getElementById(`${prefix}-page`);
+  const prev = document.getElementById(`${prefix}-prev`);
+  const next = document.getElementById(`${prefix}-next`);
+  if (range) range.textContent = `${start + 1}-${Math.min(start + pageSize, total)} of ${total}`;
+  if (pageEl) pageEl.textContent = `${safePage} / ${pages}`;
+  for (const [btn, disabled, delta] of [[prev, safePage <= 1, -1], [next, safePage >= pages, 1]]) {
+    if (!btn) continue;
+    btn.disabled = disabled;
+    if (!wiredPagerEls.has(btn) && typeof onStep === 'function') {
+      wiredPagerEls.add(btn);
+      btn.addEventListener('click', () => {
+        const scroller = pager.parentElement?.querySelector?.('.overflow-y-auto, .ptable-wrap');
+        if (scroller) scroller.scrollTop = 0;
+        onStep(delta);
+      });
+    }
+  }
+}
+
 export function showToast(message, type = 'info') {
   let container = document.getElementById('toast-container');
   if (!container) {
@@ -269,11 +301,19 @@ export function syncAppInert() {
     return el && !el.classList.contains('hidden');
   });
   const modalOpen = !!document.querySelector('.modal-backdrop:not(.hidden)');
-  app.inert = gated || modalOpen;
+  const appLocked = !!(gated || modalOpen);
+  app.inert = appLocked;
+  // Sync attribute directly so [inert] CSS locks clicks/selection on Edge < 102.
+  app.toggleAttribute?.('inert', appLocked);
   const topId = S.modalStack.length ? S.modalStack[S.modalStack.length - 1].id : null;
   document.querySelectorAll('.modal-backdrop').forEach(el => {
     el.inert = modalOpen && el.id !== topId;
+    el.toggleAttribute?.('inert', el.inert);
   });
+  const active = document.activeElement;
+  if (active && active !== document.body && active.closest?.('[inert]') && typeof active.blur === 'function') {
+    active.blur();
+  }
 }
 
 // Blocking gates (license / login / server-down) are alert dialogs that own
@@ -465,7 +505,8 @@ export function warrantyDays(days) {
   const raw = String(days ?? '').trim();
   if (!raw) return 7;
   const value = Number(raw);
-  return Number.isFinite(value) && value >= 0 ? value : 7;
+  // Floor: matches src/printer.js and the setDate expiry arithmetic.
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 7;
 }
 
 export function calculateWarrantyExpiry(dateStr, days) {

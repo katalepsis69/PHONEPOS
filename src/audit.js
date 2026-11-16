@@ -8,6 +8,14 @@
 // together without "cannot start a transaction within a transaction".
 // ponytail: unique name per nesting — random suffix avoids cross-db global races;
 // fixed counter shared across handles collided when two DBs interleaved.
+let lastIsoMs = 0;
+// Monotonic millisecond ISO timestamps keep close/sale/void comparisons unambiguous on fast storage.
+function nowIso() {
+  const now = Date.now();
+  lastIsoMs = now > lastIsoMs ? now : lastIsoMs + 1;
+  return new Date(lastIsoMs).toISOString();
+}
+
 function txn(db, fn) {
   const name = `audit_sp_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
   db.exec(`SAVEPOINT ${name}`);
@@ -39,7 +47,7 @@ function audit(db, actor, elevated, category, action, detail = null) {
   if (!actor) return;
   txn(db, () => {
     const detailStr = detail === null ? null : JSON.stringify(detail);
-    const createdAt = new Date().toISOString();
+    const createdAt = nowIso();
     const actor_type = actor.type === 'staff' ? 'staff' : 'manager';
     const actor_id = actor.id ?? null;
     const actor_name = actor.name || '';
@@ -55,23 +63,66 @@ function audit(db, actor, elevated, category, action, detail = null) {
   });
 }
 
-function verifyChain(db) {
-  // ponytail: stream in pages — loading 100k rows at once OOMs; hash still chained across pages
-  let prev = '';
-  let offset = 0;
+const chainCache = new WeakMap();
+
+function scanChain(db, startId = 0, startPrev = '') {
+  // Keyset paging avoids O(N^2) OFFSET scans while keeping memory flat on large audit logs.
+  let prev = startPrev;
+  let lastId = startId;
+  let checked = 0;
   const PAGE = 2000;
+  const stmt = db.prepare('SELECT id, created_at, actor_type, actor_id, actor_name, category, action, detail, elevated, row_hash FROM audit_log WHERE id > ? ORDER BY id ASC LIMIT ?');
   while (true) {
-    const rows = db.prepare('SELECT id, created_at, actor_type, actor_id, actor_name, category, action, detail, elevated, row_hash FROM audit_log ORDER BY id ASC LIMIT ? OFFSET ?').all(PAGE, offset);
+    const rows = stmt.all(lastId, PAGE);
     if (rows.length === 0) break;
     for (const r of rows) {
       const expected = hashRow(prev, r);
-      if (r.row_hash !== expected) return { ok: false, first_bad_id: r.id };
+      if (r.row_hash !== expected) return { ok: false, first_bad_id: r.id, lastId, lastHash: prev, checked };
       prev = r.row_hash;
+      lastId = r.id;
+      checked++;
     }
     if (rows.length < PAGE) break;
-    offset += PAGE;
   }
-  return { ok: true, first_bad_id: null };
+  return { ok: true, first_bad_id: null, lastId, lastHash: prev, checked };
+}
+
+function verifyChain(db) {
+  const res = scanChain(db, 0, '');
+  if (res.ok) {
+    const dv = db.prepare('PRAGMA data_version').get()?.data_version;
+    chainCache.set(db, { lastId: res.lastId, lastHash: res.lastHash, count: res.checked, dataVersion: dv });
+  } else {
+    chainCache.delete(db);
+  }
+  return { ok: res.ok, first_bad_id: res.first_bad_id };
+}
+
+// Verify only rows appended after the last clean checkpoint on this db handle,
+// falling back to a full scan if an external writer or anchor check diverges.
+function verifyChainIncremental(db) {
+  const cached = chainCache.get(db);
+  if (!cached) return verifyChain(db);
+  const dv = db.prepare('PRAGMA data_version').get()?.data_version;
+  if (dv !== cached.dataVersion) {
+    chainCache.delete(db);
+    return verifyChain(db);
+  }
+  if (cached.lastId > 0) {
+    const tail = db.prepare('SELECT id, row_hash FROM audit_log WHERE id = ?').get(cached.lastId);
+    const preCount = db.prepare('SELECT COUNT(*) AS n FROM audit_log WHERE id <= ?').get(cached.lastId).n;
+    if (!tail || tail.row_hash !== cached.lastHash || preCount !== cached.count) {
+      chainCache.delete(db);
+      return verifyChain(db);
+    }
+  }
+  const res = scanChain(db, cached.lastId, cached.lastHash);
+  if (res.ok) {
+    chainCache.set(db, { lastId: res.lastId, lastHash: res.lastHash, count: cached.count + res.checked, dataVersion: dv });
+  } else {
+    chainCache.delete(db);
+  }
+  return { ok: res.ok, first_bad_id: res.first_bad_id };
 }
 
 function listAuditLog(db, { category = '', actor = '', days = 30, limit = 100, offset = 0 } = {}) {
@@ -109,4 +160,4 @@ function listAuditLog(db, { category = '', actor = '', days = 30, limit = 100, o
   return { total, rows };
 }
 
-module.exports = { txn, audit, listAuditLog, hashRow, verifyChain };
+module.exports = { txn, audit, listAuditLog, hashRow, verifyChain, verifyChainIncremental, nowIso };

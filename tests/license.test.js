@@ -177,16 +177,16 @@ dbTest('Trial lapsed 20 days ago requires a license', (db) => {
   assert.strictEqual(s.license_required, true);
 });
 
-dbTest('Clock rollback sets the permanent compromise flag', (db) => {
+dbTest('Clock rollback does not lock the trial; the high-water clock still burns it', (db) => {
   db.prepare("UPDATE shop_settings SET value = ? WHERE key = 'last_seen_ts'")
     .run(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString());
 
   const s = getLicenseStatus(db, vendor.publicKey);
-  assert.strictEqual(s.license_required, true);
-  assert.strictEqual(db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_compromised'").get().value, '1');
-
-  // Permanent: a later clean clock read does not clear it.
-  assert.strictEqual(getLicenseStatus(db, vendor.publicKey).license_required, true);
+  assert.strictEqual(s.license_required, false, 'a CMOS battery failure must not 402-lock an honest trial');
+  assert.notStrictEqual(db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_compromised'").get()?.value, '1',
+    'rollback is no longer a permanent compromise');
+  const max = db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_max_seen_ts'").get().value;
+  assert.ok(Date.parse(max) >= Date.now() + 2 * 24 * 3600 * 1000 - 5000, 'the highest seen clock is kept, so the back-step bought nothing');
 });
 
 dbTest('Expired subscription key still requires a license', (db) => {
@@ -209,9 +209,9 @@ dbTest('Demo reset does not clear trial state', (db) => {
 });
 
 dbTest('Activation opens the gate even on a compromised trial', (db) => {
-  db.prepare("UPDATE shop_settings SET value = ? WHERE key = 'last_seen_ts'")
-    .run(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString());
-  getLicenseStatus(db, vendor.publicKey); // trip the rollback detector
+  // Seal-mismatch class compromise (the rollback class no longer flags).
+  db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('trial_compromised', '1')").run();
+  getLicenseStatus(db, vendor.publicKey);
 
   const key = sign({ machine_id: getMachineId(), plan_type: 'lifetime', customer_name: 'Compromised Clock Shop' });
   activateLicense(db, key, vendor.publicKey);
@@ -420,16 +420,46 @@ dbTest('trial_seal floor catches a recomputed seal over an edited first_run_ts (
   getLicenseStatus(db, vendor.publicKey); // seed the seal over the honest first_run
   const machineId = db.prepare("SELECT value FROM shop_settings WHERE key = 'workstation_machine_id'").get().value;
   // The F18 bypass: push first_run past the install's birth time AND recompute a
-  // matching seal with the shipped salt, so the missing-seal floor never runs.
-  // The birth-time anchor in the seal-matches branch must still catch it.
+  // matching seal, so the missing-seal floor never runs. The attacker now needs
+  // the per-install secret from the DB (the shipped salt alone migrates, it does
+  // not forge); the birth-time anchor in the seal-matches branch must still catch it.
   const future = new Date(Date.now() + 86400000).toISOString();
   const set = (k, v) => db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES (?, ?)").run(k, v);
+  const secret = db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_seal_secret'").get().value;
   set('first_run_ts', future);
   set('trial_compromised', '0');
-  set('trial_seal', crypto.createHmac('sha256', 'tp-pos-offline-anti-tamper-v1').update(`${machineId}|${future}|0`).digest('hex'));
+  set('trial_seal', crypto.createHmac('sha256', secret).update(`${machineId}|${future}|0`).digest('hex'));
   const after = getLicenseStatus(db, vendor.publicKey);
   assert.strictEqual(after.trial_active, false, 'a recomputed seal over an edited first_run must not extend the trial');
   assert.strictEqual(db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_compromised'").get().value, '1');
+});
+
+dbTest('a legacy shipped-salt seal migrates to the per-install secret without flagging', (db) => {
+  const crypto = require('node:crypto');
+  getLicenseStatus(db, vendor.publicKey);
+  const machineId = db.prepare("SELECT value FROM shop_settings WHERE key = 'workstation_machine_id'").get().value;
+  const firstRun = db.prepare("SELECT value FROM shop_settings WHERE key = 'first_run_ts'").get().value;
+  const legacy = crypto.createHmac('sha256', 'tp-pos-offline-anti-tamper-v1').update(`${machineId}|${firstRun}|0`).digest('hex');
+  db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('trial_seal', ?)").run(legacy);
+  const s = getLicenseStatus(db, vendor.publicKey);
+  assert.strictEqual(s.trial_active, true, 'an honest pre-secret seat keeps its trial');
+  assert.notStrictEqual(db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_compromised'").get()?.value, '1');
+  const resealed = db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_seal'").get().value;
+  assert.notStrictEqual(resealed, legacy, 'the seal is re-minted under the per-install secret');
+});
+
+dbTest('a cloned machine-id row does not verify on foreign hardware', (db) => {
+  const { getWindowsMachineGuid, getMachineIds } = require('../src/license');
+  const guid = getWindowsMachineGuid();
+  if (!guid) return; // no registry anchor off Windows
+  const set = (k, v) => db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES (?, ?)").run(k, v);
+  set('workstation_machine_id', 'TP-WIN-DEAD-BEEF');
+  set('workstation_machine_guid', 'ffffffff-ffff-ffff-ffff-ffffffffffff');
+  assert.ok(!getMachineIds(db).includes('TP-WIN-DEAD-BEEF'), 'a foreign MachineGuid refuses the persisted id');
+  set('workstation_machine_guid', guid);
+  assert.ok(getMachineIds(db).includes('TP-WIN-DEAD-BEEF'), 'the same machine honors its persisted id');
+  db.prepare("DELETE FROM shop_settings WHERE key = 'workstation_machine_guid'").run();
+  assert.ok(!getMachineIds(db).includes('TP-WIN-DEAD-BEEF'), 'a legacy clone without the anchor is refused too');
 });
 
 test('extractLicenseKey extracts signed token from Messenger chat text and line-wrapped pastes', () => {

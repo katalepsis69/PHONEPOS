@@ -237,7 +237,14 @@ function ensureDefaultStore() {
     if (storeCount === 0 || rawPin) {
       db.prepare('INSERT OR IGNORE INTO stores (store_id, store_name, pin_hash, created_at) VALUES (?, ?, ?, ?)').run('default', 'Main Store', hash, now);
       if (rawPin) {
-        db.prepare("UPDATE stores SET pin_hash = ? WHERE store_id = 'default' AND (pin_hash = '' OR pin_hash IS NULL)").run(hash);
+        // Rotation rewrites manager-pin.txt but the stored hash used to be
+        // updated only while empty, so the OLD PIN kept granting sessions
+        // after a rotate-and-restart. Re-verify and rehash whenever the file
+        // and the row disagree.
+        const stored = db.prepare("SELECT pin_hash FROM stores WHERE store_id = 'default'").get()?.pin_hash || '';
+        if (!stored || !verifyPinHash(stored, rawPin)) {
+          db.prepare("UPDATE stores SET pin_hash = ? WHERE store_id = 'default'").run(hash);
+        }
       }
     }
     const primaryStore = db.prepare("SELECT store_id FROM stores WHERE store_id = 'default'").get()
@@ -832,7 +839,7 @@ const server = http.createServer(async (req, res) => {
             fs.appendFileSync(path.join(DATA_DIR, 'deploy-log.jsonl'), line);
           } catch (_) {}
         }
-        if (updated.length) broadcast('change', { deployed: updated });
+        if (updated.length) broadcast('change', { deployed: updated }, session.storeId);
         const restarting = Boolean(serverChanged && isBotkeep);
         json(res, 200, { ok: true, updated, restarting });
         if (restarting) setTimeout(() => process.exit(0), 250).unref();
@@ -996,16 +1003,24 @@ const server = http.createServer(async (req, res) => {
         // /api/rows window client-side, which dropped older breaches once the
         // catalog outgrew the window (same failure the debtor list fixed).
         // /api/reorder serves the same population with buy quantities.
+        const filterH = getStoreShopFilter(session.storeId, shop, 'h');
         const invCounts = db.prepare(`
           SELECT COUNT(*) AS types,
                  COALESCE(SUM(CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)), 0) AS parts_stock,
                  COALESCE(SUM(CASE WHEN COALESCE(CAST(json_extract(r.row_json,'$.archived') AS INTEGER), 0) = 0
                    AND CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)
                      <= CAST(json_extract(r.row_json,'$.min_stock_alert') AS REAL)
+                   AND (CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL) > 0 OR es.inv_id IS NOT NULL)
                    THEN 1 ELSE 0 END), 0) AS low_stock
           FROM shop_rows r
+          LEFT JOIN (
+            SELECT DISTINCT h.shop_id, CAST(json_extract(h.row_json,'$.inventory_id') AS INTEGER) AS inv_id
+            FROM shop_rows h
+            WHERE h.table_name IN ('stock_movements', 'sale_items')${filterH.clause}
+              AND json_extract(h.row_json,'$.inventory_id') IS NOT NULL
+          ) es ON es.shop_id = r.shop_id AND es.inv_id = r.local_id
           WHERE r.table_name = 'inventory'${filter.clause}
-        `).get(...filter.params);
+        `).get(...filterH.params, ...filter.params);
         return json(res, 200, {
           outstanding_credit: Math.round(debt.outstanding * 100) / 100,
           debtors: debt.debtors,
@@ -1405,6 +1420,7 @@ const server = http.createServer(async (req, res) => {
         const since = `date('now',${TZ_MODIFIER},'-${days - 1} days')`;
         const shop = url.searchParams.get('shop');
         const filter = getStoreShopFilter(session.storeId, shop, 'i');
+        const filterH = getStoreShopFilter(session.storeId, shop, 'h');
         const rows = db.prepare(`
           SELECT i.shop_id,
                  CAST(json_extract(i.row_json,'$.id') AS INTEGER) AS id,
@@ -1419,7 +1435,8 @@ const server = http.createServer(async (req, res) => {
                  CAST(json_extract(i.row_json,'$.price_technician') AS REAL) AS price_technician,
                  json_extract(i.row_json,'$.supplier') AS supplier,
                  json_extract(i.row_json,'$.location') AS location,
-                 COALESCE(v.units, 0) AS units_sold
+                 COALESCE(v.units, 0) AS units_sold,
+                 (es.inv_id IS NOT NULL) AS ever_stocked
           FROM shop_rows i
           LEFT JOIN (
             SELECT si.shop_id, CAST(json_extract(si.row_json,'$.inventory_id') AS INTEGER) AS inv_id,
@@ -1432,13 +1449,23 @@ const server = http.createServer(async (req, res) => {
               AND date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER}) >= ${since}
             GROUP BY si.shop_id, inv_id
           ) v ON v.shop_id = i.shop_id AND v.inv_id = CAST(json_extract(i.row_json,'$.id') AS INTEGER)
+          LEFT JOIN (
+            SELECT DISTINCT h.shop_id, CAST(json_extract(h.row_json,'$.inventory_id') AS INTEGER) AS inv_id
+            FROM shop_rows h
+            WHERE h.table_name IN ('stock_movements', 'sale_items')${filterH.clause}
+              AND json_extract(h.row_json,'$.inventory_id') IS NOT NULL
+          ) es ON es.shop_id = i.shop_id AND es.inv_id = i.local_id
           WHERE i.table_name = 'inventory'${filter.clause}
             AND COALESCE(CAST(json_extract(i.row_json,'$.archived') AS INTEGER), 0) = 0
-            AND (CAST(json_extract(i.row_json,'$.stock_quantity') AS REAL) <= CAST(json_extract(i.row_json,'$.min_stock_alert') AS REAL)
-              OR v.units > 0)
-        `).all(...filter.params);
+            AND (
+              (CAST(json_extract(i.row_json,'$.stock_quantity') AS REAL) <= CAST(json_extract(i.row_json,'$.min_stock_alert') AS REAL)
+                AND (CAST(json_extract(i.row_json,'$.stock_quantity') AS REAL) > 0 OR es.inv_id IS NOT NULL))
+              OR v.units > 0
+            )
+        `).all(...filterH.params, ...filter.params);
         const list = rows
           .map(r => {
+            const belowMin = Boolean(r.stock_quantity <= r.min_stock_alert && (r.stock_quantity > 0 || r.ever_stocked));
             const restockQty = Math.max(1, (r.min_stock_alert - r.stock_quantity) + 1);
             return {
               id: r.id,
@@ -1457,7 +1484,7 @@ const server = http.createServer(async (req, res) => {
               min_stock_alert: r.min_stock_alert,
               units_sold: r.units_sold,
               cover_days: r.units_sold > 0 ? Math.round((r.stock_quantity * days / r.units_sold) * 10) / 10 : null,
-              below_min: r.stock_quantity <= r.min_stock_alert,
+              below_min: belowMin,
               restock_qty: restockQty,
               restock_cost: Math.round(restockQty * (Number(r.cost_price) || 0) * 100) / 100
             };
@@ -1660,8 +1687,10 @@ const server = http.createServer(async (req, res) => {
             if (!brand || !model_name || !part_type) { skipped++; continue; }
 
             const sku = raw.sku_barcode && String(raw.sku_barcode).trim() ? String(raw.sku_barcode).trim() : null;
+            // The register matches SKU NOCASE; a case-differing sheet SKU must
+            // update the same part, not mint a phantom mirror row.
             let match = sku
-              ? existingRows.find(e => e.data && String(e.data.sku_barcode || '').trim() === sku)
+              ? existingRows.find(e => e.data && String(e.data.sku_barcode || '').trim().toLowerCase() === sku.toLowerCase())
               : null;
             if (!match) {
               const bL = brand.toLowerCase(), mL = model_name.toLowerCase(), pL = part_type.toLowerCase();
@@ -1671,11 +1700,15 @@ const server = http.createServer(async (req, res) => {
                 && String(e.data.part_type || '').trim().toLowerCase() === pL);
             }
 
-            const cost = Math.max(0, Number(raw.cost_price) || 0);
-            const retail = Math.max(0, Number(raw.price_retail) || 0);
-            const tech = raw.price_technician !== undefined && raw.price_technician !== '' && Number(raw.price_technician) >= 0
-              ? Number(raw.price_technician)
-              : retail;
+            // Missing price columns ride as blank + auto_price so the register
+            // applies its own markup (or keeps the stored price). Materializing
+            // them as 0 zeroed costs and quoted technician customers retail.
+            const costProvided = raw.cost_price !== undefined && raw.cost_price !== '' && Number(raw.cost_price) >= 0;
+            const cost = costProvided ? Math.max(0, Number(raw.cost_price)) : 0;
+            const retailProvided = raw.price_retail !== undefined && raw.price_retail !== '' && Number(raw.price_retail) >= 0;
+            const retail = retailProvided ? Math.max(0, Number(raw.price_retail)) : 0;
+            const techProvided = raw.price_technician !== undefined && raw.price_technician !== '' && Number(raw.price_technician) >= 0;
+            const tech = techProvided ? Number(raw.price_technician) : 0;
             const hasFracFlag = raw.allow_fractional !== undefined && raw.allow_fractional !== '';
             const allowFrac = hasFracFlag
               ? (raw.allow_fractional === true || /^(1|true|yes)$/i.test(String(raw.allow_fractional).trim()))
@@ -1696,9 +1729,9 @@ const server = http.createServer(async (req, res) => {
               uom,
               allow_fractional: allowFrac ? 1 : 0,
               sku_barcode: sku || '',
-              cost_price: cost,
-              price_retail: retail,
-              price_technician: tech,
+              cost_price: costProvided ? cost : '',
+              price_retail: retailProvided ? retail : '',
+              price_technician: techProvided ? tech : '',
               stock_quantity: qty,
               min_stock_alert: hasMinAlert ? minAlert : '',
               supplier, location
@@ -1750,7 +1783,7 @@ const server = http.createServer(async (req, res) => {
           }
           if (cleanRows.length > 0) {
             db.prepare('INSERT INTO cloud_commands (shop_id, op_id, kind, payload_json, created_at) VALUES (?, ?, ?, ?, ?)')
-              .run(targetShopId, opId, 'import_inventory', JSON.stringify({ rows: cleanRows }), now);
+              .run(targetShopId, opId, 'import_inventory', JSON.stringify({ rows: cleanRows, auto_price: true }), now);
           }
           db.exec('COMMIT');
         } catch (err) {
@@ -1845,6 +1878,9 @@ const server = http.createServer(async (req, res) => {
       // Reverse proxies (nginx and friends) drop idle SSE streams; a comment
       // ping every 25s keeps the connection warm without emitting events.
       const ping = setInterval(() => {
+        // A stream outlives the 12h session TTL; re-check on every ping so an
+        // expired or logged-out session stops receiving change metadata.
+        if (!authorizedManager(req)) { sseClients.delete(res); clearInterval(ping); try { res.end(); } catch (_) {} return; }
         try { res.write(': ping\n\n'); } catch (_) { sseClients.delete(res); clearInterval(ping); }
       }, 25000);
       if (ping.unref) ping.unref();

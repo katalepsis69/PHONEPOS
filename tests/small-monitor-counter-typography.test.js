@@ -31,8 +31,23 @@ test('smaller monitor counter ergonomics: compact spacing and large typography',
   assert.match(styles, /\.btn-primary--pos \{[\s\S]*?font-size: 0\.9375rem !important;[\s\S]*?min-height: 46px !important;/);
 });
 
-test('narrow screen rail: collapses to 68px icon rail at 1366px width to free 182px space', () => {
+test('narrow screen rail: collapses to 68px icon rail at 1366px width without horizontal or vertical scrollbars', () => {
+  assert.match(styles, /\.rail \{[\s\S]*?overflow-x: hidden;/);
   assert.match(styles, /@media \(max-width: 1366px\) \{\s*:root \{\s*--rail-w: 68px;\s*\}/);
+  const narrowRailBlock = styles.slice(
+    styles.indexOf('@media (max-width: 1366px) {'),
+    styles.indexOf('/* ------------------------------------------- 8c. small displays')
+  );
+  assert.match(narrowRailBlock, /\.rail-quick \{[\s\S]*?grid-template-columns: repeat\(2, 1fr\);/);
+  assert.match(narrowRailBlock, /\.rail-tools \{[\s\S]*?grid-template-columns: repeat\(2, 1fr\);/);
+});
+
+test('first-time setup overlay uses wide multi-column card for 19-inch and 768p screens', () => {
+  assert.match(styles, /#pin-setup-overlay \.gate__card \{[\s\S]*?max-width: 640px !important;/);
+  assert.match(indexHtml, /id="pin-setup-overlay"[\s\S]*?style="max-width: 640px;"/);
+  assert.match(indexHtml, /class="setup-grid-3"/);
+  assert.match(indexHtml, /class="setup-grid-4"/);
+  assert.match(indexHtml, /class="setup-actions-row"/);
 });
 
 test('anti-slop copy hygiene: zero em dashes in smaller monitor styles and markup', () => {

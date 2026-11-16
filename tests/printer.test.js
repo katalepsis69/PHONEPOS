@@ -1396,7 +1396,7 @@ const uiWarranty = sandbox(uiSrc.slice(uiSrc.indexOf('export function warrantyDa
 // rule is: a finite number of zero or more days as written, seven for anything
 // that does not read as a number at all. Zero stays zero, and unset lands on the
 // same seven the rest of the app uses.
-const WARRANTY_TABLE = [['7', 7], [14, 14], ['14', 14], ['0', 0], [0, 0], ['', 7], [undefined, 7], [null, 7], ['abc', 7], ['  ', 7], ['-3', 7], [Infinity, 7], [NaN, 7]];
+const WARRANTY_TABLE = [['7', 7], [14, 14], ['14', 14], ['0', 0], [0, 0], ['', 7], [undefined, 7], [null, 7], ['abc', 7], ['  ', 7], ['-3', 7], [Infinity, 7], [NaN, 7], ['7.5', 7], [7.5, 7]];
 
 test('the warranty rule is the number the shop set, or seven when it set none', () => {
   for (const [input, expected] of WARRANTY_TABLE) {
@@ -1608,8 +1608,8 @@ test('the fallback shares paper labels and money shape, and the doc says so', ()
   assert.ok(receiptsSrc.includes("toLocaleString('en-US'"), 'the fallback lost the shared money shape');
   // The call-site count in the sentence is the count in the file.
   const sites = (receiptsSrc.match(/printMoney\(/g) || []).length - 1;
-  assert.equal(sites, 20, `printMoney call sites moved to ${sites}; the doc sentence and this test both need the new number`);
-  assert.match(bullet, /twenty call sites/, 'the doc no longer matches the twenty sites');
+  assert.equal(sites, 40, `printMoney call sites moved to ${sites}; the doc sentence and this test both need the new number`);
+  assert.match(bullet, /forty call sites/, 'the doc no longer matches the forty sites');
   // The labels are shared now; a re-split fails here until the doc is edited too.
   for (const label of ['WARRANTY (', 'Payment received:', 'Remaining balance:', 'RETURNS / REFUNDS']) {
     assert.ok(printerSrc.includes(label), `paper no longer prints ${label}`);
@@ -1967,4 +1967,101 @@ test('fractional quantities print as a measure, not "0.5x"', () => {
   assert.doesNotMatch(riceLine, /0\.5x/, 'no x suffix on a fractional qty');
   const laborLine = slip.find(l => l.text && l.text.includes('LCD Replac')).text;
   assert.match(laborLine, /1x /, 'integer qty keeps its x suffix: ' + laborLine);
+});
+
+test('an oversized print job refuses the helper and keeps the browser fallback', async () => {
+  const { buildSendJob, sendRaw } = require('../src/printer');
+  const { SENTINEL_PRINTER_NAME } = require('./helper');
+  const big = Buffer.alloc(25000, 65);
+  assert.throws(() => buildSendJob('AnyQueue', big), /too large/, 'base64 over the Windows env-var ceiling refuses');
+  const res = await sendRaw(SENTINEL_PRINTER_NAME, big);
+  assert.strictEqual(res.ok, false, 'sendRaw answers a refusal, not a crash');
+  assert.match(res.error, /too large/);
+  const small = buildSendJob('AnyQueue', Buffer.alloc(100, 65));
+  assert.ok(small.env.TP_PAYLOAD.length <= 32000, 'a normal job stays under the ceiling');
+});
+
+test('plain folds newlines and tabs to spaces instead of gluing words', () => {
+  const { plain } = require('../src/printer');
+  assert.equal(plain('123 Rizal St\nBrgy 2'), '123 Rizal St Brgy 2');
+  assert.equal(plain('a\tb'), 'a b');
+  assert.equal(plain('café'), 'caf', 'high-bit bytes are still dropped');
+});
+
+test('the send helper refuses an offline queue before writing bytes', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'printer.js'), 'utf8');
+  const script = src.slice(src.indexOf('const SEND_SCRIPT'), src.indexOf('const LIST_SCRIPT'));
+  assert.match(script, /WorkOffline/, 'the send probes the queue state');
+  assert.match(script, /offline = \$true/, 'the refusal is marked offline for the route');
+  assert.ok(script.indexOf('WorkOffline') < script.indexOf('OpenPrinter'), 'the probe runs before the job opens');
+});
+
+test('renderZReadSlip fits 58mm and 80mm rolls and renderClaimStubSlip includes conditions + seal', () => {
+  const { renderZReadSlip } = require('../src/printer');
+  const rec = {
+    day: '2026-11-16',
+    buckets: { cash: { collected: 4200, count: 5 }, gcash: { collected: 1500, count: 2 } },
+    refund_total: 500,
+    gross_sales: 6200,
+    void_count: 1,
+    expenses_total: 250,
+    expected_cash: 3700,
+    stored: { counted_cash: 3650, variance: -50, status: 'flagged', closed_by: 'Manager' },
+    shifts: [{ id: 1, staff_name: 'Jun', status: 'closed', counted_cash: 3650, variance: -50 }]
+  };
+  for (const width of ['58mm', '80mm']) {
+    const cols = colsFor(width);
+    const slip = renderZReadSlip(rec, { ...nastySettings, receipt_paper_width: width });
+    for (const line of slip) {
+      const budget = line.wide ? Math.floor(cols / 2) : cols;
+      assert.ok(line.text.length <= budget, `${width} Z-read line over ${budget}: ${JSON.stringify(line.text)}`);
+    }
+    const text = slip.map(l => l.text).join('\n');
+    assert.match(text, /END OF DAY Z-READ/);
+    assert.match(text, /EXPECTED CASH:\s+P3,700\.00/);
+    assert.match(text, /COUNTED CASH:\s+P3,650\.00/);
+    assert.match(text, /VARIANCE:\s+-P50\.00/);
+    assert.match(text, /Cashier \/ Manager Sign/);
+  }
+  const stub = renderClaimStubSlip({ ...stubJob, conditions: ['No power', 'Cracked'], seal_no: 'SEAL-77' }, { ...nastySettings, receipt_paper_width: '58mm' });
+  const stubText = stub.map(l => l.text).join('\n');
+  assert.match(stubText, /Condition:\s+No power, Cracked/);
+  assert.match(stubText, /Seal #:\s+SEAL-77/);
+  assert.equal(money(-500), '-P500.00');
+  const negSlip = renderZReadSlip({ ...rec, expected_cash: -500 }, { ...nastySettings, receipt_paper_width: '58mm' }).map(l => l.text).join('\n');
+  assert.match(negSlip, /EXPECTED CASH:\s+-P500\.00/);
+});
+
+serverTest('POST /api/print kind=z_read enforces elevation and sends Z-Read bytes', async (baseUrl, db, auth) => {
+  const authed = await ensurePinChanged(baseUrl, auth);
+  const denied = await fetch(`${baseUrl}/api/print`, {
+    method: 'POST',
+    headers: { Authorization: authed.Authorization, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'z_read' })
+  });
+  assert.equal(denied.status, 403, 'z_read requires manager elevation');
+  const res = await fetch(`${baseUrl}/api/print`, {
+    method: 'POST',
+    headers: { ...authed, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'z_read', date: '2026-11-16' })
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.fallback, true);
+});
+
+// The harness seeds a real identity so every other print test can reach the
+// transport; this one restores the placeholder and proves the route refuses
+// non-test paper before any slip is built, while the test slip stays exempt.
+serverTest('POST /api/print refuses non-test paper while the shop identity is the placeholder', async (baseUrl, db, auth) => {
+  db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('gcash_name', 'TechParts Repair & POS')").run();
+  db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('gcash_number', '0917-123-4567')").run();
+  const denied = await printPost(baseUrl, auth, { kind: 'claim_stub', device: 'iPhone 11' });
+  assert.equal(denied.status, 400);
+  const data = await denied.json();
+  assert.match(data.error, /placeholder/i);
+  assert.equal(data.fallback, true, 'the browser path gets the same answer it gates on');
+  const testSlip = await printPost(baseUrl, auth, { kind: 'test' });
+  assert.equal(testSlip.status, 200, 'the deliberate test slip stays exempt');
+  assert.equal((await testSlip.json()).fallback, true);
 });

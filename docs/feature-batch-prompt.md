@@ -63,6 +63,12 @@ INVARIANTS HELD DURING WORK (AGENTS.md, restated as build rules)
   TechPartsPOS-Setup-<ver>.exe plus TechPartsPOS.exe and .sha256 (never portable .zip).
 - vm-slice test regions (banner-comment extraction in tests/) stay intact, or their
   extractors are updated in the same step and the gate re-run.
+- Low-end performance & legacy Edge 92 compatibility: paginate any catalog/table growth
+  to 100 rows (updateTablePager), keep O(1) barcode lookup, run `npm run build:css` after
+  CSS edits, put plain hex/rgba/var() or vh fallbacks directly above color-mix() / dvh,
+  ban backdrop-filter: blur(...), keep 1366x768 / <= 700 px compact layout rules with no
+  em dashes, keep cloud/ === cloud-deploy/ byte-identical, keep #tab-btn-repairs hidden
+  and technician commissions excluded unless explicitly requested.
 - Never git --amend (the release pipeline commits mid-session); never commit unless
   the user asks.
 
@@ -78,22 +84,12 @@ A gate stays red on rerun; an item turns out to need a dependency or a framework
 (refuse: that violates the core invariants; propose the stdlib version); the tree
 shows concurrent interference. Report and stop.
 
-TREE STATE (measured 2026-11-14; refresh to observed state on every run)
-- HEAD: bbab7d4 (4 commits past tag v1.3 = 3d8dc46: the env-gated sync soak harness
-  e535a58, the sync drain starvation fix 719b396, the soak browser-env test fix 9143185,
-  and the inventory import partial-apply fix bbab7d4; origin/main is behind, pushes are
-  an owner action; tags v1.2 = 8f181f7 and v1.3 = 3d8dc46). Full source is tracked in
-  git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 682 tests, 681 pass, 1 skipped (the
-  env-gated sync soak, skips by design without SYNC_SOAK=1), 0 fail, exit 0 across 57
-  test files, about 28 s.
-- Working tree: 30 dirty tracked files plus 2 untracked (docs/audit-2026-11-14.md and
-  tests/generate-changelog.test.js): the UNCOMMITTED 2026-11-14 Stage Build rewrite
-  graft batch (publish.bat, publish-release.bat, scripts/publish-release.ps1,
-  scripts/generate-changelog.js, package.json, src/updater.js, public/index.html,
-  public/js/i18n.js, public/js/main.js, public/js/ui.js, public/js/views/backoffice.js,
-  public/js/views/pos.js, public/styles.css, public/tailwind.build.css, CHANGELOG.md,
-  README.md, RELEASE_NOTES.md, the six docs/ pass prompts, and the audit-regressions,
-  barcode-scan, frontend-regressions, i18n, packaging-workflows,
-  pos-repair-counter-ergonomics, updater-ui tests). It is unreviewed by any audit and
-  rides in every gate. Verify against `git status --short` on your run.
+TREE STATE (measured 2026-11-16; refresh to observed state on every run)
+- HEAD: 81a31fe (1 commit past tag v1.4 = f8bd979; tags v1.0..v1.4). Full source is tracked
+  in git; the release pipeline commits mid-session, so never --amend.
+- Gates: npm run build:css exit 0 (tailwindcss v4.3.3 + scripts/compat-css.js); npm test
+  766 tests, 765 pass, 1 skipped (the env-gated sync soak, skips by design without
+  SYNC_SOAK=1), 0 fail, exit 0 across 59 test files, about 22 s.
+- Working tree: carries uncommitted Low-End Optimization, Edge 92 Compatibility
+  (scripts/compat-css.js), Table Density/Chart/Ergonomics, 5-Feature Must-Have Bundle,
+  and Perf pass prompt updates. Verify against `git status --short` on your run.

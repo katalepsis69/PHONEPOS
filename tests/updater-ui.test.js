@@ -27,7 +27,7 @@ test('updater DOM ergonomics: modal control IDs, span wrappers, and aria-live an
   assert.match(indexHtml, /<p id="update-status-msg"[^>]*aria-live="polite">/);
 
   // Button text is wrapped in span for icon-safe text manipulation
-  assert.match(indexHtml, /<button[^>]*id="btn-check-updates"[^>]*>[\s\S]*?<span>Check for updates<\/span>/);
+  assert.match(indexHtml, /<button[^>]*id="btn-check-updates"[^>]*>[\s\S]*?<span[^>]*>Check for updates<\/span>/);
   assert.match(indexHtml, /<button[^>]*id="btn-apply-update"[^>]*>[\s\S]*?<span>Update Now<\/span>/);
 });
 
@@ -51,7 +51,7 @@ test('updater backoffice controller: in-flight state tracking and loading synchr
   // Synchronized button states during check phase
   assert.match(backofficeJs, /function setCheckLoading\(loading\)/);
   assert.match(backofficeJs, /icon\.className = 'ph ph-arrows-clockwise w-3\.5 h-3\.5 animate-spin';/);
-  assert.match(backofficeJs, /label\.textContent = 'Checking…';/);
+  assert.match(backofficeJs, /label\.textContent = t\('update\.checking', 'Checking…'\);/);
 
   // Synchronized button states during apply/download phase
   assert.match(backofficeJs, /function setApplyLoading\(loading\)/);
@@ -163,4 +163,12 @@ test('debouncedViewLoad stays deleted: no public/js source references the dead e
     const src = fs.readFileSync(file, 'utf8');
     assert.ok(!src.includes('debouncedViewLoad'), `${path.relative(jsDir, file)} must not reference the deleted export`);
   }
+});
+
+test('the stalled handoff screen names the .old rename recovery', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'views', 'backoffice.js'), 'utf8');
+  const start = src.indexOf('function showUpdateHandoffStalled(');
+  const screen = src.slice(start, src.indexOf('\n}', start) + 2);
+  assert.match(screen, /rename <strong>TechPartsPOS\.exe\.old<\/strong> to <strong>TechPartsPOS\.exe<\/strong>/,
+    'the screen tells the operator how to recover a half-finished swap');
 });

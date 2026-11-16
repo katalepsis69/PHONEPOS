@@ -259,6 +259,16 @@ test('mirror-backups refuses a source with no recent snapshot', () => {
     fs.writeFileSync(path.join(src, 'shop_2026-01-01.db'), 'not a real db');
     r = run();
     assert.ok(!/no snapshot newer than/.test(r.stderr), 'a fresh snapshot must pass the staleness gate');
+
+    // The automatic daily snapshot is named shop-YYYY-MM-DD.db (hyphen). A
+    // healthy install that only ever ran automatic backups must pass the gate
+    // too; the old underscore-only regex failed it and misdiagnosed the folder.
+    fs.unlinkSync(path.join(src, 'shop_2026-01-01.db'));
+    fs.unlinkSync(old);
+    const today = new Date().toISOString().slice(0, 10);
+    fs.writeFileSync(path.join(src, `shop-${today}.db`), 'not a real db');
+    r = run();
+    assert.ok(!/no snapshot newer than/.test(r.stderr), 'a fresh automatic daily snapshot must pass the staleness gate');
   } finally {
     fs.rmSync(src, { recursive: true, force: true });
     fs.rmSync(dest, { recursive: true, force: true });

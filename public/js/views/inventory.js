@@ -3,6 +3,7 @@ import { attachCombo, closeModal, confirmModal, describeLoadFailure, escHtml, fm
 import { formatCostPrice, hasElevation, isStaff, requireManagerPin, openSettingsModal } from '../auth.js';
 import { loadPosCatalog } from './pos.js';
 import { IMPORT_COLUMNS, matchHeaders, parseMoney, parseSku, parseXlsx } from '../importer.js';
+import { printSkuLabels } from '../receipts.js';
 import { t } from '../i18n.js';
 
 let inventoryRequest = 0;
@@ -14,6 +15,29 @@ export function clearInventorySelection() {
   document.querySelectorAll('.inv-row-check').forEach(cb => { cb.checked = false; });
   const allCb = document.getElementById('inv-select-all');
   if (allCb) { allCb.checked = false; allCb.indeterminate = false; }
+}
+
+export function printBulkSkuLabels() {
+  if (selectedPartIds.size === 0) {
+    showToast(t('bulk.none_selected', 'Select one or more parts first'), 'error');
+    return;
+  }
+  const byId = new Map();
+  for (const it of (S.inventoryItems || [])) byId.set(Number(it.id), it);
+  for (const it of (S.inventoryRowsCache || [])) byId.set(Number(it.id), it);
+  const items = [...selectedPartIds].map(id => byId.get(Number(id))).filter(Boolean);
+  printSkuLabels(items);
+}
+
+export function printEditModalLabel() {
+  const id = Number(document.getElementById('edit-part-id')?.value);
+  const item_name = document.getElementById('edit-part-name')?.value.trim() || '';
+  const brand = document.getElementById('edit-part-brand')?.value || '';
+  const model_name = document.getElementById('edit-part-model')?.value.trim() || '';
+  const part_type = document.getElementById('edit-part-type')?.value.trim() || '';
+  const sku_barcode = document.getElementById('edit-part-sku')?.value.trim() || '';
+  const price_retail = Number(document.getElementById('edit-part-retail')?.value) || 0;
+  printSkuLabels([{ id, item_name, brand, model_name, part_type, sku_barcode, price_retail }]);
 }
 
 export function updateBulkBar() {
@@ -103,6 +127,19 @@ export function setupInventoryEnhancements() {
       });
       updateBulkBar();
     });
+  }
+
+  for (const [id, delta] of [['inv-pager-prev', -1], ['inv-pager-next', 1]]) {
+    const btn = document.getElementById(id);
+    if (btn && !btn.dataset.bound) {
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', () => {
+        invPage += delta;
+        const scroller = document.getElementById('inventory-tbody')?.closest?.('.overflow-y-auto');
+        if (scroller) scroller.scrollTop = 0;
+        renderInventoryTable(S.inventoryRowsCache || []);
+      });
+    }
   }
 
   const tbody = document.getElementById('inventory-tbody');
@@ -203,6 +240,7 @@ export function setupInventoryEnhancements() {
 
 export async function loadInventoryTable() {
   const request = ++inventoryRequest;
+  invPage = 0;
   const search = document.getElementById('inv-search')?.value || '';
   const brand = document.getElementById('inv-brand-filter')?.value || '';
   const partType = document.getElementById('inv-type-filter')?.value || '';
@@ -222,6 +260,10 @@ export async function loadInventoryTable() {
     if (!res.ok) throw new Error('Inventory request failed');
     const items = await res.json();
     if (request !== inventoryRequest) return;
+    if (!search && !brand && !partType && !lowStock && !showArchived) {
+      S.inventoryItems = items;
+      refreshInventoryBadge(items);
+    }
     renderInventoryTable(items);
     renderInventoryMetrics(items);
     const reorderPanel = document.getElementById('inv-reorder-panel');
@@ -540,6 +582,31 @@ function renderReorderPanel(report) {
   updateReorderSummary();
 }
 
+export function refreshInventoryBadge(items = S.inventoryItems) {
+  const badge = document.getElementById('nav-lowstock-badge');
+  if (!badge) return;
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const list = Array.isArray(items) ? items : [];
+  const profileItems = (mode !== 'hybrid')
+    ? list.filter(i => itemMatchesProfile(i, mode))
+    : list;
+  const lowCount = profileItems.filter(isActionableLowStock).length;
+  badge.textContent = String(lowCount);
+  badge.title = lowCount ? `${lowCount} low or out-of-stock item${lowCount === 1 ? '' : 's'} in current store profile` : '';
+  badge.classList.toggle('hidden', !(lowCount > 0));
+}
+
+export function isActionableLowStock(item) {
+  if (!item || item.archived) return false;
+  const q = Number(item.stock_quantity) || 0;
+  const min = Number(item.min_stock_alert) || 0;
+  if (q > 0) return q <= min;
+  // Catalog entries imported or seeded at 0 stock with no movements or sales
+  // are price-list rows, not shortages; omit-field unit fixtures keep <= min.
+  if (item.ever_stocked !== undefined) return Boolean(item.ever_stocked);
+  return q <= min;
+}
+
 export const TEMPLATE_CATEGORIES = {
   grocery: ['Beverages', 'Canned Goods', 'Snacks & Chips', 'Dairy & Eggs', 'Instant Noodles', 'Rice & Grains', 'Condiments & Sauces', 'Personal Care', 'Household & Cleaning', 'Other'],
   retail: ['Apparel & Clothing', 'Accessories', 'Electronics', 'Footwear', 'Health & Beauty', 'Home & Living', 'Stationery & Office', 'Toys & Hobbies', 'Other'],
@@ -652,15 +719,17 @@ export function itemMatchesProfile(item, profile) {
   const name = String(item.item_name || '').trim().toLowerCase();
   const combined = `${b} ${m} ${pt} ${cat} ${name}`;
 
-  const isPhonePart = (
-    /\b(lcd|oled|amoled|incell|screen|touchscreen|flex cable|charging port|camera glass|housing|back cover)\b/i.test(combined) ||
-    ((/\bbattery\b/i.test(combined)) && (/\b(iphone|galaxy|redmi|note|poco|infinix|tecno|realme|oppo|vivo|huawei|samsung|apple|pixel)\b/i.test(combined))) ||
-    (/^(apple|xiaomi|infinix|tecno|realme|oppo|vivo|huawei)$/i.test(b) && !name && !item.allow_fractional)
-  );
-
   const isPcPart = (
     /\b(gpu|cpu|motherboard|mobo|ram|ddr4|ddr5|ddr3|nvme|ssd|hdd|power supply|psu|pc case|cooler|thermal paste|graphics card|processor|geforce|radeon|ryzen|intel core)\b/i.test(combined) ||
     /^(asus|gigabyte|msi|kingston|corsair|amd|intel|deepcool|fantech|western digital|seagate|nvidia|asrock|zotac|palit)$/i.test(b)
+  );
+
+  const isPhoneBrand = /^(apple|iphone|samsung|xiaomi|redmi|iredmi|poco|infinix|inifnix|tecno|realme|oppo|vivo|huawei|huawe|honor|itel|pixel|nokia|motorola)$/i.test(b);
+
+  const isPhonePart = (
+    /\b(lcd|oled|amoled|incell|screen|touchscreen|flex cable|charging flex|charging board|charging port|camera glass|back cam|front cam|air piece|earpiece|ear piece|center case|midframe|middle frame|power swich|power switch|back cover|back glass|housing|soldering tip)\b/i.test(combined) ||
+    ((/\bbatt(?:ery)?\b/i.test(combined)) && (isPhoneBrand || /\b(iphone|iph|galaxy|redmi|iredmi|note|poco|infinix|inifnix|tecno|realme|oppo|vivo|huawei|huawe|samsung|apple|pixel|honor)\b/i.test(combined))) ||
+    (!isPcPart && (isPhoneBrand || /^(gx|jk|ca|orig|wf|swich|power swich|charging flex|charging board|air piece|center case)$/i.test(pt)) && !name && !item.allow_fractional)
   );
 
   if (profile === 'phone') {
@@ -687,6 +756,28 @@ export function itemMatchesProfile(item, profile) {
   return true;
 }
 
+// The catalog renders one page at a time: a 2000-row innerHTML rebuild per
+// debounced keystroke stalled the field PC (11-15 audit #20). Metrics and
+// bulk selection still run over the full cached array.
+let invPage = 0;
+const INV_PAGE_SIZE = 100;
+
+function updatePager(total, startIdx, shown) {
+  const pager = document.getElementById('inv-pager');
+  if (!pager) return;
+  if (total <= INV_PAGE_SIZE) { pager.classList.add('hidden'); return; }
+  pager.classList.remove('hidden');
+  const pageCount = Math.ceil(total / INV_PAGE_SIZE);
+  const range = document.getElementById('inv-pager-range');
+  const page = document.getElementById('inv-pager-page');
+  const prev = document.getElementById('inv-pager-prev');
+  const next = document.getElementById('inv-pager-next');
+  if (range) range.textContent = `${startIdx + 1}-${startIdx + shown} of ${total}`;
+  if (page) page.textContent = `${invPage + 1} / ${pageCount}`;
+  if (prev) prev.disabled = invPage === 0;
+  if (next) next.disabled = invPage >= pageCount - 1;
+}
+
 export function renderInventoryTable(items) {
   S.inventoryRowsCache = items;
   const tbody = document.getElementById('inventory-tbody');
@@ -708,11 +799,18 @@ export function renderInventoryTable(items) {
           <button type="button" class="chip" data-action="open-add-part" data-manager-only>+ ${escHtml(t('inv.add_part', 'Add Item'))}</button>
         </div>
       </td></tr>`;
+    updatePager(0, 0, 0);
     updateBulkBar();
     return;
   }
 
-  tbody.innerHTML = visibleItems.map(item => {
+  const pageCount = Math.ceil(visibleItems.length / INV_PAGE_SIZE);
+  if (invPage >= pageCount) invPage = pageCount - 1;
+  if (invPage < 0) invPage = 0;
+  const startIdx = invPage * INV_PAGE_SIZE;
+  const pageItems = visibleItems.slice(startIdx, startIdx + INV_PAGE_SIZE);
+
+  tbody.innerHTML = pageItems.map(item => {
     const isOut = item.stock_quantity <= 0;
     const isLow = item.stock_quantity > 0 && item.stock_quantity <= item.min_stock_alert;
 
@@ -763,6 +861,7 @@ export function renderInventoryTable(items) {
     `;
   }).join('');
 
+  updatePager(visibleItems.length, startIdx, pageItems.length);
   updateBulkBar();
 }
 
@@ -939,6 +1038,9 @@ export function setAddItemTemplate(tpl) {
 }
 
 export function openAddPartModal() {
+  // One key per modal open, like edit and bulk edit: a retry after a lost
+  // response must dedup, not mint a duplicate part (11-15 audit #19).
+  addPartOpId = crypto.randomUUID();
   if (!hasElevation()) {
     requireManagerPin('Enter manager PIN to add parts to the catalog', () => openAddPartModal());
     return;
@@ -990,6 +1092,7 @@ export function openAddPartModal() {
 
 // Slow POST + a second Enter would create the part twice.
 let addPartInFlight = false;
+let addPartOpId = null;
 export async function submitAddPart(e) {
   e.preventDefault();
   const rawName = document.getElementById('part-name')?.value.trim();
@@ -1028,7 +1131,7 @@ export async function submitAddPart(e) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        op_id: crypto.randomUUID(),
+        op_id: addPartOpId || crypto.randomUUID(),
         item_name,
         category,
         uom,
@@ -1073,7 +1176,7 @@ export function openAdjustStockModal(id) {
   document.getElementById('adjust-part-id').value = id;
   const label = item.item_name || `${item.brand} ${item.model_name} - ${item.part_type}`;
   document.getElementById('adjust-part-name').textContent =
-    `${label} (current stock: ${item.stock_quantity}${item.uom ? ' ' + item.uom : ''})`;
+    `${label} (stock: ${item.stock_quantity}${item.uom ? ' ' + item.uom : ''} · Retail ${fmtMoney(item.price_retail)})`;
   const deltaInput = document.getElementById('adjust-delta');
   deltaInput.value = '';
   deltaInput.step = item.allow_fractional ? 'any' : '1';
@@ -1214,6 +1317,54 @@ const IMPORT_REQUIRED = ['model_name', 'stock_quantity'];
 const IMPORT_PRICE_COLS = ['cost_price', 'price_retail', 'price_technician'];
 let importState = null; // { rows, header } for the mapping preview
 
+// Re-import guard: quantity is a DELTA, so re-importing a corrected file adds
+// the already-applied rows again. Remember what landed (per browser) and warn
+// when the next preview matches it; the partial-apply list names the rows.
+const LAST_IMPORT_KEY = 'techparts_last_import';
+function importRowKey(obj) {
+  const sku = String(obj.sku_barcode || '').trim().toLowerCase();
+  if (sku) return `sku:${sku}`;
+  const b = String(obj.brand || '').trim().toLowerCase();
+  const m = String(obj.model_name || '').trim().toLowerCase();
+  const t = String(obj.part_type || '').trim().toLowerCase();
+  return (b || m || t) ? `triple:${b}|${m}|${t}` : null;
+}
+function importKeysFromRaw(rawRows, auto) {
+  const keys = [];
+  for (const r of rawRows) {
+    const obj = {};
+    for (const col of ['sku_barcode', 'brand', 'model_name', 'part_type']) {
+      const idx = auto[col];
+      if (idx !== undefined && idx !== -1) obj[col] = String(r[idx] ?? '').trim();
+    }
+    const k = importRowKey(obj);
+    if (k) keys.push(k);
+  }
+  return keys;
+}
+function importKeysFromObjects(rowObjs, applied) {
+  const keys = [];
+  for (const a of Array.isArray(applied) ? applied : []) {
+    const obj = rowObjs[a.row - 1];
+    if (!obj) continue;
+    const k = importRowKey(obj);
+    if (k) keys.push(k);
+  }
+  return keys;
+}
+function lastImportOverlap(keys) {
+  try {
+    const last = JSON.parse(localStorage.getItem(LAST_IMPORT_KEY) || 'null');
+    if (!last || !Array.isArray(last.keys) || Date.now() - last.at > 7 * 24 * 3600 * 1000) return null;
+    const set = new Set(last.keys);
+    const count = keys.filter(k => set.has(k)).length;
+    return count ? { count, when: new Date(last.at).toLocaleString() } : null;
+  } catch (_) { return null; }
+}
+function rememberImport(keys) {
+  try { localStorage.setItem(LAST_IMPORT_KEY, JSON.stringify({ at: Date.now(), keys })); } catch (_) {}
+}
+
 export function importCsvFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -1252,11 +1403,13 @@ function ensureImportPreviewModal() {
             </button>
           </div>
           <div id="import-missing-warning" class="hidden p-2.5 rounded border text-xs" style="border-color: var(--danger); color: var(--danger);"></div>
+          <div id="import-reimport-warning" class="hidden p-2.5 rounded border text-xs" style="border-color: var(--warn, #d97706); color: var(--warn, #d97706);"></div>
           <div id="import-swap-warning" class="hidden p-2.5 rounded border text-xs flex items-center justify-between gap-2" style="border-color: var(--warn, #d97706); color: var(--warn, #d97706);"></div>
           <div id="import-table-wrap" class="max-h-48 overflow-auto rounded border border-[var(--line-soft)]">
             <table id="import-preview-table" class="w-full text-xs"></table>
           </div>
           <div id="import-errors" class="hidden rounded border p-2 max-h-32 overflow-auto" style="border-color: var(--danger);"></div>
+          <div id="import-applied" class="hidden rounded border p-2 max-h-32 overflow-auto text-xs" style="border-color: var(--line-soft);"></div>
         </div>
         <div class="modal-card__foot">
           <button type="button" id="import-preview-cancel" class="btn-quiet">Cancel</button>
@@ -1328,7 +1481,7 @@ export function renderImportPreviewTable() {
   });
 
   document.getElementById('import-preview-note').textContent =
-    `${dataRows.length} part(s) ready to import.`;
+    `${dataRows.length} part(s) ready to import. Quantity changes current stock: positive adds, negative removes, 0 leaves it.`;
 
   document.getElementById('import-preview-table').innerHTML = `
     <thead>
@@ -1408,6 +1561,20 @@ export function openImportPreview(rows) {
   tableWrap.classList.remove('hidden');
   tipBox.classList.remove('hidden');
 
+  const appliedBox = document.getElementById('import-applied');
+  if (appliedBox) { appliedBox.innerHTML = ''; appliedBox.classList.add('hidden'); }
+  const reimportBox = document.getElementById('import-reimport-warning');
+  if (reimportBox) {
+    const overlap = lastImportOverlap(importKeysFromRaw(rows.slice(1), auto));
+    if (overlap) {
+      reimportBox.textContent = `${overlap.count} row(s) match your previous import (${overlap.when}). Quantity is ADDED to current stock: if those rows already landed, remove them from the sheet or set their quantity to 0, or stock doubles.`;
+      reimportBox.classList.remove('hidden');
+    } else {
+      reimportBox.textContent = '';
+      reimportBox.classList.add('hidden');
+    }
+  }
+
   const tipMsg = (t('inv.import_auto_note', 'Blank prices use store markup (%s% retail, %s% wholesale) for new parts, and for existing parts when their capital changed. Set in Settings > Store.'))
     .replace('%s', retPct).replace('%s', whoPct);
   document.getElementById('import-auto-price-tip-text').textContent = tipMsg;
@@ -1485,6 +1652,14 @@ async function applyImport() {
       // reason. The modal stays open so the list stays readable, and the
       // button becomes a plain Close: re-submitting would double the stock.
       showImportErrors(data.errors);
+      const appliedBox = document.getElementById('import-applied');
+      if (appliedBox && Array.isArray(data.applied) && data.applied.length) {
+        appliedBox.innerHTML = `<p class="font-semibold">Already applied (${data.applied.length} row(s)):</p>`
+          + data.applied.map(a => `<p>${escHtml(`Row ${a.row}: ${a.label} (${a.quantity >= 0 ? '+' : ''}${a.quantity})`)}</p>`).join('')
+          + `<p class="mt-1 font-semibold">Remove these rows from the sheet or set their quantity to 0 before re-importing. Importing adds quantity to stock again.</p>`;
+        appliedBox.classList.remove('hidden');
+      }
+      rememberImport(importKeysFromObjects(rows, data.applied));
       showToast(`Imported ${data.created + data.updated} part(s), skipped ${skipped}: see the list below`, 'error');
       if (btn) {
         importState.applied = true;
@@ -1493,6 +1668,7 @@ async function applyImport() {
         btn.onclick = () => { importState.applied = false; closeModal('modal-import-preview'); };
       }
     } else {
+      rememberImport(importKeysFromObjects(rows, data.applied));
       closeModal('modal-import-preview');
       showToast(`Import complete: ${data.created} created, ${data.updated} updated`, 'success');
     }
@@ -1640,6 +1816,21 @@ export async function submitEditPart(e) {
     const ok = await confirmModal(
       `${brand} ${model_name} - ${part_type} already exists (ID ${dup.id}, ${dup.stock_quantity} in stock). Merge-looking edit - save anyway?`,
       { title: 'Duplicate part?', yes: 'Save anyway' });
+    if (!ok) return;
+  }
+
+  const prevItem = (S.inventoryRowsCache || []).find(i => Number(i.id) === id)
+    || (S.inventoryItems || []).find(i => Number(i.id) === id);
+  const newCost = Number(document.getElementById('edit-part-cost').value);
+  const newRetail = Number(document.getElementById('edit-part-retail').value);
+  const oldCost = Number(prevItem?.cost_price) || 0;
+  const oldRetail = Number(prevItem?.price_retail) || 0;
+  if (prevItem && oldCost > 0 && Number.isFinite(newCost) && newCost > oldCost * 1.05 && newRetail <= oldRetail) {
+    const jumpPct = Math.round(((newCost - oldCost) / oldCost) * 100);
+    const ok = await confirmModal(
+      `Supplier cost jumped ${fmtMoney(oldCost)} to ${fmtMoney(newCost)} (+${jumpPct}%) while retail stays ${fmtMoney(newRetail)}. Save without raising retail?`,
+      { title: 'Supplier Cost Jump Alert', yes: 'Save anyway' }
+    );
     if (!ok) return;
   }
 

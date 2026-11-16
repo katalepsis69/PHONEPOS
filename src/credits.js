@@ -82,19 +82,44 @@ function listCustomers(db, { search = '', filter = '', limit = 2000 } = {}) {
   });
 }
 
+// The ledger payload is linear in sales, and Walk-in accumulates one row per
+// cash sale: 12k sales already serialized to 8.6 MB in the perf harness. Keep
+// every open balance (FIFO aging and the SOA depend on the oldest unpaid rows)
+// and the newest window for history; totals stay SQL-side and cover all rows.
+const LEDGER_SALE_WINDOW = 500;
+
 function getCustomerDetails(db, customerName) {
   const cleanName = normalizeName(customerName, 'Walk-in Customer');
   const folded = foldName(cleanName);
   const fold = expr => foldSql(db, expr);
   // ponytail: one JOIN replaces N+1 item queries. sales+payments aggregated in SQL.
-  const sales = db.prepare(`SELECT * FROM sales WHERE ${fold('customer_name')} = ? ORDER BY id DESC`).all(folded);
+  const allSales = db.prepare(`SELECT * FROM sales WHERE ${fold('customer_name')} = ? ORDER BY id DESC`).all(folded);
+  let sales = allSales;
+  if (allSales.length > LEDGER_SALE_WINDOW) {
+    const shown = allSales.slice(0, LEDGER_SALE_WINDOW);
+    const seen = new Set(shown.map(s => s.id));
+    for (const s of allSales) {
+      if (!seen.has(s.id) && !s.voided && Number(s.credit_balance) > 0.001) shown.push(s);
+    }
+    sales = shown.sort((a, b) => b.id - a.id);
+  }
   if (sales.length) {
     const byId = new Map(sales.map(s => [s.id, s]));
     for (const s of sales) s.items = [];
     const ids = sales.map(s => s.id);
-    const placeholders = ids.map(() => '?').join(',');
-    for (const row of db.prepare(`SELECT * FROM sale_items WHERE sale_id IN (${placeholders}) ORDER BY sale_id`).all(...ids)) {
-      byId.get(row.sale_id)?.items.push(row);
+    // Chunk IN (...) well under SQLite's 32,766 host-parameter limit for high-volume customers.
+    const CHUNK = 500;
+    const stmtBySize = new Map();
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK);
+      let stmt = stmtBySize.get(slice.length);
+      if (!stmt) {
+        stmt = db.prepare(`SELECT * FROM sale_items WHERE sale_id IN (${slice.map(() => '?').join(',')}) ORDER BY sale_id`);
+        stmtBySize.set(slice.length, stmt);
+      }
+      for (const row of stmt.all(...slice)) {
+        byId.get(row.sale_id)?.items.push(row);
+      }
     }
   }
   const payments = db.prepare(`SELECT * FROM credit_payments WHERE ${fold('customer_name')} = ? ORDER BY id DESC`).all(folded);
@@ -145,6 +170,8 @@ function getCustomerDetails(db, customerName) {
     notes: prof?.notes || '',
     status: agg.bal > 0.001 ? 'active_credit' : 'clean',
     sales,
+    sales_total: allSales.length,
+    sales_truncated: sales.length < allSales.length,
     payments,
     returns
   };

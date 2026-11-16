@@ -1,6 +1,10 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 title TechParts POS - Stage Customer Build
+rem Manual staging channel: builds a versioned exe + checksum into publish\
+rem for hand delivery. The GitHub release pipeline is publish-release.bat;
+rem the in-app updater only consumes TechPartsPOS.exe + TechPartsPOS.exe.sha256
+rem from a GitHub release, never these staged copies.
 cd /d "%~dp0"
 
 set "SKIP_TESTS=0"

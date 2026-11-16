@@ -3,19 +3,21 @@
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
+- Updated documentation for expand README for open-source contributors and add MIT license
 - Fixed inventory import applies good rows and states every refused row
 - Expanded tests for soak spawns must never open a browser window
 - Fixed quarantine unreadable outbox rows on first sync window
 - Expanded tests for sync soak harness (env-gated)
-- Documentation: Updated (README.md, docs/audit-2026-11-14-b.md, docs/audit-2026-11-14.md, docs/code-audit-prompt.md and 5 more)
-- Cloud Sync: Updated quarantineIds, enqueue, drainOutbox (docs/sync-soak-2026-11-14.md, src/sync.js)
-- Build & Release: Updated interface text for "1.4" (package.json, publish-release.bat, publish.bat, scripts/publish-release.ps1 and 1 more)
-- Counter UI: Updated interface text for "Update %s is available!", "Update %s", "You are up to date! (v%s)" (public/index.html, public/js/i18n.js, public/js/main.js, public/js/ui.js and 2 more)
-- Security & Licensing: Updated /api/auth/staff, renderStaffPanel (public/js/auth.js)
-- Inventory & Import: Updated setupInventoryEnhancements, loadInventoryTable, renderInventoryMetrics (public/js/views/inventory.js, src/inventory.js)
-- Repair Counter (POS): Updated resetPosFilters (public/js/views/pos.js)
-- Server & Database: Updated runInstalledLauncher (src/server.js)
-- Quality & Tests: Updated test coverage for i18n: every en key is referenced somewhere in the frontend; i18n: PROFILE_VOCAB only overrides keys the main en table defines; shipped docs carry no mojibake and the release pipeline guards against it (tests/audit-regressions.test.js, tests/barcode-scan.test.js, tests/fix-batch-v6.test.js, tests/frontend-regressions.test.js and 9 more)
+- Documentation: Updated .grain (.agents/skills/techparts-pass/SKILL.md, AGENTS.md, GEMINI.md, README.md and 15 more)
+- Security & Licensing: Updated updateStoreMarkupPreview, updateStorePresetSummary, loadDataDiagnostics (LICENSE, public/js/auth.js, src/license.js)
+- Cloud Sync: Updated interface text for "Over", "warn", "Copy" (cloud-deploy/public/app.js, cloud-deploy/public/index.html, cloud-deploy/server.js, cloud/public/app.js and 6 more)
+- Build & Release: Updated interface text for "1.4" (package.json, publish-release.bat, publish.bat, scripts/compat-css.js and 3 more)
+- Counter UI: Updated interface text for "Log out or switch user", "Previous page", "Prev" (public/index.html, public/js/api.js, public/js/chart.js, public/js/i18n.js and 7 more)
+- Repair Counter (POS): Updated interface text for "application/json" (public/js/cart-recovery.js, public/js/views/pos.js)
+- Thermal Printing: Updated interface text for "application/json", "thermal-80mm", "Customer:" (public/js/receipts.js, src/printer.js)
+- Reports & Analytics: Updated interface text for "day" (public/js/report.js, src/analytics.js)
+- Inventory & Import: Updated printBulkSkuLabels, printEditModalLabel, refreshInventoryBadge (public/js/views/inventory.js, src/inventory.js)
+- Server & Database: Updated interface text for "application/json" (src/audit.js, src/db.js, src/reconcile.js, src/returns.js and 5 more)
 
 ---
 

@@ -59,12 +59,49 @@ function getLegacyMachineId() {
   return cachedLegacyMachineId;
 }
 // Both IDs are accepted for a stored key; minting always uses getMachineId().
+// The persisted workstation_machine_id row is only honored when it belongs to
+// THIS machine: a cloned shop.db carrying license_key + workstation_machine_id
+// used to verify on any other PC (11-15 audit #24). The Windows MachineGuid,
+// stored beside the ID when it is persisted, is the anchor a settings-row edit
+// cannot reuse on foreign hardware.
+let cachedMachineGuid;
+let machineGuidTried = false;
+function getWindowsMachineGuid() {
+  if (machineGuidTried) return cachedMachineGuid;
+  machineGuidTried = true;
+  cachedMachineGuid = null;
+  if (os.platform() !== 'win32') return cachedMachineGuid;
+  try {
+    const { execFileSync } = require('node:child_process');
+    const out = execFileSync('reg', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid'], { encoding: 'utf8', timeout: 3000, windowsHide: true });
+    const m = out.match(/MachineGuid\s+REG_SZ\s+([0-9a-f-]+)/i);
+    if (m) cachedMachineGuid = m[1].toLowerCase();
+  } catch (_) {}
+  return cachedMachineGuid;
+}
+
 function getMachineIds(db = null) {
   const ids = new Set([getMachineId(), getLegacyMachineId()]);
   if (db) {
     try {
       const row = db.prepare("SELECT value FROM shop_settings WHERE key = 'workstation_machine_id'").get();
-      if (row && row.value) ids.add(row.value);
+      if (row && row.value) {
+        const guid = getWindowsMachineGuid();
+        const guidRow = db.prepare("SELECT value FROM shop_settings WHERE key = 'workstation_machine_guid'").get();
+        if (!guid) {
+          // Off Windows (dev/test) or the registry read failed: no anchor available.
+          ids.add(row.value);
+        } else if (guidRow && guidRow.value) {
+          if (guidRow.value.toLowerCase() === guid) ids.add(row.value);
+        } else if (ids.has(row.value)) {
+          // Legacy seat without the anchor: the persisted ID is one this machine
+          // computes anyway. Backfill the anchor so the next clone is refused.
+          ids.add(row.value);
+          try {
+            db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('workstation_machine_guid', ?)").run(guid);
+          } catch (_) {}
+        }
+      }
     } catch (_) {}
   }
   return Array.from(ids);
@@ -81,16 +118,26 @@ function getActiveMachineId(db = null) {
       const match = matchVendorKey(licRow.value, licenseNow(db));
       if (match && match.result && match.result.valid && match.machineId) {
         db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('workstation_machine_id', ?)").run(match.machineId);
+        persistMachineGuid(db);
         return match.machineId;
       }
     }
 
     const currentId = getMachineId();
     db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('workstation_machine_id', ?)").run(currentId);
+    persistMachineGuid(db);
     return currentId;
   } catch (_) {
     return getMachineId();
   }
+}
+
+function persistMachineGuid(db) {
+  const guid = getWindowsMachineGuid();
+  if (!guid) return;
+  try {
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('workstation_machine_guid', ?)").run(guid);
+  } catch (_) {}
 }
 
 function extractLicenseKey(raw) {
@@ -183,10 +230,14 @@ function verifyLicenseKeyWithVendorKeys(licenseKey, nowMs = Date.now()) {
 }
 
 const TRIAL_MS = 14 * 24 * 60 * 60 * 1000;
+// Legacy salt: kept ONLY to migrate seals minted before the per-install secret
+// existed. New seals key on a random per-install secret (11-15 audit #25): the
+// old salt ships in source, so anyone could recompute a matching seal over
+// edited rows; a bypass now needs DB read access, not just the source.
 const TRIAL_SEAL_SALT = 'tp-pos-offline-anti-tamper-v1';
 
-function computeTrialSeal(machineId, firstRunStr, compromisedStr) {
-  return crypto.createHmac('sha256', TRIAL_SEAL_SALT)
+function computeTrialSeal(machineId, firstRunStr, compromisedStr, secret = TRIAL_SEAL_SALT) {
+  return crypto.createHmac('sha256', secret)
     .update(`${machineId}|${firstRunStr}|${compromisedStr}`)
     .digest('hex');
 }
@@ -204,7 +255,12 @@ function getTrialState(db) {
 
   const machineId = getActiveMachineId(db);
   const storedSeal = get('trial_seal');
-  let expectedSeal = computeTrialSeal(machineId, firstRunStr, compromised ? '1' : '0');
+  let sealSecret = get('trial_seal_secret');
+  if (!sealSecret) {
+    sealSecret = crypto.randomBytes(32).toString('hex');
+    set('trial_seal_secret', sealSecret);
+  }
+  let expectedSeal = computeTrialSeal(machineId, firstRunStr, compromised ? '1' : '0', sealSecret);
 
   if (!storedSeal) {
     // A deleted seal must not buy a fresh trial: an attacker edits
@@ -234,21 +290,27 @@ function getTrialState(db) {
       firstRunStr = new Date(firstRun).toISOString();
       set('first_run_ts', firstRunStr);
     }
-    expectedSeal = computeTrialSeal(machineId, firstRunStr, compromised ? '1' : '0');
+    expectedSeal = computeTrialSeal(machineId, firstRunStr, compromised ? '1' : '0', sealSecret);
     set('trial_seal', expectedSeal);
   } else if (storedSeal !== expectedSeal) {
-    compromised = true;
-    set('trial_compromised', '1');
-    set('trial_seal', computeTrialSeal(machineId, firstRunStr, '1'));
+    // One-time migration: a seal minted with the shipped salt re-seals under
+    // the per-install secret without flagging an honest seat.
+    const legacySeal = computeTrialSeal(machineId, firstRunStr, compromised ? '1' : '0');
+    if (storedSeal === legacySeal) {
+      set('trial_seal', expectedSeal);
+    } else {
+      compromised = true;
+      set('trial_compromised', '1');
+      set('trial_seal', computeTrialSeal(machineId, firstRunStr, '1', sealSecret));
+    }
   } else {
-    // Seal matches. The salt ships in source, so a determined user can recompute
-    // a matching seal over an edited first_run_ts and skip the missing-seal
-    // floor above. The db file's birth time is an anchor a settings-row edit
-    // cannot move: a first_run newer than the install itself is the edit. Birth
-    // time only (not the audit log) so an honest restore (recent file, old
-    // first_run) or a fresh trial DB holding old audit rows is not flagged.
-    // Residual: copying/moving the db file resets the birth time; that is beyond
-    // the casual bypass this closes (accepted, offline).
+    // Seal matches. A determined user with DB write access can still recompute
+    // a matching seal over an edited first_run_ts using the stored secret. The
+    // db file's birth time is an anchor a settings-row edit cannot move: a
+    // first_run newer than the install itself is the edit. Birth time only (not
+    // the audit log) so an honest restore (recent file, old first_run) or a
+    // fresh trial DB holding old audit rows is not flagged. Residual: copying
+    // or moving the db file resets the birth time (accepted, offline).
     const dbFile = db.shopDbPath || null;
     let birth = null;
     if (dbFile) { try { birth = fs.statSync(dbFile).birthtimeMs; } catch (_) {} }
@@ -258,27 +320,24 @@ function getTrialState(db) {
       firstRun = birth;
       firstRunStr = new Date(firstRun).toISOString();
       set('first_run_ts', firstRunStr);
-      set('trial_seal', computeTrialSeal(machineId, firstRunStr, '1'));
+      set('trial_seal', computeTrialSeal(machineId, firstRunStr, '1', sealSecret));
     }
   }
 
-  // Rollback: clock moved back >24h. Flag is permanent -- only activation
-  // clears the gate, never the flag.
-  if (now < lastSeen - 24 * 60 * 60 * 1000) {
-    if (!compromised) {
-      compromised = true;
-      set('trial_compromised', '1');
-      set('trial_seal', computeTrialSeal(machineId, firstRunStr, '1'));
-    }
-  } else if (now > lastSeen + 60 * 60 * 1000) {
+  // Rollback no longer flags the seat permanently: the max-seen high-water
+  // below already stops any back-step from extending the trial, and a CMOS
+  // battery failure on a trial PC used to 402-lock the register with no
+  // in-app recovery (11-15 audit #36). trial_compromised is reserved for seal
+  // mismatches; activation clears the gate.
+  if (now > lastSeen + 60 * 60 * 1000) {
     // Advance: throttled write on the read path catches rollback while running.
     set('last_seen_ts', new Date(now).toISOString());
   }
 
-  // Crawl guard: the 24h flag only catches one big jump, so the highest clock
-  // ever observed is persisted and expiry is judged against it. A daily
-  // 23h59m back-step stops extending anything on the first day. ponytail: a
-  // clock set legitimately AHEAD once costs those days back, fail-closed.
+  // Crawl guard: the highest clock ever observed is persisted and expiry is
+  // judged against it. A daily 23h59m back-step stops extending anything on
+  // the first day. ponytail: a clock set legitimately AHEAD once costs those
+  // days back, fail-closed.
   const storedMax = Date.parse(get('trial_max_seen_ts') || '') || 0;
   const maxSeen = Math.max(storedMax, now, lastSeen);
   if (maxSeen !== storedMax) set('trial_max_seen_ts', new Date(maxSeen).toISOString());
@@ -470,6 +529,7 @@ module.exports = {
   getActiveMachineId,
   getLegacyMachineId,
   getMachineIds,
+  getWindowsMachineGuid,
   extractLicenseKey,
   verifyLicenseKey,
   verifyLicenseKeyWithVendorKeys,

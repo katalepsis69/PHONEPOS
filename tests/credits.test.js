@@ -332,3 +332,30 @@ dbTest('D5: composed and decomposed diacritics store as one name', (db) => {
   const rows = listCustomers(db, { search: '' });
   assert.equal(rows.filter(r => /pe/i.test(r.customer_name) && r.sales_count === 2).length, 1, 'NFC-normalized storage keeps one debtor');
 });
+
+dbTest('getCustomerDetails caps the ledger payload but keeps totals and every open balance', (db) => {
+  const CAP = 500;
+  const item = createInventoryItem(db, {
+    brand: 'Cap', model_name: 'Bulk', part_type: 'LCD (OLED)',
+    cost_price: 1, price_retail: 10, price_technician: 8, stock_quantity: CAP + 10
+  });
+  let oldestId = null;
+  for (let i = 0; i < CAP + 7; i++) {
+    const sale = createSale(db, {
+      customer_name: 'Bulk Customer',
+      payment_method: i === 0 ? 'credit' : 'cash',
+      items: [{ inventory_id: item.id, quantity: 1 }],
+      amount_paid: i === 0 ? 0 : 10
+    });
+    if (i === 0) oldestId = sale.id;
+  }
+  const details = getCustomerDetails(db, 'Bulk Customer');
+  assert.equal(details.sales_total, CAP + 7);
+  assert.equal(details.sales_count, CAP + 7);
+  assert.equal(details.sales_truncated, true);
+  assert.equal(details.sales.length, CAP + 1, 'newest window plus the open balance');
+  assert.equal(details.sales[details.sales.length - 1].id, oldestId, 'the oldest unpaid sale survives the cap');
+  assert.equal(details.sales.find(s => s.id === oldestId).items.length, 1, 'items ride only the returned window');
+  assert.equal(details.total_credit_balance, 10, 'the open balance is still counted in full');
+  assert.equal(details.total_purchases, (CAP + 7) * 10, 'totals cover every sale, not just the window');
+});

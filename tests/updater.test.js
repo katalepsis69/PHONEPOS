@@ -765,6 +765,7 @@ test('updater: /api/system/update/apply forwards serviceMode to applyUpdate and 
   const dir = tempStagingDir();
   const dbPath = path.join(dir, 'test.db');
   const { server, db } = createServer({ dbPath, serviceMode: true });
+  require('./helper').seedSentinelPrinter(db);
   try {
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = server.address().port;
@@ -804,4 +805,77 @@ test('updater: /api/system/update/apply forwards serviceMode to applyUpdate and 
     db?.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('updater user-facing error strings stay ASCII', () => {
+  // The v7 audit found 22,530 characters of double-encoded mojibake in the
+  // download-interrupted message, shown to the cashier via textContent. Every
+  // string the updater throws reaches Settings or the handoff screen, so the
+  // whole thrown-message surface must stay plain ASCII.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'updater.js'), 'utf8');
+  const lines = src.split(/\r?\n/).filter(l => l.includes('new Error('));
+  assert.ok(lines.length >= 15, 'the scan must see the thrown-message surface');
+  for (const line of lines) {
+    assert.ok(/^[\x00-\x7F]*$/.test(line), `updater error string must be ASCII: ${line.trim()}`);
+  }
+});
+
+test('updater: the feed result caches for 5 minutes outside the test env', async () => {
+  let calls = 0;
+  setUpdateTestHooks({
+    fetchImpl: async () => {
+      calls++;
+      return new Response(JSON.stringify(cannedRelease(NEWER_TAG)), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+  });
+  const prevEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    const a = await checkForUpdates('1.0');
+    const b = await checkForUpdates('1.0');
+    assert.equal(calls, 1, 'the second check within the window answers from cache');
+    assert.equal(b.latestVersion, a.latestVersion);
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+    setUpdateTestHooks(null);
+  }
+});
+
+test('updater: a 206 with a mismatched Content-Range restarts from byte 0', async () => {
+  const { downloadReleaseWithResume } = require('../src/updater');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 't-updater-cr-'));
+  const url = 'https://example.com/TechPartsPOS.exe';
+  fs.writeFileSync(path.join(dir, 'TechPartsPOS_update.part'), Buffer.alloc(10, 1));
+  fs.writeFileSync(path.join(dir, 'TechPartsPOS_update.part.json'), JSON.stringify({ url, totalBytes: 30 }));
+  const ranges = [];
+  setUpdateTestHooks({
+    maxAttempts: 3,
+    fetchImpl: async (u, opts) => {
+      const range = (opts && opts.headers && opts.headers.Range) || '';
+      ranges.push(range);
+      if (range === 'bytes=10-') {
+        return new Response(Buffer.alloc(20, 2), { status: 206, headers: { 'content-range': 'bytes 999-1018/1029', 'content-length': '20' } });
+      }
+      return new Response(Buffer.alloc(30, 3), { status: 200, headers: { 'content-length': '30' } });
+    }
+  });
+  try {
+    const buf = await downloadReleaseWithResume(url, 30, dir);
+    assert.equal(buf.length, 30);
+    assert.ok(buf.every(b => b === 3), 'the mismatched 206 body was discarded and the full restart landed');
+    assert.deepEqual(ranges, ['bytes=10-', ''], 'first attempt resumed, the retry asked for the whole file');
+  } finally {
+    setUpdateTestHooks(null);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('updater: an async spawn failure restores the exe instead of killing the server', () => {
+  // The detached handoff never runs under test (skipSpawn), so pin the listener
+  // that turns an async 'error' event into a rename-back plus a durable line.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'updater.js'), 'utf8');
+  const region = src.slice(src.indexOf("const helper = spawn('cmd.exe'"), src.indexOf('updateLog(\'apply: helper launched'));
+  assert.match(region, /helper\.on\('error'/, 'the spawn has an async error listener');
+  assert.match(region, /fs\.renameSync\(oldExe, currentExe\)/, 'the listener restores the previous executable');
+  assert.match(region, /previous executable restored/, 'the failure leaves a handoff-log trace');
 });

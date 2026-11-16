@@ -1,17 +1,23 @@
 import { S } from '../state.js';
 import { t } from '../i18n.js';
-import { closeModal, confirmModal, describeLoadFailure, escHtml, fmtMoney, formatDateOnly, formatDateTime, inputModal, openModal, showSkeleton, showToast, warrantyDays } from '../ui.js';
+import { closeModal, confirmModal, describeLoadFailure, escHtml, fmtMoney, formatDateOnly, formatDateTime, inputModal, openModal, showSkeleton, showToast, updateTablePager, warrantyDays } from '../ui.js';
 import { hasElevation, requireManagerPin, syncCloudUi } from '../auth.js';
 import { autoPrintEnabled, formatPhPhone, loadCustomerSuggestions, loadPosCatalog } from '../views/pos.js';
-import { autoPrintSlip, printPeriodSummary, printSlip, renderReceipt, renderSettlementReceipt, shopIdentityIsPlaceholder } from '../receipts.js';
+import { autoPrintSlip, printCustomerSoa, printPeriodSummary, printSlip, printZReadSlip, renderReceipt, renderSettlementReceipt, shopIdentityIsPlaceholder } from '../receipts.js';
 import { renderTrendChart } from '../chart.js';
-import { loadInventoryTable } from '../views/inventory.js';
+import { isActionableLowStock, itemMatchesProfile, loadInventoryTable } from '../views/inventory.js';
 
 let returnsRequest = 0;
 let customersRequest = 0;
 let salesRequest = 0;
 let dashboardRequest = 0;
 let exceptionsRequest = 0;
+
+const BACKOFFICE_PAGE_SIZE = 100;
+let returnsCache = [];
+let returnsPage = 1;
+let customersCache = [];
+let customersPage = 1;
 
 // -------------------------------------------------------------
 // WARRANTY & RETURNS LOGIC
@@ -31,6 +37,7 @@ export async function loadWarrantyReturnsTable() {
     if (!res.ok) throw new Error('Returns request failed');
     const returns = await res.json();
     if (request !== returnsRequest) return;
+    returnsPage = 1;
     renderWarrantyReturnsTable(returns);
   } catch (err) {
     if (request !== returnsRequest) return;
@@ -54,8 +61,10 @@ export async function loadWarrantyReturnsTable() {
 export function renderWarrantyReturnsTable(returns) {
   const tbody = document.getElementById('returns-tbody');
   if (!tbody) return;
+  returnsCache = Array.isArray(returns) ? returns : [];
 
-  if (returns.length === 0) {
+  if (returnsCache.length === 0) {
+    if (typeof updateTablePager === 'function') updateTablePager('returns-pager', 0, 1, BACKOFFICE_PAGE_SIZE);
     tbody.innerHTML = `
       <tr><td colspan="8">
         <div class="empty">
@@ -68,7 +77,18 @@ export function renderWarrantyReturnsTable(returns) {
     return;
   }
 
-  tbody.innerHTML = returns.map(r => {
+  const pages = Math.max(1, Math.ceil(returnsCache.length / BACKOFFICE_PAGE_SIZE));
+  returnsPage = Math.max(1, Math.min(pages, returnsPage));
+  const start = (returnsPage - 1) * BACKOFFICE_PAGE_SIZE;
+  const pageRows = returnsCache.slice(start, start + BACKOFFICE_PAGE_SIZE);
+  if (typeof updateTablePager === 'function') {
+    updateTablePager('returns-pager', returnsCache.length, returnsPage, BACKOFFICE_PAGE_SIZE, (step) => {
+      returnsPage += step;
+      renderWarrantyReturnsTable(returnsCache);
+    });
+  }
+
+  tbody.innerHTML = pageRows.map(r => {
     let actionBadge = '';
     if (r.return_type === 'replacement') {
       actionBadge = `<span class="tag tag--info">Part replacement</span>`;
@@ -107,7 +127,29 @@ export function renderWarrantyReturnsTable(returns) {
       </tr>
     `;
   }).join('');
+  updateReturnsBadge(returns);
+}
 
+export function updateReturnsBadge(returns = []) {
+  const badge = document.getElementById('nav-returns-badge');
+  if (!badge) return;
+  const list = Array.isArray(returns) ? returns : [];
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const todayCount = list.filter(r => {
+    const raw = String(r.created_at || '').trim();
+    if (!raw) return false;
+    const norm = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(raw) && !/[Z+-]/.test(raw.slice(10))
+      ? `${raw.replace(' ', 'T')}Z`
+      : raw;
+    const dt = new Date(norm);
+    if (!Number.isFinite(dt.getTime())) return raw.slice(0, 10) === today;
+    const localDay = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    return localDay === today;
+  }).length;
+  badge.textContent = String(todayCount);
+  badge.title = todayCount ? `${todayCount} warranty/return log${todayCount === 1 ? '' : 's'} today` : '';
+  badge.classList.toggle('hidden', !(todayCount > 0));
 }
 
 // Idempotency keys (mirror of pos.js's saleOpId): a network failure after the
@@ -358,9 +400,19 @@ export async function loadCustomers() {
     if (!res.ok) throw new Error('Customers request failed');
     const customers = await res.json();
     if (request !== customersRequest) return;
+    customersPage = 1;
     renderCustomersTable(customers);
     updateCreditMetricCards(customers);
-    loadNameVariants();
+    if (!search && !filter) {
+      loadNameVariants();
+      const debtorsBadge = document.getElementById('nav-debtors-badge');
+      if (debtorsBadge && Array.isArray(customers)) {
+        const debtors = customers.filter(c => (Number(c.total_credit_balance) || 0) > 0.001).length;
+        debtorsBadge.textContent = String(debtors);
+        debtorsBadge.title = debtors ? `${debtors} customer${debtors === 1 ? '' : 's'} with active utang balance` : '';
+        debtorsBadge.classList.toggle('hidden', !(debtors > 0));
+      }
+    }
   } catch (err) {
     if (request !== customersRequest) return;
     console.error('Failed to load customers:', err);
@@ -441,24 +493,94 @@ export function updateCreditMetricCards(customers) {
 }
 
 
-// Aging badge from credit_date (oldest unpaid sale): 30/60/90-day thresholds
-// so old debts stand out instead of one flat balance list.
+// Aging badge from credit_date (oldest unpaid sale): 0-7d, 8-29d warn, 30/60/90+ danger
 export function utangAgeBadge(c) {
   if (!(c.total_credit_balance > 0.001) || !c.credit_date) return { html: '', label: null };
-  const days = Math.floor((Date.now() - new Date(c.credit_date).getTime()) / 86400000);
-  if (days < 30) return { html: '', label: null };
+  const days = Math.max(0, Math.floor((Date.now() - new Date(c.credit_date).getTime()) / 86400000));
+  if (days <= 7) {
+    return {
+      html: `<span class="tag" title="Oldest unpaid balance is ${days} day(s) old">0-7d</span>`,
+      label: '0-7d'
+    };
+  }
+  if (days < 30) {
+    return {
+      html: `<span class="tag tag--warn" title="Oldest unpaid balance is ${days} days old">${days}d</span>`,
+      label: `${days}d`
+    };
+  }
   const band = days >= 90 ? 90 : days >= 60 ? 60 : 30;
   return {
-    html: `<span class="tag tag--danger" title="Oldest unpaid balance is ${days} days old">${band}d</span>`,
-    label: `${band}d`,
+    html: `<span class="tag tag--danger" title="Oldest unpaid balance is ${days} days old">${band}d+</span>`,
+    label: `${band}d+`
   };
+}
+
+async function copyTextSafe(text) {
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  const host = document.querySelector('.modal-backdrop:not(.hidden)') || document.body;
+  host.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (_) {}
+  ta.remove();
+  return ok;
+}
+
+export function buildUtangReminderText(details) {
+  const name = details?.customer_name || 'Customer';
+  const bal = Number(details?.total_credit_balance || 0);
+  const unpaidCodes = (details?.sales || [])
+    .filter(s => !s.voided && Number(s.credit_balance) > 0.001)
+    .slice(0, 5)
+    .map(s => `${s.sale_code} (${fmtMoney(s.credit_balance)})`);
+  const shopName = !shopIdentityIsPlaceholder() ? (S.shopSettings.gcash_name || 'our shop') : 'our shop';
+  const gcash = !shopIdentityIsPlaceholder() && S.shopSettings.gcash_number
+    ? ` GCash: ${S.shopSettings.gcash_name || ''} (${S.shopSettings.gcash_number}).`
+    : '';
+  const refs = unpaidCodes.length ? ` Open tickets: ${unpaidCodes.join(', ')}.` : '';
+  return `Hi ${name}, reminder from ${shopName}: unpaid balance is ${fmtMoney(bal)}.${refs}${gcash} Thank you!`;
+}
+
+export async function copyUtangReminder(customerName = null) {
+  let details = S.activeCustomerDetails;
+  if (customerName) {
+    try {
+      const res = await fetch(`/api/customers/${encodeURIComponent(customerName)}`);
+      if (!res.ok) throw new Error('load failed');
+      details = await res.json();
+    } catch (_) {
+      const row = customersCache.find(c => c.customer_name === customerName);
+      details = row ? { customer_name: row.customer_name, total_credit_balance: row.total_credit_balance, sales: [] } : null;
+    }
+  }
+  if (!details || Number(details.total_credit_balance) <= 0.001) {
+    showToast('No unpaid balance to remind.', 'info');
+    return;
+  }
+  const msg = buildUtangReminderText(details);
+  const ok = await copyTextSafe(msg);
+  showToast(ok ? 'Utang reminder copied. Paste in Messenger or SMS.' : msg, ok ? 'success' : 'info');
+}
+
+export function printActiveCustomerSoa() {
+  if (!S.activeCustomerDetails) return;
+  printCustomerSoa(S.activeCustomerDetails);
 }
 
 export function renderCustomersTable(customers) {
   const tbody = document.getElementById('customers-tbody');
   if (!tbody) return;
+  customersCache = Array.isArray(customers) ? customers : [];
 
-  if (customers.length === 0) {
+  if (customersCache.length === 0) {
+    if (typeof updateTablePager === 'function') updateTablePager('customers-pager', 0, 1, BACKOFFICE_PAGE_SIZE);
     tbody.innerHTML = `
       <tr><td colspan="5">
         <div class="empty">
@@ -471,7 +593,18 @@ export function renderCustomersTable(customers) {
     return;
   }
 
-  tbody.innerHTML = customers.map(c => {
+  const pages = Math.max(1, Math.ceil(customersCache.length / BACKOFFICE_PAGE_SIZE));
+  customersPage = Math.max(1, Math.min(pages, customersPage));
+  const start = (customersPage - 1) * BACKOFFICE_PAGE_SIZE;
+  const pageRows = customersCache.slice(start, start + BACKOFFICE_PAGE_SIZE);
+  if (typeof updateTablePager === 'function') {
+    updateTablePager('customers-pager', customersCache.length, customersPage, BACKOFFICE_PAGE_SIZE, (step) => {
+      customersPage += step;
+      renderCustomersTable(customersCache);
+    });
+  }
+
+  tbody.innerHTML = pageRows.map(c => {
     const aging = utangAgeBadge(c);
     const hasUtang = Number(c.total_credit_balance) > 0.001;
     const creditLimitVal = Number(c.credit_limit) || 0;
@@ -511,9 +644,12 @@ export function renderCustomersTable(customers) {
         </div>
       </td>
       <td class="is-mid py-2.5 px-3">
-        <button type="button" class="btn-mini btn-ledger-trigger py-1 px-2.5" data-customer="${escHtml(c.customer_name)}" aria-label="View ledger for ${escHtml(c.customer_name)}">
-          <i class="ph ph-book-open w-3.5 h-3.5"></i> Ledger
-        </button>
+        <span class="inline-flex items-center gap-1">
+          ${hasUtang ? `<button type="button" class="btn-mini py-1 px-2" data-action="copy-row-reminder" data-customer="${escHtml(c.customer_name)}" title="Copy SMS / Messenger reminder"><i class="ph ph-copy w-3.5 h-3.5"></i> Copy</button>` : ''}
+          <button type="button" class="btn-mini btn-ledger-trigger py-1 px-2.5" data-customer="${escHtml(c.customer_name)}" aria-label="View ledger for ${escHtml(c.customer_name)}">
+            <i class="ph ph-book-open w-3.5 h-3.5"></i> Ledger
+          </button>
+        </span>
       </td>
     </tr>`;
   }).join('');
@@ -525,6 +661,7 @@ export function renderCustomersTable(customers) {
 // the JS engine parses the attribute, killing the string literal.
 const customersTbody = document.getElementById('customers-tbody');
 customersTbody?.addEventListener('click', e => {
+  if (e.target.closest('[data-action="copy-row-reminder"]')) return;
   const row = e.target.closest('tr[data-name]');
   if (row) openCustomerLedger(row.dataset.name);
 });
@@ -578,7 +715,7 @@ export async function openCustomerLedger(customerName, { propagateError = false 
     }
 
     const salesCountEl = document.getElementById('ledger-sales-count');
-    if (salesCountEl) salesCountEl.textContent = S.activeCustomerDetails.sales?.length || 0;
+    if (salesCountEl) salesCountEl.textContent = S.activeCustomerDetails.sales_total ?? (S.activeCustomerDetails.sales?.length || 0);
     const payCountEl = document.getElementById('ledger-payments-count');
     if (payCountEl) payCountEl.textContent = S.activeCustomerDetails.payments?.length || 0;
     const retCountEl = document.getElementById('ledger-returns-count');
@@ -591,6 +728,8 @@ export async function openCustomerLedger(customerName, { propagateError = false 
     const isWalkIn = S.activeCustomerDetails.customer_name === 'Walk-in Customer' || !S.activeCustomerDetails.id;
     const settleForm = document.getElementById('form-settle-credit');
     if (settleForm) settleForm.classList.toggle('hidden', !isDebt);
+    const remindBtn = document.getElementById('btn-copy-utang-reminder');
+    if (remindBtn) remindBtn.classList.toggle('hidden', !isDebt);
 
     const limitBtn = document.querySelector('#modal-customer-ledger [data-action="edit-credit-limit"]');
     if (limitBtn) limitBtn.classList.toggle('hidden', isWalkIn);
@@ -640,7 +779,10 @@ export function renderLedgerTabs() {
       </div>
     `;
   } else {
-    salesContainer.innerHTML = sales.map(s => {
+    const truncationNote = S.activeCustomerDetails.sales_truncated
+      ? `<p class="foot-note mb-2">Showing ${sales.length} of ${S.activeCustomerDetails.sales_total} purchases: the newest history plus every open balance. Totals above cover all rows.</p>`
+      : '';
+    salesContainer.innerHTML = truncationNote + sales.map(s => {
       const itemsText = (s.items || []).map(i => `${i.quantity}x ${i.item_name}`).join(', ');
       const hasDebt = s.credit_balance > 0.001;
       const methodTag = (s.payment_method === 'credit')
@@ -1067,7 +1209,6 @@ export function renderSalesHistory(sales) {
       </tr>
     `;
   }).join('');
-
 }
 
 export async function viewSaleDetails(saleId) {
@@ -1197,7 +1338,16 @@ function renderDashboard(s) {
   // KPI row
   $id('dash-revenue').textContent = fmtMoney(c.revenue);
   deltaTag($id('dash-revenue-delta'), s.deltas.revenue);
-  $id('dash-revenue-split').textContent = `${t('dash.parts', 'Parts')} ${fmtMoney(c.parts_revenue)} · ${t('dash.labor', 'Labor')} ${fmtMoney(c.labor_revenue)}`;
+  if ((c.labor_revenue || 0) > 0) {
+    $id('dash-revenue-split').textContent = `${t('dash.parts', 'Parts')} ${fmtMoney(c.parts_revenue)} · ${t('dash.labor', 'Labor')} ${fmtMoney(c.labor_revenue)}`;
+  } else {
+    const partsCost = Math.max(0, (c.revenue || 0) - (c.gross_profit || 0));
+    const marginPct = c.revenue > 0 ? Math.round(((c.gross_profit || 0) / c.revenue) * 100) : null;
+    $id('dash-revenue-split').textContent = [
+      `Cost ${fmtMoney(partsCost)}`,
+      marginPct !== null ? `${marginPct}% margin` : ''
+    ].filter(Boolean).join(' · ');
+  }
   $id('dash-sales').textContent = c.sale_count;
   deltaTag($id('dash-sales-delta'), s.deltas.sale_count);
   // Every return type is named, so count and money always agree with each
@@ -1262,6 +1412,30 @@ function renderDashboard(s) {
   const ageTxt = bk.last_backup_at
     ? (bk.age_hours >= 1 ? `${Math.round(bk.age_hours)}h ago` : 'in the last hour')
     : 'no backup file found';
+  const activeMode = (typeof S !== 'undefined' && S?.shopSettings?.business_type) || 'hybrid';
+  const cat = (typeof S !== 'undefined' && Array.isArray(S.inventoryItems) && S.inventoryItems.length)
+    ? S.inventoryItems
+    : ((typeof S !== 'undefined' && Array.isArray(S.posCatalog)) ? S.posCatalog : null);
+  const lowCheck = typeof isActionableLowStock === 'function'
+    ? isActionableLowStock
+    : (i => !i.archived && ((Number(i.stock_quantity) || 0) > 0
+      ? (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0)
+      : (i.ever_stocked !== undefined ? Boolean(i.ever_stocked) : (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0))));
+  let displayedLow = Number(st.low_stock_count) || 0;
+  let lowSubNote = 'at or below minimum, click to review';
+  if (cat && cat.length && activeMode !== 'hybrid' && typeof itemMatchesProfile === 'function') {
+    displayedLow = cat.filter(i => itemMatchesProfile(i, activeMode) && lowCheck(i)).length;
+    const otherLow = Math.max(0, (Number(st.low_stock_count) || 0) - displayedLow);
+    if (otherLow > 0) {
+      const modeNames = { phone: 'Phone Repair', pc: 'PC / Electronics', grocery: 'Grocery', retail: 'General Retail' };
+      lowSubNote = `in ${modeNames[activeMode] || 'Active'} profile (${otherLow} in other modules)`;
+    }
+  }
+  const unstockedCatalog = Number(st.unstocked_catalog_count) || 0;
+  if (lowSubNote === 'at or below minimum, click to review' && unstockedCatalog > 0) {
+    lowSubNote = `at or below min · ${unstockedCatalog} unstocked catalog`;
+  }
+
   $id('dash-standing').innerHTML = `
     <div class="kv${st.total_credit_outstanding > 0.001 ? ' kv--danger' : ''}">
       <span class="flex items-center gap-2"><i class="ph ph-credit-card w-4 h-4"></i>Utang outstanding</span>
@@ -1271,10 +1445,10 @@ function renderDashboard(s) {
       <span class="flex items-center gap-2"><i class="ph ph-package w-4 h-4"></i>Inventory value (retail)</span>
       <span class="text-right"><strong class="block">${fmtMoney(st.total_inventory_retail_value)}</strong><span class="foot-note">${st.total_parts_stock} ${st.total_parts_stock === 1 ? 'part' : 'parts'} on shelf</span></span>
     </div>
-    <button type="button" class="kv kv--link kv--warn" data-action="dash-low-stock"
+    <button type="button" class="kv kv--link${displayedLow > 0 ? ' kv--warn' : ''}" data-action="dash-low-stock"
       aria-label="Open inventory filtered to low stock parts">
       <span class="flex items-center gap-2"><i class="ph ph-warning w-4 h-4"></i>Low stock parts</span>
-      <span class="text-right"><strong class="block">${st.low_stock_count}</strong><span class="foot-note">at or below minimum, click to review</span></span>
+      <span class="text-right"><strong class="block">${displayedLow}</strong><span class="foot-note">${lowSubNote}</span></span>
     </button>
     <div class="kv${bk.stale ? ' kv--danger' : ''}">
       <span class="flex items-center gap-2"><i class="ph ph-floppy-disk w-4 h-4"></i>Backup ${bk.stale ? 'overdue' : 'current'}</span>
@@ -1285,13 +1459,25 @@ function renderDashboard(s) {
   renderDeadStock(s.dead_stock || []);
   renderReorder(s.reorder || []);
 
-  // Rail badge mirrors the standing KPI: the owner sees low stock without
-  // opening the inventory tab, and the count always matches the panel above.
+  // Rail badges mirror standing KPIs so staff see low stock, open utang, and
+  // overdue backups without switching tabs.
   const lowStockBadge = document.getElementById('nav-lowstock-badge');
   if (lowStockBadge) {
-    const low = Number(st.low_stock_count) || 0;
-    lowStockBadge.textContent = low;
-    lowStockBadge.classList.toggle('hidden', !(low > 0));
+    lowStockBadge.textContent = String(displayedLow);
+    lowStockBadge.classList.toggle('hidden', !(displayedLow > 0));
+  }
+  const debtorsBadge = document.getElementById('nav-debtors-badge');
+  if (debtorsBadge) {
+    const debtors = Number(st.total_debtors_count) || 0;
+    debtorsBadge.textContent = String(debtors);
+    debtorsBadge.classList.toggle('hidden', !(debtors > 0));
+  }
+  const reportsBadge = document.getElementById('nav-reports-badge');
+  if (reportsBadge) {
+    const overdue = Boolean(bk.stale);
+    reportsBadge.textContent = overdue ? '1' : '0';
+    reportsBadge.title = overdue ? 'Database backup overdue' : '';
+    reportsBadge.classList.toggle('hidden', !overdue);
   }
 }
 
@@ -1299,26 +1485,156 @@ function renderDashboard(s) {
 // they happened), driven by the seg control in the panel header.
 function renderTrend(s) {
   const profit = dashState.trendMode === 'profit';
-  const totalRefunds = (s.trend || []).reduce((sum, t) => sum + (t.refunded || 0), 0);
-  renderTrendChart($id('dash-trend'), (s.trend || []).map(t => {
-    let sub = `${t.count} sale${t.count === 1 ? '' : 's'}`;
-    if (!profit && t.refunded > 0) {
-      sub += ` · ${fmtMoney(t.refunded)} refunded`;
-    } else if (profit && t.refunded > 0) {
-      sub += ` · incl. -${fmtMoney(t.refunded)} refunds`;
+  const useHourly = s.days === 1 && Array.isArray(s.hourly_trend) && s.hourly_trend.length > 0;
+  let series = [];
+  let totalRefunds = 0;
+
+  const now = new Date();
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  if (useHourly) {
+    const hourLabels = ['12 AM', '2 AM', '4 AM', '6 AM', '8 AM', '10 AM', '12 PM', '2 PM', '4 PM', '6 PM', '8 PM', '10 PM'];
+    const blockNames = ['12-2 AM', '2-4 AM', '4-6 AM', '6-8 AM', '8-10 AM', '10 AM-12 PM', '12-2 PM', '2-4 PM', '4-6 PM', '6-8 PM', '8-10 PM', '10 PM-12 AM'];
+    const currentSlot = (!s.range?.to || s.range.to === todayIso) ? Math.floor(now.getHours() / 2) : -1;
+    const blocks = Array.from({ length: 12 }, (_, idx) => ({
+      label: hourLabels[idx],
+      range: blockNames[idx],
+      revenue: 0,
+      profit: 0,
+      cost: 0,
+      expenses: 0,
+      count: 0,
+      refunded: 0,
+      isCurrent: idx === currentSlot
+    }));
+    for (const h of s.hourly_trend) {
+      const hr = Math.max(0, Math.min(23, Number(h.hour ?? h.bucket) || 0));
+      const b = blocks[Math.floor(hr / 2)];
+      b.revenue += Number(h.revenue) || 0;
+      b.profit += Number(h.profit) || 0;
+      b.cost += Number(h.cost) || 0;
+      b.expenses += Number(h.expenses) || 0;
+      b.count += Number(h.count) || 0;
+      b.refunded += Number(h.refunded) || 0;
     }
-    return {
-      label: s.days >= 365 ? fmonth(t.bucket) : fday(t.bucket),
-      value: profit ? t.profit : t.revenue,
-      sub
-    };
-  }), { fmt: fmtMoney, title: profit ? 'Profit after refunds & expenses' : 'Revenue trend' });
+    totalRefunds = blocks.reduce((sum, b) => sum + b.refunded, 0);
+    series = blocks.map(b => {
+      let sub = `${b.range} · ${b.count} sale${b.count === 1 ? '' : 's'}`;
+      if (profit) {
+        if (b.revenue > 0) sub += ` · Rev ${fmtMoney(b.revenue)}`;
+        if (b.cost > 0) sub += ` · Cost -${fmtMoney(b.cost)}`;
+        if (b.refunded > 0) sub += ` · Ref -${fmtMoney(b.refunded)}`;
+        if (b.expenses > 0) sub += ` · Exp -${fmtMoney(b.expenses)}`;
+      } else {
+        if (b.cost > 0) sub += ` · Cost ${fmtMoney(b.cost)} · Net ${fmtMoney(b.profit)}`;
+        if (b.refunded > 0) sub += ` · -${fmtMoney(b.refunded)} ref`;
+        if (b.expenses > 0) sub += ` · -${fmtMoney(b.expenses)} exp`;
+      }
+      if (b.isCurrent) sub += ' · Now';
+      return { label: b.label, value: profit ? b.profit : b.revenue, sub, count: b.count, isCurrent: b.isCurrent };
+    });
+  } else {
+    let rows = s.trend || [];
+    if (s.days > 1 && s.days <= 90 && s.days < 365 && s.range?.from && s.range?.to && rows.length > 0) {
+      const byBucket = new Map(rows.map(r => [r.bucket, r]));
+      const filled = [];
+      const cur = new Date(`${s.range.from}T00:00:00`);
+      const end = new Date(`${s.range.to}T00:00:00`);
+      for (let guard = 0; cur <= end && guard <= 92; cur.setDate(cur.getDate() + 1), guard++) {
+        const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
+        filled.push(byBucket.get(key) || { bucket: key, revenue: 0, profit: 0, cost: 0, expenses: 0, count: 0, refunded: 0 });
+      }
+      if (filled.length > 0) rows = filled;
+    }
+    totalRefunds = rows.reduce((sum, t) => sum + (t.refunded || 0), 0);
+    series = rows.map(t => {
+      const cost = Number(t.cost) || 0;
+      const exp = Number(t.expenses) || 0;
+      const ref = Number(t.refunded) || 0;
+      const rev = Number(t.revenue) || 0;
+      let sub = `${t.count} sale${t.count === 1 ? '' : 's'}`;
+      if (profit) {
+        if (rev > 0) sub += ` · Rev ${fmtMoney(rev)}`;
+        if (cost > 0) sub += ` · Cost -${fmtMoney(cost)}`;
+        if (ref > 0) sub += ` · Ref -${fmtMoney(ref)}`;
+        if (exp > 0) sub += ` · Exp -${fmtMoney(exp)}`;
+      } else {
+        if (cost > 0) sub += ` · Cost ${fmtMoney(cost)} · Net ${fmtMoney(t.profit)}`;
+        if (ref > 0) sub += ` · -${fmtMoney(ref)} ref`;
+        if (exp > 0) sub += ` · -${fmtMoney(exp)} exp`;
+      }
+      const isCurrent = t.bucket === todayIso && s.days < 365;
+      if (isCurrent) sub += ' · Today';
+      return {
+        label: s.days >= 365 ? fmonth(t.bucket) : fday(t.bucket),
+        value: profit ? t.profit : t.revenue,
+        sub,
+        count: t.count,
+        isCurrent
+      };
+    });
+  }
+
+  const c = s.current;
+  const st = s.standing || {};
+  let trendLowCount = Number(st.low_stock_count) || 0;
+  if (typeof S !== 'undefined' && S?.shopSettings?.business_type && S.shopSettings.business_type !== 'hybrid' && typeof itemMatchesProfile === 'function') {
+    const cat = (Array.isArray(S.inventoryItems) && S.inventoryItems.length) ? S.inventoryItems : S.posCatalog;
+    if (Array.isArray(cat) && cat.length) {
+      const lowCheck = typeof isActionableLowStock === 'function'
+        ? isActionableLowStock
+        : (i => !i.archived && ((Number(i.stock_quantity) || 0) > 0
+          ? (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0)
+          : (i.ever_stocked !== undefined ? Boolean(i.ever_stocked) : (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0))));
+      trendLowCount = cat.filter(i => itemMatchesProfile(i, S.shopSettings.business_type) && lowCheck(i)).length;
+    }
+  }
+  const hasLabor = Boolean(c && (c.labor_revenue || 0) > 0);
+  const partsCost = c && c.revenue != null && c.gross_profit != null ? Math.max(0, c.revenue - c.gross_profit) : null;
+  const flows = [];
+  if (c) {
+    if ((c.credit_issued || 0) > 0 || (c.credit_settled || 0) > 0) {
+      flows.push(`Utang +${fmtMoney(c.credit_issued || 0)} / ${fmtMoney(c.credit_settled || 0)} paid`);
+    }
+    if ((c.refunded_total || 0) > 0 || (c.replacement_cost || 0) > 0) {
+      const rmaOut = (c.refunded_total || 0) + (c.replacement_cost || 0);
+      flows.push(`RMA -${fmtMoney(rmaOut)}`);
+    }
+    if ((c.expenses_total || 0) > 0) flows.push(`Exp -${fmtMoney(c.expenses_total)}`);
+  }
+  if (trendLowCount > 0) flows.push(`${trendLowCount} low stock`);
+  if (Array.isArray(s.dead_stock) && s.dead_stock.length > 0) flows.push(`${s.dead_stock.length} dead stock`);
+
+  const meta = {
+    avgLabel: useHourly ? 'Active 2h avg' : (s.days >= 365 ? 'Monthly avg' : 'Daily avg'),
+    splitLabel: c
+      ? (profit ? 'Window net' : (hasLabor ? 'Parts / Labor' : (partsCost !== null ? 'Cost / Net' : 'Parts / Net')))
+      : '',
+    split: c
+      ? (profit
+          ? `${fmtMoney(c.net_profit || 0)}${totalRefunds > 0 ? ` (-${fmtMoney(totalRefunds)} ref)` : ''}`
+          : (hasLabor
+              ? `${fmtMoney(c.parts_revenue || 0)} / ${fmtMoney(c.labor_revenue || 0)}`
+              : (partsCost !== null
+                  ? `${fmtMoney(partsCost)} / ${fmtMoney(c.net_profit || 0)}`
+                  : `${fmtMoney(c.parts_revenue || 0)} / ${fmtMoney(c.net_profit || 0)}`)))
+      : '',
+    flows
+  };
+
+  renderTrendChart($id('dash-trend'), series, { fmt: fmtMoney, title: profit ? 'Profit after refunds & expenses' : 'Revenue trend', meta });
   $id('dash-trend-title').textContent = profit ? 'Profit after refunds & expenses' : 'Revenue trend';
   $id('dash-trend-hint').textContent = (profit
-    ? 'Profit after refunds, replacement parts, and operating expenses; each lands on the date it happened.'
-    : (totalRefunds > 0
-        ? `Gross sales volume (${fmtMoney(totalRefunds)} refunded in this window; click 'Net profit' for bottom line).`
-        : 'Gross sales volume per day.'))
+    ? (useHourly
+        ? '2-hour intraday net after refunds and operating expenses.'
+        : 'Profit after refunds, replacement parts, and operating expenses; each lands on the date it happened.')
+    : (useHourly
+        ? (totalRefunds > 0
+            ? `2-hour intraday sales (${fmtMoney(totalRefunds)} refunded today; click 'Net profit' for bottom line).`
+            : '2-hour intraday gross sales today.')
+        : (totalRefunds > 0
+            ? `Gross sales volume (${fmtMoney(totalRefunds)} refunded in this window; click 'Net profit' for bottom line).`
+            : 'Gross sales volume per day.')))
     + (s.period === '365d' ? ' Monthly buckets.' : '');
 }
 
@@ -1390,18 +1706,25 @@ const REORDER_PREVIEW = 5;
 function renderReorder(rows) {
   const box = $id('dash-reorder');
   if (!box) return;
+  const activeMode = (typeof S !== 'undefined' && S?.shopSettings?.business_type) || 'hybrid';
+  const filtered = (Array.isArray(rows) ? rows : []).filter(r =>
+    activeMode === 'hybrid' ||
+    typeof itemMatchesProfile !== 'function' ||
+    (!r.brand && !r.part_type && !r.model_name) ||
+    itemMatchesProfile(r, activeMode)
+  );
   const count = $id('dash-reorder-count');
   if (count) {
-    count.textContent = rows.length ? `${rows.length} part${rows.length === 1 ? '' : 's'}` : '';
-    count.classList.toggle('hidden', !rows.length);
+    count.textContent = filtered.length ? `${filtered.length} part${filtered.length === 1 ? '' : 's'}` : '';
+    count.classList.toggle('hidden', !filtered.length);
   }
-  if (!rows.length) {
+  if (!filtered.length) {
     box.innerHTML = emptyPanel('check-circle', 'Nothing to reorder', 'Stock levels and days of cover are healthy.');
     return;
   }
   // Collapsed shows a glanceable handful; See all opens the full list and the
   // card's own scroll cap keeps it from stretching the page (the original bug).
-  const shown = dashState.reorderExpanded ? rows : rows.slice(0, REORDER_PREVIEW);
+  const shown = dashState.reorderExpanded ? filtered : filtered.slice(0, REORDER_PREVIEW);
   box.innerHTML = shown.map(r => `
     <div class="kv">
       <div class="min-w-0">
@@ -1413,8 +1736,8 @@ function renderReorder(rows) {
         <span class="block foot-note font-mono">${r.units_sold} sold this window</span>
         ${r.suggested_qty > 0 ? `<button type="button" class="btn-mini mt-1" data-action="receive-part" data-part-id="${r.id}" data-suggested="${r.suggested_qty}" data-cost="${r.cost_price || 0}"><i class="ph ph-package w-3.5 h-3.5"></i> Receive ${r.suggested_qty}</button>` : ''}
       </div>
-    </div>`).join('') + (rows.length > REORDER_PREVIEW
-      ? `<button type="button" class="linkish w-full text-center" data-dash-action="toggle-reorder">${dashState.reorderExpanded ? 'See less' : `See all ${rows.length} parts`}</button>`
+    </div>`).join('') + (filtered.length > REORDER_PREVIEW
+      ? `<button type="button" class="linkish w-full text-center" data-dash-action="toggle-reorder">${dashState.reorderExpanded ? 'See less' : `See all ${filtered.length} parts`}</button>`
       : '');
 }
 
@@ -1488,8 +1811,17 @@ function wireDashboardControls() {
     const qty = Number(await inputModal('Quantity received', { inputType: 'number', step: 'any', defaultValue: btn.dataset.suggested, yes: 'Next' }));
     if (!Number.isFinite(qty) || qty <= 0) return;
     const line = { id: Number(btn.dataset.partId), quantity: qty, op_id: globalThis.crypto?.randomUUID?.() || `receive-${Date.now()}` };
+    const oldCost = Number(btn.dataset.cost) || 0;
     const cost = await inputModal('Unit cost, blank keeps the current cost', { inputType: 'number', step: 'any', defaultValue: btn.dataset.cost, yes: 'Receive' });
     if (cost !== null && String(cost).trim() !== '' && Number(cost) >= 0) line.unit_cost = Number(cost);
+    if (line.unit_cost !== undefined && oldCost > 0 && line.unit_cost > oldCost * 1.05) {
+      const jumpPct = Math.round(((line.unit_cost - oldCost) / oldCost) * 100);
+      const ok = await confirmModal(
+        `Supplier cost jumped ${fmtMoney(oldCost)} to ${fmtMoney(line.unit_cost)} (+${jumpPct}%). Proceed with receive and check retail pricing?`,
+        { title: 'Supplier Cost Jump Alert', yes: 'Receive anyway' }
+      );
+      if (!ok) return;
+    }
     try {
       const res = await fetch('/api/inventory/receive', {
         method: 'POST',
@@ -1503,6 +1835,8 @@ function wireDashboardControls() {
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not receive the stock');
       showToast('Stock received.', 'success');
       loadDashboardData();
+      loadPosCatalog();
+      loadInventoryTable();
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -1584,10 +1918,9 @@ function wireDashboardControls() {
   const canPoll = () => typeof document !== 'undefined' && !document.hidden && S.currentTab === 'dashboard' && hasElevation()
     && (!dashState.date || dashState.date === localToday());
   if (typeof setInterval !== 'undefined') {
-    const pollTimer = setInterval(() => {
+    setInterval(() => {
       if (canPoll()) loadDashboardData({ silent: true });
     }, 20000);
-    if (pollTimer && typeof pollTimer.unref === 'function') pollTimer.unref();
   }
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('visibilitychange', () => {
@@ -1610,9 +1943,12 @@ export async function loadDashboardData(opts = {}) {
   if (!silent) syncPeriodUi();
   if (typeof syncCloudUi === 'function') syncCloudUi();
   try {
+    loadDashboardData._silentTicks = silent ? (loadDashboardData._silentTicks || 0) + 1 : 0;
+    const litePoll = silent && Boolean(lastDash) && (loadDashboardData._silentTicks % 3 !== 0);
     const qs = new URLSearchParams({ period: dashState.period });
     if (dashState.date) qs.set('date', dashState.date);
     if (dashState.period === 'custom' && dashState.from) qs.set('from', dashState.from);
+    if (litePoll) qs.set('lite', '1');
     const res = await fetch('/api/dashboard?' + qs);
     if (res.status === 403) {
       if (!silent && S.currentTab === 'dashboard') {
@@ -1623,9 +1959,15 @@ export async function loadDashboardData(opts = {}) {
     if (!res.ok) throw new Error('Reports unavailable');
     const stats = await res.json();
     if (request !== dashboardRequest) return;
+    if (litePoll && lastDash) {
+      if (!stats.products) stats.products = lastDash.products;
+      if (!stats.dead_stock) stats.dead_stock = lastDash.dead_stock;
+      if (!stats.reorder) stats.reorder = lastDash.reorder;
+      if (!stats.backup) stats.backup = lastDash.backup;
+    }
     lastDash = stats;
     renderDashboard(stats);
-    loadExpenses(stats.range?.from, stats.range?.to);
+    if (!litePoll) loadExpenses(stats.range?.from, stats.range?.to);
     setDashFreshness(true);
     if (!silent) {
       // Custom ranges carry their own length; /api/exceptions caps days at 365.
@@ -1778,11 +2120,15 @@ export async function loadDayClose() {
       </table>
       ${shiftsBreakdown}
       ${d.stored
-        ? `<p class="foot-note mt-2">Closed by ${escHtml(d.stored.closed_by || 'a manager')}: counted ${fmtMoney(d.stored.counted_cash)}, variance ${fmtMoney(d.stored.variance)}, ${escHtml(d.stored.status)}. This day is signed; it is not counted again.</p>`
+        ? `<div class="flex flex-wrap items-center justify-between gap-2 mt-2">
+             <p class="foot-note">Closed by ${escHtml(d.stored.closed_by || 'a manager')}: counted ${fmtMoney(d.stored.counted_cash)}, variance ${fmtMoney(d.stored.variance)}, ${escHtml(d.stored.status)}. This day is signed; it is not counted again.</p>
+             <button type="button" class="btn-mini shrink-0" data-action="print-z-read" title="Print 58mm/80mm Z-Read handover slip"><i class="ph ph-printer w-3.5 h-3.5"></i> Print Z-Read</button>
+           </div>`
         : `<div class="flex items-center gap-2 mt-2">
              <label class="sr-only" for="day-close-counted">Counted cash takings for the day, excluding the opening float</label>
              <input type="number" id="day-close-counted" min="0" step="0.01" value="${prefillVal}" placeholder="Counted cash (excl. float)" class="flex-1 px-2 py-1 text-xs font-mono" title="Count today's cash takings only. Money left in the drawer overnight is not part of the expected figure and must not be counted here.">
              <button type="button" class="btn-primary" data-action="day-close-submit">Close ${escHtml(d.day)}</button>
+             <button type="button" class="btn-mini shrink-0" data-action="print-z-read" title="Print current Z-Read snapshot"><i class="ph ph-printer w-3.5 h-3.5"></i> Z-Read</button>
            </div>
            <p class="foot-note">Count today's cash takings only. ${prefillVal !== '' ? `Prefilled from closed shift count (${fmtMoney(prefillVal)}).` : 'Excluding opening float left in drawer.'}</p>`}`;
   } catch (err) {
@@ -1830,6 +2176,22 @@ async function loadExpenses(from, to) {
 
 let dayCloseInFlight = false;
 
+export async function printDayZRead(dateOverride = null) {
+  if (!hasElevation()) {
+    requireManagerPin('Enter manager PIN to print Z-Read', () => printDayZRead(dateOverride));
+    return;
+  }
+  const day = dateOverride || document.getElementById('day-close-date')?.value || localToday();
+  try {
+    const res = await fetch(`/api/reconcile/${encodeURIComponent(day)}`);
+    if (!res.ok) throw new Error('Could not load day summary');
+    const summary = await res.json();
+    await printZReadSlip(summary);
+  } catch (err) {
+    showToast(`Z-Read print error: ${err.message}`, 'error');
+  }
+}
+
 export async function submitDayClose() {
   if (dayCloseInFlight) return;
   const dateEl = document.getElementById('day-close-date');
@@ -1855,6 +2217,7 @@ export async function submitDayClose() {
       : `Day ${data.day} closed with a ${fmtMoney(data.variance)} variance`, data.status === 'balanced' ? 'success' : 'warning');
     loadDayClose();
     loadExceptions(1, day);
+    printDayZRead(data.day).catch(() => {});
   } catch (err) {
     showToast(`Error: ${err.message}`, 'error');
   } finally {
@@ -2111,10 +2474,10 @@ function setCheckLoading(loading) {
     const label = checkBtn.querySelector('span');
     if (loading) {
       if (icon) icon.className = 'ph ph-arrows-clockwise w-3.5 h-3.5 animate-spin';
-      if (label) label.textContent = 'Checking…';
+      if (label) label.textContent = t('update.checking', 'Checking…');
     } else {
       if (icon) icon.className = 'ph ph-arrows-clockwise w-3.5 h-3.5';
-      if (label) label.textContent = 'Check for updates';
+      if (label) label.textContent = t('update.check_btn', 'Check for updates');
     }
   }
 }
@@ -2227,7 +2590,7 @@ export async function checkForAppUpdates(silent = false) {
         statusEl.textContent = data.checkError;
         statusEl.className = 'foot-note text-amber-500';
       }
-      if (!silent) showToast(data.checkError, 'warn');
+      if (!silent) showToast(data.checkError, 'warning');
       return;
     }
 
@@ -2432,6 +2795,7 @@ function showUpdateHandoffStalled(releaseUrl, waitedS) {
         <div style="font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--txt-3); margin-bottom: 6px;">TechParts POS • Update Handoff</div>
         <h2 style="font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; color: var(--txt); margin: 0 0 8px 0;">The register has not come back</h2>
         <p style="color: var(--txt-3); font-size: 0.8125rem; line-height: 1.5; margin: 0 0 12px 0;">Nothing answered here for ${waitedS} seconds. Start TechParts POS again and press Update Now to retry the swap.</p>
+        <p style="color: var(--txt-3); font-size: 0.8125rem; line-height: 1.5; margin: 0 0 12px 0;">If the app will not start at all, the swap stopped halfway: in the install folder, rename <strong>TechPartsPOS.exe.old</strong> to <strong>TechPartsPOS.exe</strong>, then start it and press Update Now.</p>
         <div style="color: var(--txt-3); font-size: 0.75rem; font-family: var(--font-numeric, monospace); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 0 0 16px 0; word-break: break-all; text-align: left;">
           <span style="display: block; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--txt-4); margin-bottom: 2px;">Log location</span>
           ${S.serviceMode ? 'C:\\ProgramData\\TechPartsPOS\\updates\\TechPartsPOS_update.handoff.log' : '%LOCALAPPDATA%\\TechPartsPOS\\TechPartsPOS_update.handoff.log'}

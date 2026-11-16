@@ -364,6 +364,11 @@
     if (document.hidden) {
       stopPolling();
     } else if (token && !$('view-report').hidden) {
+      // Judge the pill from the last good fetch before the first new one
+      // lands: a backgrounded tab must not read "Live" over minutes-old
+      // data while the refresh is still in flight (11-15 audit #59).
+      var age = lastOkAt ? (Date.now() - lastOkAt) : Infinity;
+      if (age > POLL_MS) setOnline(false);
       startPolling();
       refresh();
     }

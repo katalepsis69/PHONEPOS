@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('path');
 const fs = require('fs');
 const test = require('node:test');
+const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 const { serverTest, ensurePinChanged } = require('./helper');
 const { createInventoryItem } = require('../src/inventory');
@@ -944,6 +945,73 @@ serverTest('a failed sync push is visible in /api/sync/status and the log', asyn
   assert.match(log, /sync: push failed/, 'the failure streak lands in pos-server.log');
 });
 
+test('the sync failure backoff doubles per failure, caps at 300s, and resets on success', () => {
+  // The behavioral sibling above pins failure -> backoff + log. Watching the
+  // ladder actually climb needs a 30s wait between failures, too slow for the
+  // suite, so pin the rungs at source inside the sync agent region.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  const agent = src.slice(src.indexOf('--- Cloud sync agent'), src.indexOf('const server = http.createServer'));
+  assert.match(agent, /let syncBackoffMs = 30000;/, 'the first retry waits 30s');
+  assert.match(agent, /syncNotBefore = Date\.now\(\) \+ syncBackoffMs;\s*syncBackoffMs = Math\.min\(syncBackoffMs \* 2, 300000\);/,
+    'each failure schedules the current rung, then doubles toward the 300s cap');
+  assert.match(agent, /const r = await drainOutbox\(db\);\s*syncBackoffMs = 30000;\s*syncNotBefore = 0;\s*syncLastError = null;/,
+    'a successful drain resets the ladder and the error');
+});
+
+test('direct and portable runs bind loopback unless HOST is explicit', () => {
+  // The entry block only runs as main, so pin it at source: the report
+  // namespace carries customer data and exposure must be an operator decision.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  const entry = src.slice(src.indexOf('const mode = resolveLaunchMode();'), src.indexOf('module.exports'));
+  const direct = entry.slice(entry.indexOf('} else {'));
+  assert.match(direct, /if \(!process\.env\.HOST\) process\.env\.HOST = '127\.0\.0\.1';/, 'direct run defaults to loopback');
+  assert.ok(!direct.includes('0.0.0.0'), 'no auto-bind to every interface');
+  assert.ok(!direct.includes('POS_LAN_REPORT_ACK'), 'no auto-ack of the LAN report gate');
+});
+
+test('logLine retries a failed append against the temp volume', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  const start = src.indexOf('function logFilePath()');
+  const end = src.indexOf('// SKU UNIQUE');
+  const code = src.slice(start, end);
+  const writes = [];
+  const ctx = vm.createContext({
+    console: { log() {} },
+    path: require('node:path'),
+    os: { tmpdir: () => 'TMPDIR' },
+    getBaseDir: () => 'PRIMARY',
+    isTestEnv: () => false,
+    fs: {
+      accessSync() {},
+      statSync: () => ({ size: 0 }),
+      unlinkSync() {},
+      renameSync() {},
+      appendFileSync(file, line) {
+        if (file.startsWith('PRIMARY')) throw new Error('disk full');
+        writes.push({ file, line });
+      },
+    },
+  });
+  vm.runInContext(code, ctx);
+  ctx.logLine('the one line that mattered');
+  assert.equal(writes.length, 1, 'the failed primary append fell back to the temp log');
+  assert.match(writes[0].file, /TMPDIR/);
+  assert.match(writes[0].line, /the one line that mattered/);
+});
+
+serverTest('the print route refuses placeholder identity server-side, test slip exempt', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
+  db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('gcash_name', 'TechParts Repair & POS')").run();
+  const headers = { ...auth, 'Content-Type': 'application/json' };
+  const res = await fetch(`${baseUrl}/api/print`, { method: 'POST', headers, body: JSON.stringify({ kind: 'sale', sale_id: 1 }) });
+  assert.strictEqual(res.status, 400, 'a direct API caller cannot print demo-shop paper');
+  const body = await res.json();
+  assert.match(body.error, /placeholder/i);
+  assert.strictEqual(body.fallback, true);
+  const testRes = await fetch(`${baseUrl}/api/print`, { method: 'POST', headers, body: JSON.stringify({ kind: 'test' }) });
+  assert.notStrictEqual(testRes.status, 400, 'the test slip is exempt from the identity gate');
+});
+
 // The 2026-11-09 audit: the cloud spends the pairing code before it answers,
 // so a response lost to the pair route's 15 s abort can leave the shop paired
 // on the cloud with a token the register never received. A behavioral test
@@ -1306,4 +1374,59 @@ test('runInstalledLauncher default budget covers a Defender first-run scan (60s,
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
   assert.match(src, /const totalTimeoutMs = typeof hooks\.totalTimeoutMs === 'number' \? hooks\.totalTimeoutMs : 60000;/);
   assert.doesNotMatch(src, /hooks\.totalTimeoutMs : 15000;/, 'the old 15s default must stay gone');
+});
+
+serverTest('pair-cloud retries a 409 under a suffixed identity (cloned register)', async (baseUrl, db, auth) => {
+  auth = await ensurePinChanged(baseUrl, auth);
+  const seen = [];
+  const stub = require('node:http').createServer((req, res) => {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      seen.push(JSON.parse(body));
+      if (seen.length === 1) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Shop 'x' is already paired. Rotate its credential on the server, or pair under a different name." }));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, shop_id: seen[1].shop_name, sync_token: 'tok-after-409' }));
+      }
+    });
+  });
+  await new Promise(r => stub.listen(0, '127.0.0.1', r));
+  try {
+    const setRes = await fetch(`${baseUrl}/api/settings`, {
+      method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sync_url: `http://127.0.0.1:${stub.address().port}` })
+    });
+    assert.equal(setRes.status, 200);
+    const res = await fetch(`${baseUrl}/api/settings/pair-cloud`, {
+      method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: '123456', sync_url: `http://127.0.0.1:${stub.address().port}` })
+    });
+    assert.equal(res.status, 200, 'the clone pairs instead of dead-ending on the 409');
+    assert.equal(seen.length, 2, 'exactly one retry');
+    assert.notEqual(seen[1].shop_name, seen[0].shop_name, 'the retry uses a suffixed identity');
+    assert.ok(seen[1].shop_name.startsWith(seen[0].shop_name), 'the suffix extends the stable id');
+    const token = db.prepare("SELECT value FROM shop_settings WHERE key = 'sync_token'").get().value;
+    assert.equal(token, 'tok-after-409');
+    const shopId = db.prepare("SELECT value FROM shop_settings WHERE key = 'sync_shop_id'").get().value;
+    assert.equal(shopId, seen[1].shop_name, 'the register adopts the suffixed identity');
+  } finally {
+    stub.close();
+  }
+});
+
+serverTest('GET /api/settings never leaks the trial seal secret', async (baseUrl, db, auth) => {
+  // Warm up the trial mint, then prove the stored secret is absent from the payload.
+  const warmup = await fetch(`${baseUrl}/api/settings`, { headers: auth });
+  assert.equal(warmup.status, 200);
+  await warmup.json();
+  const stored = db.prepare("SELECT value FROM shop_settings WHERE key = 'trial_seal_secret'").get();
+  assert.ok(stored && stored.value, 'the per-install trial secret was minted');
+  const res = await fetch(`${baseUrl}/api/settings`, { headers: auth });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(!Object.prototype.hasOwnProperty.call(body, 'trial_seal_secret'), 'the per-install trial secret must not leave via /api/settings');
+  assert.ok(!Object.prototype.hasOwnProperty.call(body, 'sync_token'));
 });

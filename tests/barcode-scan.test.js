@@ -45,6 +45,7 @@ function harness({ tab = 'pos', item = SCANNED, modal = null, gate = null, filte
 
   const ctx = vm.createContext({
     S,
+    t: (k, fb) => fb || k,
     // A real Date subclass: refusal records call new Date().toISOString(), a
     // plain { now } stub cannot satisfy.
     Date: class extends Date { static now() { return clock.t; } },
@@ -206,6 +207,7 @@ test('opening a new repair leaves the caret where a scan is useful', async () =>
   const S = { saleInFlight: false, cart: [] };
   const ctx = vm.createContext({
     S,
+    t: (k, fb) => fb || k,
     resetRepairCounter: () => {},
     switchTab: () => {},
     confirmModal: async () => true,
@@ -321,6 +323,7 @@ function scanCtx({ overlay = null } = {}) {
   let kd = null;
   const ctx = vm.createContext({
     S, Date: { now: () => state.t },
+    t: (k, fb) => fb || k,
     window: { addEventListener: (type, fn) => { if (type === 'keydown') kd = fn; } },
     setTimeout: (fn) => { timers.push(fn); return timers.length; },
     clearTimeout: () => {},
@@ -382,4 +385,12 @@ test('a refused scan lands in the session refusal list for after-the-fact review
   const writes2 = h2.calls.filter(([k]) => k === 'pos_refused_scans');
   assert.equal(writes2.length, 1);
   assert.equal(JSON.parse(writes2[0][1])[0].reason, 'pos.refuse_out');
+});
+
+test('the settle timer restores the hijacked field even when the gate refuses (#55)', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'js', 'views', 'pos.js'), 'utf8');
+  const flush = src.slice(src.indexOf('function flushPendingScan'), src.indexOf('function scheduleScan'));
+  const restoreAt = flush.indexOf('if (scan.restore) scan.restore();');
+  const gateAt = flush.indexOf("if (S.currentTab !== 'pos'");
+  assert.ok(restoreAt > -1 && gateAt > -1 && restoreAt < gateAt, 'scan characters must not stay visible behind a modal');
 });

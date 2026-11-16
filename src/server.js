@@ -87,7 +87,30 @@ function samplePreviewSale() {
     returns: [],
   };
 }
-const { listPrinters, defaultPrinter, encode, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, renderPickupReadySlip, DEVICE_LINE_PREFIX } = printer;
+const { listPrinters, defaultPrinter, encode, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, renderPickupReadySlip, renderZReadSlip, DEVICE_LINE_PREFIX } = printer;
+
+function buildReconcileSummary(db, day) {
+  const dayShifts = db.prepare(`
+    SELECT id, staff_id, staff_name, opened_at, opening_float, closed_at, counted_cash, expected_cash, variance, status
+    FROM shifts
+    WHERE date(opened_at, 'localtime') = ? OR date(closed_at, 'localtime') = ?
+    ORDER BY id ASC
+  `).all(day, day);
+  const openShift = db.prepare("SELECT id, staff_id, staff_name, opened_at, opening_float, status FROM shifts WHERE status = 'open' LIMIT 1").get() || null;
+  const closedDayShifts = dayShifts.filter(s => s.status === 'closed');
+  const totalShiftVariance = money(closedDayShifts.reduce((acc, s) => acc + (s.variance || 0), 0));
+  const totalShiftCounted = money(closedDayShifts.reduce((acc, s) => acc + (s.counted_cash - (s.opening_float || 0)), 0));
+  const expensesRow = db.prepare("SELECT COALESCE(SUM(amount), 0.0) AS s FROM expenses WHERE date(created_at, 'localtime') = ?").get(day);
+  return {
+    ...getDayBuckets(db, day),
+    stored: getDayReconciliation(db, day),
+    shifts: dayShifts,
+    open_shift: openShift,
+    total_shift_variance: totalShiftVariance,
+    total_shift_counted: totalShiftCounted,
+    expenses_total: money(expensesRow?.s || 0)
+  };
+}
 const { resetDemoData, seedInitialParts } = require('./seed');
 const { checkForUpdates, applyUpdate, getUpdateProgress, consumeHandoffStatus, setUpdateLogSink, defaultUpdateStagingDir, CURRENT_VERSION } = require('./updater');
 // [update] lines belong in pos-server.log, which console.log cannot reach in the packaged exe.
@@ -199,27 +222,42 @@ function logFilePath() {
     return path.join(os.tmpdir(), `pos-server-test-${process.pid}.log`);
   }
   const base = getBaseDir();
+  if (_cachedLogFile && _cachedLogBase === base) return _cachedLogFile;
   try {
     fs.accessSync(base, fs.constants.W_OK);
-    return path.join(base, 'pos-server.log');
+    _cachedLogBase = base;
+    _cachedLogFile = path.join(base, 'pos-server.log');
+    return _cachedLogFile;
   } catch (_) {
     return path.join(os.tmpdir(), 'pos-server.log');
   }
 }
+// State lives right next to logFilePath/logLine because tests/server.test.js slices this region into a VM.
+let _cachedLogBase = null;
+let _cachedLogFile = null;
+let _logWritesSinceStat = 25;
 function logLine(msg) {
   console.log(msg);
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
   try {
     const file = logFilePath();
     // One rollover generation is all a register needs; without any, the log
-    // grows unbounded on a machine left running for months.
-    try {
-      if (fs.statSync(file).size > 5 * 1024 * 1024) {
-        try { fs.unlinkSync(`${file}.1`); } catch (_) {}
-        fs.renameSync(file, `${file}.1`);
-      }
-    } catch (_) {}
-    fs.appendFileSync(file, `[${new Date().toISOString()}] ${msg}\n`);
-  } catch (_) {}
+    // grows unbounded on a machine left running for months. Check size every 25 writes.
+    if (++_logWritesSinceStat >= 25) {
+      _logWritesSinceStat = 0;
+      try {
+        if (fs.statSync(file).size > 5 * 1024 * 1024) {
+          try { fs.unlinkSync(`${file}.1`); } catch (_) {}
+          fs.renameSync(file, `${file}.1`);
+        }
+      } catch (_) {}
+    }
+    fs.appendFileSync(file, line);
+  } catch (_) {
+    // Disk full or a locked log must not eat the one line that mattered:
+    // retry once against the temp volume.
+    try { fs.appendFileSync(path.join(os.tmpdir(), 'pos-server.log'), line); } catch (_) {}
+  }
 }
 
 // SKU UNIQUE collisions are a user error (that barcode is taken), not a 400.
@@ -360,6 +398,10 @@ function createServer(opts = {}) {
     if (syncTick.unref) syncTick.unref();
   }
 
+  const SLOW_API_MS = 100;
+  let _lanIpCache = null;
+  let _lanIpCachedAt = 0;
+
   const server = http.createServer(async (req, res) => {
     // The cloud mirror's header wall, mirrored from cloud/server.js minus HSTS
     // (the register has no TLS-proxy mode). One block here covers sendJson and
@@ -383,6 +425,25 @@ function createServer(opts = {}) {
     }
     const pathname = url.pathname;
     const method = req.method;
+    const reqStartNs = process.hrtime.bigint();
+    if (pathname.startsWith('/api/')) {
+      const origWriteHead = res.writeHead.bind(res);
+      let recordedTiming = false;
+      const recordTiming = () => {
+        if (recordedTiming) return;
+        recordedTiming = true;
+        const elapsedMs = Number(process.hrtime.bigint() - reqStartNs) / 1e6;
+        if (!res.headersSent) res.setHeader('Server-Timing', `app;dur=${elapsedMs.toFixed(1)}`);
+        if (!isTestEnv() && elapsedMs >= SLOW_API_MS) {
+          logLine(`[perf] slow ${method} ${pathname} (${elapsedMs.toFixed(1)}ms)`);
+        }
+      };
+      res.writeHead = (...args) => {
+        recordTiming();
+        return origWriteHead(...args);
+      };
+      res.on('finish', recordTiming);
+    }
     // Assigned inside the try once the session resolves; the catch-all error
     // log reads it, so the declaration lives where the catch can see it.
     let ctx = null;
@@ -767,16 +828,22 @@ function createServer(opts = {}) {
         // Cloud sync state for the topbar chip. Not secret: pending counts and
         // timestamps only, no URLs or tokens.
         if (pathname === '/api/sync/status' && method === 'GET') {
-          let lanIp = null;
-          try {
-            const nets = os.networkInterfaces();
-            for (const list of Object.values(nets)) {
-              for (const iface of (list || [])) {
-                if (iface && iface.family === 'IPv4' && !iface.internal) { lanIp = iface.address; break; }
+          const now = Date.now();
+          if (now - _lanIpCachedAt >= 30000) {
+            let foundIp = null;
+            try {
+              const nets = os.networkInterfaces();
+              for (const list of Object.values(nets)) {
+                for (const iface of (list || [])) {
+                  if (iface && iface.family === 'IPv4' && !iface.internal) { foundIp = iface.address; break; }
+                }
+                if (foundIp) break;
               }
-              if (lanIp) break;
-            }
-          } catch (_) {}
+            } catch (_) {}
+            _lanIpCache = foundIp;
+            _lanIpCachedAt = now;
+          }
+          const lanIp = _lanIpCache;
           const lanEnabled = !isLoopbackHost(String(process.env.HOST || '127.0.0.1')) && process.env.POS_LAN_REPORT_ACK === '1';
           const portNum = server.address()?.port || Number(process.env.PORT) || 3000;
           const baseStatus = getSyncStatus(db);
@@ -988,16 +1055,29 @@ function createServer(opts = {}) {
           const shopIdentity = getShopId(db) || shopSettings.owner_name || 'Counter 1';
           const friendlyName = shopSettings.owner_name || shopSettings.gcash_name || 'Counter 1';
           let cloudRes;
+          let pairShopName = shopIdentity;
           try {
-            cloudRes = await fetch(targetUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ code: cleanCode, shop_name: shopIdentity, register_name: friendlyName }),
-              // Without this a hung VPS holds the settings save open for
-              // undici's own ~5-minute header timeout while the manager stares
-              // at "Connecting...".
-              signal: AbortSignal.timeout(15000),
-            });
+            for (let pairAttempt = 0; pairAttempt < 2; pairAttempt++) {
+              cloudRes = await fetch(targetUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: cleanCode, shop_name: pairShopName, register_name: friendlyName }),
+                // Without this a hung VPS holds the settings save open for
+                // undici's own ~5-minute header timeout while the manager stares
+                // at "Connecting...".
+                signal: AbortSignal.timeout(15000),
+              });
+              // A register cloned from an existing DB image carries the same
+              // stable id, and the cloud refuses it with 409. The clone IS a
+              // separate register: retry once under a suffixed identity instead
+              // of naming a remedy the UI does not have (11-15 audit #64).
+              if (cloudRes.status === 409 && pairAttempt === 0) {
+                pairShopName = `${shopIdentity}-${crypto.randomBytes(2).toString('hex')}`;
+                logLine(`pair-cloud: shop id ${shopIdentity} already paired; retrying as ${pairShopName}`);
+                continue;
+              }
+              break;
+            }
           } catch (err) {
             if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
               // The cloud mints the shop, saves the credential and spends the
@@ -1069,7 +1149,14 @@ function createServer(opts = {}) {
           const kind = String(body.kind || '');
           // audit_log.action is append-only and /api/audit re-reads every row,
           // so the fixed vocabulary is stored, never the client's raw string.
-          const job = kind === 'test' || kind === 'sale' || kind === 'settlement' || kind === 'claim_stub' || kind === 'pickup_ready' ? kind : 'unknown';
+          const job = kind === 'test' || kind === 'sale' || kind === 'settlement' || kind === 'claim_stub' || kind === 'pickup_ready' || kind === 'z_read' ? kind : 'unknown';
+          // The client gates every print path on the placeholder identity; the
+          // route must too, or a direct API caller prints demo-shop paper.
+          // Mirrors PLACEHOLDER_SHOP in public/js/state.js; the test slip is
+          // exempt (deliberate paper).
+          if (kind !== 'test' && (settings.gcash_name === 'TechParts Repair & POS' || settings.gcash_number === '0917-123-4567')) {
+            return sendJson(res, 400, { error: 'Shop identity is still the placeholder. Save real shop details in Settings before printing.', fallback: true });
+          }
           // A lost response or a double-fire must not hand the customer a second
           // slip: a successful send for the same job is answered from this map
           // for a short window instead of printing again. Failures are never
@@ -1117,6 +1204,12 @@ function createServer(opts = {}) {
               // No dedup window: a claim stub is not money paper and a manager
               // may legitimately print it twice.
               slip = renderClaimStubSlip(body, settings);
+            } else if (kind === 'z_read') {
+              if (!elevated) return elevationDenied();
+              const day = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || ''))
+                ? String(body.date)
+                : db.prepare("SELECT date('now','localtime') AS d").get().d;
+              slip = renderZReadSlip(buildReconcileSummary(db, day), settings);
             } else {
               throw new Error(`Unknown print job '${kind}'`);
             }
@@ -1216,6 +1309,7 @@ function createServer(opts = {}) {
           const from = url.searchParams.get('from');
           if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) throw new Error('Invalid report date; use a real YYYY-MM-DD date');
           const useFrom = period === 'custom' && from ? from : null;
+          const lite = url.searchParams.get('lite') === '1';
           const stats = getPeriodStats(db, period, date, useFrom);
           const rangeFrom = stats.range.from;
           const rangeTo = stats.range.to;
@@ -1237,13 +1331,15 @@ function createServer(opts = {}) {
             active_shift: activeShift,
             drawer_variance: drawerVariance,
             drawer_counted: drawerCounted,
-            // Same window as the KPIs above: a pinned day must pin every panel,
-            // or the tab contradicts itself (top performers empty on a picked day).
-            products: getProductPerformance(db, period, date, useFrom),
-            dead_stock: getDeadStock(db, period, date, useFrom),
-            reorder: getReorderList(db, period, date, useFrom),
-            standing: getStandingStats(db),
-            backup: getBackupStatus(db, backupDir)
+            ...(lite ? {} : {
+              // Same window as the KPIs above: a pinned day must pin every panel,
+              // or the tab contradicts itself (top performers empty on a picked day).
+              products: getProductPerformance(db, period, date, useFrom),
+              dead_stock: getDeadStock(db, period, date, useFrom),
+              reorder: getReorderList(db, period, date, useFrom),
+              backup: getBackupStatus(db, backupDir)
+            }),
+            standing: getStandingStats(db)
           });
         }
 
@@ -1252,25 +1348,7 @@ function createServer(opts = {}) {
         const reconcileMatch = pathname.match(/^\/api\/reconcile\/(\d{4}-\d{2}-\d{2})$/);
         if (reconcileMatch && method === 'GET') {
           if (!elevated) return elevationDenied();
-          const day = reconcileMatch[1];
-          const dayShifts = db.prepare(`
-            SELECT id, staff_id, staff_name, opened_at, opening_float, closed_at, counted_cash, expected_cash, variance, status
-            FROM shifts
-            WHERE date(opened_at, 'localtime') = ? OR date(closed_at, 'localtime') = ?
-            ORDER BY id ASC
-          `).all(day, day);
-          const openShift = db.prepare("SELECT id, staff_id, staff_name, opened_at, opening_float, status FROM shifts WHERE status = 'open' LIMIT 1").get() || null;
-          const closedDayShifts = dayShifts.filter(s => s.status === 'closed');
-          const totalShiftVariance = money(closedDayShifts.reduce((acc, s) => acc + (s.variance || 0), 0));
-          const totalShiftCounted = money(closedDayShifts.reduce((acc, s) => acc + (s.counted_cash - (s.opening_float || 0)), 0));
-          return sendJson(res, 200, {
-            ...getDayBuckets(db, day),
-            stored: getDayReconciliation(db, day),
-            shifts: dayShifts,
-            open_shift: openShift,
-            total_shift_variance: totalShiftVariance,
-            total_shift_counted: totalShiftCounted
-          });
+          return sendJson(res, 200, buildReconcileSummary(db, reconcileMatch[1]));
         }
 
         // Repair tickets: the counter upserts by job reference (hold, sale,
@@ -1886,12 +1964,17 @@ function createDbBackup(db, dbPath, backupDir = RUNTIME_BACKUP_DIR, fileName) {
   // ponytail: vacuum to tmp then atomic rename — avoids TOCTOU unlink+vacuum race
   const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}`;
   const normalizedSqlPath = tmpPath.replace(/\\/g, '/').replace(/'/g, "''");
+  const startNs = process.hrtime.bigint();
   try {
     db.exec(`VACUUM INTO '${normalizedSqlPath}'`);
     // A corrupt or partial backup must never evict the last good one.
     if (!verifyBackupFile(tmpPath)) throw new Error('Backup verification failed: integrity_check did not pass on the temporary backup file');
     if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
     fs.renameSync(tmpPath, finalPath);
+    const elapsedMs = Number(process.hrtime.bigint() - startNs) / 1e6;
+    if (!isTestEnv() && elapsedMs >= 250) {
+      logLine(`[perf] slow backup ${path.basename(finalPath)} (${elapsedMs.toFixed(0)}ms)`);
+    }
   } catch (e) {
     try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
     throw e;
@@ -2348,7 +2431,7 @@ function startServer(preferredPort = process.env.PORT ? parseInt(process.env.POR
     }
   }
 
-  const { server, db } = createServer();
+  const { server, db, getDb } = createServer();
   runningInstance = { server, db };
 
   // Fresh installs start with a completely clean database (no demo data auto-seeded)
@@ -2389,13 +2472,6 @@ function startServer(preferredPort = process.env.PORT ? parseInt(process.env.POR
     // is otherwise invisible (detached process, stdio ignored).
     consumeHandoffStatus(defaultUpdateStagingDir(serviceModeFromEnv()));
 
-    // Hourly tick on the date-idempotent guard: a startup-only backup lets the
-    // data-loss window grow with uptime on a workstation left running for days.
-    // The getter, not the destructured db: /api/backup/restore swaps the handle
-    // and a captured binding would snapshot a closed database forever after.
-    runBackupTick(() => db, RUNTIME_DB_PATH);
-    setInterval(() => runBackupTick(() => db, RUNTIME_DB_PATH), 60 * 60 * 1000).unref(); // never holds shutdown open
-
     try {
       if (process.platform === 'win32' && !process.env.NO_AUTO_BROWSER && !process.env.NO_LAUNCH_BROWSER) {
         launchBrowser(`http://localhost:${currentPort}`, (ok) => {
@@ -2409,6 +2485,14 @@ function startServer(preferredPort = process.env.PORT ? parseInt(process.env.POR
         });
       }
     } catch (_) {}
+
+    // Hourly tick on the date-idempotent guard: a startup-only backup lets the
+    // data-loss window grow with uptime on a workstation left running for days.
+    // Defer the initial boot backup briefly so Chromium opens and paints first,
+    // keeping both getDb calls wired to the live handle getter.
+    const bootBackupTimer = setTimeout(() => runBackupTick(getDb, RUNTIME_DB_PATH), 2500);
+    if (bootBackupTimer.unref) bootBackupTimer.unref();
+    setInterval(() => runBackupTick(getDb, RUNTIME_DB_PATH), 60 * 60 * 1000).unref(); // never holds shutdown open
 
     // Auto-exit watchdog: cleanly terminate background process when browser is
     // closed. Skipped when the operator chose headless mode (NO_AUTO_BROWSER)
@@ -2515,8 +2599,11 @@ if (require.main === module || (process.argv[1] && process.argv[1].endsWith('.ex
     process.env.NO_AUTO_EXIT = '1';
     startServer(undefined, process.env.HOST);
   } else {
-    if (!process.env.HOST) process.env.HOST = '0.0.0.0';
-    if (!process.env.POS_LAN_REPORT_ACK) process.env.POS_LAN_REPORT_ACK = '1';
+    // Loopback unless the operator explicitly exports HOST: the report
+    // namespace carries customer names, phones and utang, and exposure must
+    // be a decision, not a default (OPERATIONS 5.6). The old auto-bind plus
+    // auto-ack put it on every office LAN the portable exe ran on.
+    if (!process.env.HOST) process.env.HOST = '127.0.0.1';
     startServer();
   }
 }

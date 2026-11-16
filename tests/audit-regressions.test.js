@@ -8,9 +8,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { initDb } = require('../src/db');
-const { createInventoryItem } = require('../src/inventory');
+const { createInventoryItem, adjustStock, listInventory } = require('../src/inventory');
 const { createSale } = require('../src/sales');
-const { getPeriodStats, getProductPerformance, getReorderList } = require('../src/analytics');
+const { getPeriodStats, getProductPerformance, getReorderList, getStandingStats } = require('../src/analytics');
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
 test('a discounted single-item sale shows the same loss in totals and top parts', () => {
@@ -35,14 +35,26 @@ test('a discounted single-item sale shows the same loss in totals and top parts'
   }
 });
 
-test('reorder includes a zero-stock part below minimum', () => {
+test('reorder includes depleted zero-stock parts while excluding unstocked catalog entries', () => {
   const db = initDb(':memory:');
   try {
-    const item = createInventoryItem(db, {
-      brand: 'Audit', model_name: 'Out of stock', part_type: 'Battery',
+    const depleted = createInventoryItem(db, {
+      brand: 'Audit', model_name: 'Sold Out', part_type: 'Battery',
+      stock_quantity: 1, min_stock_alert: 3, cost_price: 10, price_retail: 20
+    });
+    adjustStock(db, depleted.id, -1, { reason: 'correction', note: 'Depleted to zero' });
+    const catalogOnly = createInventoryItem(db, {
+      brand: 'Audit', model_name: 'Catalog Only', part_type: 'LCD',
       stock_quantity: 0, min_stock_alert: 3, cost_price: 10, price_retail: 20
     });
-    assert.ok(getReorderList(db, '7d').some(r => r.id === item.id));
+    const reorder = getReorderList(db, '7d');
+    const standing = getStandingStats(db);
+    const lowFiltered = listInventory(db, { lowStockOnly: true });
+    assert.ok(reorder.some(r => r.id === depleted.id), 'depleted zero-stock item stays in reorder');
+    assert.ok(!reorder.some(r => r.id === catalogOnly.id), 'unstocked catalog entry stays out of reorder');
+    assert.equal(standing.low_stock_count, 1);
+    assert.equal(standing.unstocked_catalog_count, 1);
+    assert.deepEqual(lowFiltered.map(r => r.id), [depleted.id]);
   } finally {
     db.close();
   }

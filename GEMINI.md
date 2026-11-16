@@ -51,7 +51,16 @@ When modifying or adding UI in `public/`:
    - Concentric corner radii: $R_{outer} = R_{inner} + \text{padding}$.
    - Touch buttons and interactive elements must have $\ge 44\text{px}$ touch target sizes.
    - Barcode input fields must support instant autofocus and Enter-to-submit scanning flows.
-5. **Tailwind CSS v4 Compilation:** Always run `npm run build:css` after making utility class changes.
+5. **Tailwind CSS v4 + Legacy Browser Compilation:** Always run `npm run build:css` after making style changes. This runs `@tailwindcss/cli` followed by `scripts/compat-css.js` (unwraps `@layer`, converts `oklch()` to hex/rgba, and prepends `transform: rotate(...)` before bare `rotate:`).
+6. **Low-Resolution & 19" Monitor Ergonomics (`1366x768`, `1280x720`, `1024x768`, `<= 860px` height):**
+   - At `@media (max-width: 1366px)`, `.rail` collapses to `--rail-w: 68px` with `overflow-x: hidden` and 2-column icon grids (`repeat(2, 1fr)`) for `.rail-quick` and `.rail-tools` so the sidebar fits `768p` screens without vertical or horizontal scrollbars.
+   - Setup and gate dialogs (`#pin-setup-overlay .gate__card`) use compact multi-column grids (`max-width: 640px`) so they fit `768p` viewports without scrolling.
+   - Never put em-dashes (`—`) inside the `@media (max-width: 1366px), (max-height: 860px)` block in `public/styles.css` or `text-[10.5px]` in `public/index.html` (`tests/small-monitor-counter-typography.test.js`).
+7. **Legacy Chromium / Win10 2021 IoT LTSC (Edge 92) & Weak GPU Guards:**
+   - Every `color-mix(...)` declaration in `public/styles.css` MUST carry a plain hex/rgba/`var(...)` fallback on the line immediately above it.
+   - Every `dvh` unit in `public/styles.css` MUST carry a `vh` fallback on the line immediately above it.
+   - Never use `backdrop-filter: blur(...)` (forces software-compositing tax on weak integrated GPUs).
+   - Never rely solely on CSS `:has()`, native DOM `[inert]` without `syncAppInert()` (`public/js/ui.js`), or un-polyfilled `crypto.randomUUID()` (`public/js/api.js`).
 
 ---
 
@@ -74,6 +83,7 @@ Order for a landed batch: **feature batch → audit → remediation → refactor
 | Refactoring | `docs/refactoring-prompt.md` |
 | Cleaning | `docs/code-cleaning-prompt.md` |
 | Test hardening | `docs/test-hardening-prompt.md` |
+| Perf & compat | `docs/perf-optimization-prompt.md` |
 | Feature batch | `docs/feature-batch-prompt.md` |
 
 ---
@@ -92,12 +102,16 @@ Order for a landed batch: **feature batch → audit → remediation → refactor
 
 3. **Database & Persistence:**
    - Local SQLite using Node's native `DatabaseSync` in `src/db.js`.
-   - Always enable WAL mode.
+   - Keep low-overhead WAL tuning (`journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 5000`, `temp_store = MEMORY`, `cache_size = -16000`).
    - Filesystem safety: Never write data directly into `release/` or `publish/` directories (respect `isReleaseShaped()` guards).
 
 4. **Hardware & Printing:**
    - ESC/POS thermal printing must support both 58mm and 80mm widths.
    - If raw ESC/POS connection is unavailable, smoothly fall back to browser print dialog.
 
-5. **Verification Before Completion:**
+5. **Low-End Counter PC Performance & Legacy Browser Compatibility:**
+   - Preserve POS table pagination (`POS_PAGE_SIZE = 100` via `updateTablePager()`) and `O(1)` `lookupBarcode()` `Map` indexing in `public/js/views/pos.js` (`tests/perf-optimizations.test.js`).
+   - Keep `scripts/compat-css.js` and plain CSS/JS fallbacks green in `tests/old-browser-compat.test.js` and `tests/small-monitor-counter-typography.test.js`.
+
+6. **Verification Before Completion:**
    - Run tests using `node --test tests/<file>.test.js` or `npm test` before asserting any bug or feature is resolved.

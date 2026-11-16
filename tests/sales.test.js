@@ -572,3 +572,52 @@ dbTest('persisted sale item_name matches partLabel: one shape, plain hyphen', (d
   assert.strictEqual(partLabel(part), sale.items[0].item_name);
   assert.doesNotMatch(sale.items[0].item_name, /—/);
 });
+
+dbTest('fractional sales leave no float dust in stock (ROUND like adjustStock)', (db) => {
+  const part = createInventoryItem(db, { brand: 'Frac', model_name: 'Wire', part_type: 'Cable', cost_price: 1, price_retail: 2, stock_quantity: 1, allow_fractional: 1 });
+  for (let i = 0; i < 3; i++) {
+    createSale(db, { customer_name: 'Frac Buyer', payment_method: 'cash', items: [{ inventory_id: part.id, item_type: 'part', quantity: 0.1, unit_price: 2 }], amount_paid: 0.2 });
+  }
+  assert.strictEqual(getInventoryItem(db, part.id).stock_quantity, 0.7, '1 - 0.1 - 0.1 - 0.1 must be exactly 0.7, not 0.7000000000000001');
+});
+
+dbTest('a string inventory_id from a non-SPA caller still resolves', (db) => {
+  const part = createInventoryItem(db, { brand: 'Str', model_name: 'Id', part_type: 'LCD', cost_price: 1, price_retail: 5, stock_quantity: 4 });
+  const sale = createSale(db, { customer_name: 'String Id', payment_method: 'cash', items: [{ inventory_id: String(part.id), item_type: 'part', quantity: 1, unit_price: 5 }], amount_paid: 5 });
+  assert.ok(sale.id);
+  assert.strictEqual(getInventoryItem(db, part.id).stock_quantity, 3);
+});
+
+dbTest('the void reason is capped at 500 chars like the RMA notes', (db) => {
+  const { voidSale } = require('../src/sales');
+  const part = createInventoryItem(db, { brand: 'Void', model_name: 'Cap', part_type: 'LCD', cost_price: 1, price_retail: 5, stock_quantity: 4 });
+  const sale = createSale(db, { customer_name: 'Void Cap', payment_method: 'cash', items: [{ inventory_id: part.id, item_type: 'part', quantity: 1, unit_price: 5 }], amount_paid: 5 });
+  voidSale(db, sale.id, 'x'.repeat(600), { actor: { type: 'manager', name: 'Boss' }, elevated: true });
+  const row = db.prepare('SELECT void_reason FROM sales WHERE id = ?').get(sale.id);
+  assert.strictEqual(row.void_reason.length, 500, 'a pasted blob must not ride every later sales list forever');
+});
+
+dbTest('a split-line fractional oversell names the real remainder, not zero', (db) => {
+  const part = createInventoryItem(db, { brand: 'Split', model_name: 'Rem', part_type: 'Cable', cost_price: 1, price_retail: 2, stock_quantity: 0.5, allow_fractional: 1 });
+  assert.throws(() => createSale(db, {
+    customer_name: 'Split Oversell', payment_method: 'cash',
+    items: [
+      { inventory_id: part.id, item_type: 'part', quantity: 0.3, unit_price: 2 },
+      { inventory_id: part.id, item_type: 'part', quantity: 0.3, unit_price: 2 },
+    ],
+    amount_paid: 1.2,
+  }), /Available: 0\.2/, 'the second line sees the 0.2 the first line left');
+});
+
+dbTest('demo reset wipes expenses and repairs and tombstones them, atomically with the reseed', (db) => {
+  const { resetDemoData } = require('../src/seed');
+  db.prepare("INSERT INTO expenses (category, amount, created_at) VALUES ('Rent', 500, datetime('now'))").run();
+  db.prepare("INSERT INTO repairs (ref_code, customer_name, device, status, created_at, updated_at) VALUES ('R-1', 'Juan', 'iPhone 11', 'intake', datetime('now'), datetime('now'))").run();
+  resetDemoData(db, { actor: { type: 'manager', name: 'Boss' }, elevated: true });
+  assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM expenses').get().c, 0, 'expenses survive no demo reset');
+  assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM repairs').get().c, 0, 'repair tickets survive no demo reset');
+  const tombs = db.prepare("SELECT table_name FROM sync_outbox WHERE payload LIKE '%\"_deleted\":true%'").all().map(r => r.table_name);
+  assert.ok(tombs.includes('expenses'), 'the expense deletion reaches the mirror');
+  assert.ok(tombs.includes('repairs'), 'the repair deletion reaches the mirror');
+  assert.ok(db.prepare('SELECT COUNT(*) c FROM inventory').get().c > 0, 'the reseed landed in the same transaction');
+});

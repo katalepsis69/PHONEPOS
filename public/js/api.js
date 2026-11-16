@@ -1,6 +1,17 @@
 import { S } from './state.js';
 import { checkLicenseStatus, clearSession, renderLoginGate } from './auth.js';
 
+// Pre-Edge 92 and plain HTTP LAN access lack crypto.randomUUID().
+if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function' && typeof crypto.getRandomValues === 'function') {
+  crypto.randomUUID = () => {
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = [...b].map(x => x.toString(16).padStart(2, '0'));
+    return `${h.slice(0, 4).join('')}-${h.slice(4, 6).join('')}-${h.slice(6, 8).join('')}-${h.slice(8, 10).join('')}-${h.slice(10).join('')}`;
+  };
+}
+
 // ponytail: one fetch wrapper beats editing ~26 call sites with identical 402 handling.
 // Any 402 (trial ended) raises the activation overlay once; the caller's own
 // !res.ok branch keeps working underneath it.
@@ -37,15 +48,24 @@ window.fetch = async (...args) => {
     S.licenseCheckInFlight = true;
     try { await checkLicenseStatus(true); } finally { S.licenseCheckInFlight = false; }
   }
-  // 401 session drop: several in-flight requests can fail together; the guard
-  // keeps one login-gate render from trampling another (L4).
-  if (res.status === 401 && S.sessionToken && url.startsWith('/api/') && !url.startsWith('/api/auth/')) {
-    clearSession();
-    if (!S.loginGateRendering) {
+  // 401 session drop or unauthenticated access: show the login gate once
+  // (without disturbing an active setup/license/login overlay).
+  if (res.status === 401 && url.startsWith('/api/') && !url.startsWith('/api/auth/')) {
+    const hadSession = !!S.sessionToken;
+    if (hadSession) clearSession();
+    const anyGateVisible = ['server-down-overlay', 'license-overlay', 'pin-setup-overlay', 'login-gate']
+      .some(id => {
+        const el = document.getElementById(id);
+        return el && !el.classList.contains('hidden');
+      });
+    const msg = hadSession
+      ? 'Your session ended — please log in again'
+      : 'Login required — select your role and enter PIN';
+    if (!S.loginGateRendering && (!anyGateVisible || hadSession)) {
       S.loginGateRendering = true;
-      try { await renderLoginGate('Your session ended — please log in again'); }
+      try { await renderLoginGate(msg); }
       finally { S.loginGateRendering = false; }
-    } else {
+    } else if (hadSession) {
       renderLoginGateSoon();
     }
   }

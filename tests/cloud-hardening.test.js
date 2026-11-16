@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const net = require('node:net');
 const { DatabaseSync } = require('node:sqlite');
 const { ROOT, CLOUD_SERVER, TOKEN_A, TOKEN_B, reservePort, startCloud, stopCloud, event, sync, login } = require('./cloud-hardening-harness');
@@ -1152,4 +1152,120 @@ test('manager app escapes debtor identity fields, including the tel: href', () =
   // already proves they move together; this names the rule for readers).
   const deploySrc = fs.readFileSync(path.join(ROOT, 'cloud-deploy', 'public', 'app.js'), 'utf8');
   assert.strictEqual(appSrc, deploySrc, 'cloud/ and cloud-deploy/ app.js must stay identical');
+});
+
+test('PIN rotation revokes the old PIN on the next boot', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pos-cloud-rotate-'));
+  fs.writeFileSync(path.join(dataDir, 'manager-pin.txt'), '2468\n');
+  let child;
+  try {
+    let running = await startCloud(dataDir);
+    child = running.child;
+    assert.strictEqual((await login(running.base, '2468')).res.status, 200, 'the seeded PIN logs in');
+    await stopCloud(child);
+    child = null;
+
+    const rot = spawnSync(process.execPath, [CLOUD_SERVER, '--rotate-pin'], {
+      encoding: 'utf8',
+      env: { ...process.env, DATA_DIR: dataDir },
+    });
+    assert.strictEqual(rot.status, 0, 'rotation exits cleanly');
+    const newPin = fs.readFileSync(path.join(dataDir, 'manager-pin.txt'), 'utf8').trim();
+    assert.notStrictEqual(newPin, '2468', 'rotation mints a different PIN');
+
+    running = await startCloud(dataDir);
+    child = running.child;
+    assert.strictEqual((await login(running.base, '2468')).res.status, 401, 'the OLD PIN must be dead after rotation');
+    assert.strictEqual((await login(running.base, newPin)).res.status, 200, 'the new PIN logs in');
+  } finally {
+    if (child) await stopCloud(child);
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+test('a retried stock adjust or import with one op_id queues one command', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pos-cloud-opid-'));
+  fs.writeFileSync(path.join(dataDir, 'manager-pin.txt'), '2468\n');
+  let child;
+  try {
+    const running = await startCloud(dataDir);
+    child = running.child;
+    const { base } = running;
+    await sync(base, TOKEN_A, 'north', [
+      event(1, 'inventory', 1, { id: 1, brand: 'Gen', model_name: 'Cable', part_type: 'Wire', stock_quantity: 5, archived: 0 })
+    ]);
+    const { cookie } = await login(base);
+    const headers = { Cookie: cookie, 'Content-Type': 'application/json' };
+
+    const body = { id: 1, delta: 2, op_id: 'phone-intent-1' };
+    const first = await (await fetch(`${base}/api/inventory/adjust-stock`, { method: 'POST', headers, body: JSON.stringify(body) })).json();
+    const retry = await (await fetch(`${base}/api/inventory/adjust-stock`, { method: 'POST', headers, body: JSON.stringify(body) })).json();
+    assert.strictEqual(first.deduplicated, undefined);
+    assert.strictEqual(retry.deduplicated, true, 'the lost-response retry dedups');
+    const overview = await (await fetch(`${base}/api/overview`, { headers: { Cookie: cookie } })).json();
+    assert.strictEqual(overview.pending_commands, 1, 'one intent, one command');
+
+    const impBody = { shop_id: 'north', rows: [{ brand: 'New', model_name: 'Part', part_type: 'LCD', stock_quantity: 1 }], op_id: 'phone-import-1' };
+    const impFirst = await (await fetch(`${base}/api/inventory/import`, { method: 'POST', headers, body: JSON.stringify(impBody) })).json();
+    const impRetry = await (await fetch(`${base}/api/inventory/import`, { method: 'POST', headers, body: JSON.stringify(impBody) })).json();
+    assert.strictEqual(impFirst.created, 1);
+    assert.strictEqual(impRetry.deduplicated, true, 'the import retry dedups');
+  } finally {
+    if (child) await stopCloud(child);
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});
+
+test('phone modals mint one op_id per intent; deploy broadcast and SSE ping stay scoped', () => {
+  const appSrc = fs.readFileSync(path.join(ROOT, 'cloud-deploy', 'public', 'app.js'), 'utf8');
+  assert.match(appSrc, /function openStockModal\(item\) \{\s*activeStockModalItem = item;\s*stockModalOpId = newOpId\('cloud-adj-'\);/, 'the stock modal mints its op_id on open');
+  assert.match(appSrc, /op_id: stockModalOpId/, 'the stock save sends the intent key');
+  assert.match(appSrc, /function openCloudImportModal\(fileName, rows\) \{\s*pendingImportRows = rows;\s*importModalOpId = newOpId\('cloud-imp-'\);/, 'the import modal mints its op_id on open');
+  assert.match(appSrc, /op_id: importModalOpId/, 'the import confirm sends the intent key');
+
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'cloud-deploy', 'server.js'), 'utf8');
+  assert.match(serverSrc, /broadcast\('change', \{ deployed: updated \}, session\.storeId\)/, 'the deploy broadcast targets the deploying store');
+  const pingBlock = serverSrc.slice(serverSrc.indexOf('const ping = setInterval'), serverSrc.indexOf('req.on(\'close\''));
+  assert.match(pingBlock, /if \(!authorizedManager\(req\)\)/, 'the SSE ping re-validates the session');
+  assert.match(pingBlock, /res\.end\(\)/, 'an expired session ends the stream');
+});
+
+test('deploy-cloud reads the owner PIN from stdin when no argument is given', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pos-cloud-deploy-'));
+  fs.writeFileSync(path.join(dataDir, 'manager-pin.txt'), '2468\n');
+  let child;
+  try {
+    const running = await startCloud(dataDir);
+    child = running.child;
+    // spawnSync with piped input crashes inside a node:test worker on Windows;
+    // the async spawn drives the same stdin path.
+    const runDeploy = (input) => new Promise((resolve, reject) => {
+      const env = { ...process.env, CLOUD_URL: running.base };
+      delete env.CLOUD_PIN;
+      delete env.NODE_TEST_CONTEXT;
+      const p = spawn(process.execPath, [path.join(ROOT, 'scripts', 'deploy-cloud.js')], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      let out = '', err = '';
+      p.stdout.on('data', c => { out += c; });
+      p.stderr.on('data', c => { err += c; });
+      p.on('error', reject);
+      p.on('close', code => resolve({ status: code, stdout: out, stderr: err }));
+      p.stdin.write(input);
+      p.stdin.end();
+    });
+
+    const wrong = await runDeploy('9999\n');
+    assert.strictEqual(wrong.status, 1, 'a wrong stdin PIN fails the login');
+    assert.match(wrong.stderr, /Login failed/);
+
+    const right = await runDeploy('2468\n');
+    assert.strictEqual(right.status, 0, 'the stdin PIN pushes live');
+    assert.match(right.stdout, /Live push/);
+
+    const none = await runDeploy('\n');
+    assert.strictEqual(none.status, 0, 'an empty stdin line only syncs the local mirror');
+    assert.match(none.stdout, /Local cloud-deploy\/ synced/);
+  } finally {
+    if (child) await stopCloud(child);
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {}
+  }
 });

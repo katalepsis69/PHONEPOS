@@ -4,7 +4,7 @@
 // tracks status, assignment, and pickup.
 import { t } from '../i18n.js';
 import { escHtml, fmtMoney, formatDateTime, showToast } from '../ui.js';
-import { autoPrintSlip, renderPickupReadyNotice, shopIdentityIsPlaceholder } from '../receipts.js';
+import { autoPrintSlip, renderPickupReadyNotice, renderPickupFallbackNotice, shopIdentityIsPlaceholder } from '../receipts.js';
 
 const STATUSES = ['intake', 'in_repair', 'ready', 'released', 'cancelled'];
 const statusLabel = s => t(`repairs.status_${s}`, s);
@@ -96,17 +96,28 @@ export function wireRepairsView() {
     }
     // The slip states the queue's truth, so only the id rides the request;
     // the server reads the ticket row itself.
-    await autoPrintSlip(
+    const printState = await autoPrintSlip(
       { kind: 'pickup_ready', repair_id: Number(btn.dataset.repairId) },
       async () => {
         try {
           const res = await fetch('/api/repairs?' + new URLSearchParams({ search: btn.dataset.repairRef }));
           const body = await res.json();
           const ticket = (body.repairs || []).find(x => String(x.id) === btn.dataset.repairId);
-          if (ticket) renderPickupReadyNotice(ticket);
+          if (ticket) {
+            renderPickupReadyNotice(ticket);
+            return true;
+          }
         } catch (_) {}
+        // The fetch failed or the ticket vanished: render a minimal local
+        // notice so window.print() never puts the PREVIOUS customer's slip
+        // on paper (11-15 audit #11).
+        renderPickupFallbackNotice(btn.dataset.repairRef);
+        return true;
       }
     );
+    if (printState === 'locked') {
+      showToast(t('repairs.print_locked', 'A print job is still running; try the pickup slip again in a moment.'), 'info');
+    }
   });
   if (list) list.addEventListener('change', async e => {
     const select = e.target.closest('[data-repair-status]');

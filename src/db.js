@@ -98,10 +98,14 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
   try {
     db.exec('PRAGMA foreign_keys = ON;');
     db.exec('PRAGMA journal_mode = WAL;');
+    // NORMAL is SQLite's documented companion to WAL: fsyncs only on checkpoint instead of every sale commit.
+    db.exec('PRAGMA synchronous = NORMAL;');
     // A second process (relaunched exe, a DB tool, the backup script) must
     // queue behind the register's write instead of failing the sale with
     // SQLITE_BUSY on first contact.
     db.exec('PRAGMA busy_timeout = 5000;');
+    db.exec('PRAGMA temp_store = MEMORY;');
+    db.exec('PRAGMA cache_size = -16000;');
 
     // Schema creation
     db.exec(`
@@ -238,8 +242,9 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
       CREATE INDEX IF NOT EXISTS idx_returns_sale_id ON warranty_returns(sale_id);
       CREATE INDEX IF NOT EXISTS idx_returns_sale_item_id ON warranty_returns(sale_item_id);
       -- sale_items is looked up by sale_id everywhere (receipts, customer ledgers,
-      -- today's line-item split) but had no index on it.
+      -- today's line-item split) and by inventory_id (stock history / deletes / low-stock).
       CREATE INDEX IF NOT EXISTS idx_sale_items_sale_id ON sale_items(sale_id);
+      CREATE INDEX IF NOT EXISTS idx_sale_items_inv_id ON sale_items(inventory_id);
       -- Customer lookups (ledger, utang grouping) key on customer_name.
       CREATE INDEX IF NOT EXISTS idx_sales_customer ON sales(customer_name);
       CREATE INDEX IF NOT EXISTS idx_credit_payments_customer ON credit_payments(customer_name);
@@ -433,7 +438,8 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
         }
       }
       if (renamedSkus) dbLog(`[init] renamed ${renamedSkus} part(s) whose SKU collided case-insensitively; each loser carries its row id as a suffix`);
-      db.prepare("UPDATE inventory SET sku_barcode = UPPER(TRIM(sku_barcode)) WHERE sku_barcode IS NOT NULL").run();
+      // Skip already-normalized rows so clean boots perform zero write transactions.
+      db.prepare("UPDATE inventory SET sku_barcode = UPPER(TRIM(sku_barcode)) WHERE sku_barcode IS NOT NULL AND sku_barcode != UPPER(TRIM(sku_barcode))").run();
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_sku_nocase ON inventory(sku_barcode COLLATE NOCASE) WHERE sku_barcode IS NOT NULL');
       db.exec('COMMIT');
       // A renamed SKU must reach the cloud mirror: the outbox exists by now
@@ -470,7 +476,6 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
     insertSetting.run('enable_service_bench', '1');
     insertSetting.run('enable_fractional_qty', '1');
     insertSetting.run('enable_serial_tracking', '1');
-    insertSetting.run('wholesale_tier_label', 'Wholesale');
     insertSetting.run('gcash_name', 'TechParts Repair & POS');
     insertSetting.run('gcash_number', '0917-123-4567');
     insertSetting.run('gcash_qr_url', '');
@@ -494,6 +499,18 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
     // column (adjustments, imports, part creation). Readers and writers live in
     // src/inventory.js; rows prune after 2 days.
     db.exec('CREATE TABLE IF NOT EXISTS op_log (op_id TEXT PRIMARY KEY, entity_id INTEGER, created_at TEXT NOT NULL)');
+
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_sale_items_inv ON sale_items(inventory_id);
+      CREATE INDEX IF NOT EXISTS idx_op_log_created_at ON op_log(created_at);
+      CREATE INDEX IF NOT EXISTS idx_cash_adj_created_at ON cash_adjustments(created_at);
+      CREATE INDEX IF NOT EXISTS idx_cash_adj_source ON cash_adjustments(source_kind, source_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at);
+      CREATE INDEX IF NOT EXISTS idx_audit_cat_act ON audit_log(category, action);
+      CREATE INDEX IF NOT EXISTS idx_shifts_opened ON shifts(opened_at);
+      CREATE INDEX IF NOT EXISTS idx_shifts_closed ON shifts(closed_at);
+      CREATE INDEX IF NOT EXISTS idx_sales_open_credit ON sales(customer_name, id) WHERE voided = 0 AND credit_balance > 0;
+    `);
 
     return db;
   } catch (e) {

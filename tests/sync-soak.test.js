@@ -39,7 +39,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
-const { ROOT, startCloud, stopCloud, reservePort, login } = require('./cloud-hardening-harness');
+const { ROOT, startCloud, stopCloud, login } = require('./cloud-hardening-harness');
 const { ensurePinChanged } = require('./helper');
 
 const SHOP_SERVER = path.join(ROOT, 'src', 'server.js');
@@ -90,11 +90,21 @@ function soakLog(msg) {
   try { fs.appendFileSync(PROGRESS_FILE, `${new Date().toISOString()} ${msg}\n`); } catch (_) {}
 }
 
-async function waitShopReady(child, port) {
+async function waitShopReady(child) {
+  // PORT=0: the kernel picks the port and the boot line reports it, so no
+  // reserve-then-release race against parallel test files (11-15 audit #48).
+  let port = null;
+  for (let i = 0; i < 100; i++) {
+    if (child.exitCode !== null) throw new Error(`shop process exited ${child.exitCode} during boot: ${child.outputTail.slice(-400)}`);
+    const m = child.outputTail.match(/Server listening on http:\/\/localhost:(\d+)/);
+    if (m) { port = Number(m[1]); break; }
+    await sleep(100);
+  }
+  if (!port) throw new Error(`shop never reported a listen port: ${child.outputTail.slice(-400)}`);
   const base = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 40; i++) {
     if (child.exitCode !== null) throw new Error(`shop process exited ${child.exitCode} during boot: ${child.outputTail.slice(-400)}`);
-    try { await fetch(`${base}/api/license/status`); return base; } catch (_) {}
+    try { await fetch(`${base}/api/license/status`); return { base, port }; } catch (_) {}
     await sleep(150);
   }
   throw new Error(`shop server never answered a readiness probe on ${base}: ${child.outputTail.slice(-400)}`);
@@ -108,7 +118,7 @@ async function waitShopReady(child, port) {
 // env vars (not by NODE_TEST_CONTEXT), and without them every spawned shop
 // opened a real browser window on the operator's desktop (measured: the
 // 2026-11-14 runs littered the taskbar with dead TechParts POS windows).
-function spawnShop(dbPath, backupDir, preferredPort) {
+function spawnShop(dbPath, backupDir) {
   const child = spawn(process.execPath, [SHOP_SERVER], {
     cwd: ROOT,
     env: {
@@ -119,7 +129,7 @@ function spawnShop(dbPath, backupDir, preferredPort) {
       NO_AUTO_EXIT: '1',
       POS_DB_PATH: dbPath,
       POS_BACKUP_DIR: backupDir,
-      PORT: String(preferredPort),
+      PORT: '0',
       HOST: '127.0.0.1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -127,7 +137,7 @@ function spawnShop(dbPath, backupDir, preferredPort) {
   child.outputTail = '';
   child.stdout.on('data', c => { child.outputTail += String(c); });
   child.stderr.on('data', c => { child.outputTail += String(c); });
-  return waitShopReady(child, preferredPort).then(base => ({ child, base, port: preferredPort }));
+  return waitShopReady(child).then(({ base, port }) => ({ child, base, port }));
 }
 
 // Hard-stop the shop process. Never waits on the 'exit' event unbounded: a
@@ -362,7 +372,7 @@ test('sync pipeline soak: 50 kill/restart drain cycles converge to an exactly-on
     assert.strictEqual(codeRes.status, 200, 'pairing code generation requires the manager session');
     const code = (await codeRes.json()).code;
 
-    shopRun = await spawnShop(shopDbPath, shopBackupDir, await reservePort());
+    shopRun = await spawnShop(shopDbPath, shopBackupDir);
     soakLog(`shop up at ${shopRun.base}`);
     shopDb = new DatabaseSync(shopDbPath);
     shopDb.exec('PRAGMA busy_timeout = 5000');
@@ -472,7 +482,7 @@ test('sync pipeline soak: 50 kill/restart drain cycles converge to an exactly-on
 
           // 4. restart, settle, and let the pipeline converge
           iter.phase = 'restart';
-          shopRun = await spawnShop(shopDbPath, shopBackupDir, await reservePort());
+          shopRun = await spawnShop(shopDbPath, shopBackupDir);
           soakLog(`iter ${i} restarted on ${shopRun.port}`);
           iter.phase = 'settle';
           await sleep(500); // fresh process carries no backoff; brief settle only

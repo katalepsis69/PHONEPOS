@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const { getInventoryItem, partLabel } = require('./inventory');
 const { money } = require('./money');
-const { audit, txn } = require('./audit');
+const { audit, txn, nowIso } = require('./audit');
 const { enqueueRow } = require('./sync');
 const { cleanName: normalizeName, foldName, foldSql } = require('./names');
 const { closedPeriodAt } = require('./reconcile');
@@ -55,7 +55,9 @@ function createSale(db, {
   const processedItems = [];
 
   // ponytail: batch-fetch parts in one query instead of N getInventoryItem calls
-  const partIds = [...new Set(items.filter(it => it.item_type !== 'labor').map(it => it.inventory_id).filter(Boolean))];
+  // Number(): SQLite affinity matches a string '5' to row 5, but the Map is
+  // keyed by numeric rowid; a JSON string id must not die as "not found".
+  const partIds = [...new Set(items.filter(it => it.item_type !== 'labor').map(it => Number(it.inventory_id)).filter(Boolean))];
   const invById = new Map();
   if (partIds.length) {
     const ph = partIds.map(() => '?').join(',');
@@ -63,7 +65,7 @@ function createSale(db, {
   }
   for (const it of items) {
     const isLabor = it.item_type === 'labor';
-    const inv = isLabor ? null : invById.get(it.inventory_id);
+    const inv = isLabor ? null : invById.get(Number(it.inventory_id));
     if (!isLabor && !inv) throw new Error(`Inventory item ID ${it.inventory_id} not found`);
 
     const isFractional = Boolean(inv?.allow_fractional);
@@ -115,7 +117,7 @@ function createSale(db, {
     const prof = db.prepare(`SELECT credit_limit FROM customer_profiles WHERE ${foldSql(db, 'customer_name')} = ?`).get(foldedName);
     const limit = money(prof?.credit_limit || 0);
     if (limit > 0) {
-      const curDebtRow = db.prepare(`SELECT COALESCE(SUM(credit_balance), 0.0) AS debt FROM sales WHERE ${foldSql(db, 'customer_name')} = ? AND voided = 0`).get(foldedName);
+      const curDebtRow = db.prepare(`SELECT COALESCE(SUM(credit_balance), 0.0) AS debt FROM sales WHERE ${foldSql(db, 'customer_name')} = ? AND voided = 0 AND credit_balance > 0`).get(foldedName);
       const curDebt = money(curDebtRow?.debt || 0);
       const newDebt = money(curDebt + creditBalance);
       if (newDebt > limit) {
@@ -130,20 +132,23 @@ function createSale(db, {
   }
 
   return txn(db, () => {
+    const now = nowIso();
     const saleId = Number(db.prepare(`
       INSERT INTO sales (sale_code, customer_name, customer_phone, customer_type, payment_method, payment_reference, subtotal, discount, total_amount, amount_paid, change_amount, credit_balance, created_at, op_id, staff_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
-    `).get(saleCode, cleanName, capped(customer_phone, 60), customer_type, payment_method, capped(payment_reference, 120), subtotal, discountNum, totalAmount, paid, changeAmount, creditBalance, new Date().toISOString(), opId, ctx.actor?.type === 'staff' ? ctx.actor.id ?? null : null).id);
+    `).get(saleCode, cleanName, capped(customer_phone, 60), customer_type, payment_method, capped(payment_reference, 120), subtotal, discountNum, totalAmount, paid, changeAmount, creditBalance, now, opId, ctx.actor?.type === 'staff' ? ctx.actor.id ?? null : null).id);
 
     // ponytail: hoisted prepares + single timestamp value
-    const now = new Date().toISOString();
     const insItem = db.prepare('INSERT INTO sale_items (sale_id, inventory_id, item_type, item_name, unit_cost, unit_price, quantity, total_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    const decStock = db.prepare('UPDATE inventory SET stock_quantity = stock_quantity - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND stock_quantity >= ? RETURNING id');
+    const decStock = db.prepare('UPDATE inventory SET stock_quantity = ROUND(stock_quantity - ?, 3), updated_at = CURRENT_TIMESTAMP WHERE id = ? AND stock_quantity >= ? RETURNING id');
     const insMov = db.prepare('INSERT INTO stock_movements (inventory_id, delta, reason, note, ref, created_at) VALUES (?, ?, ?, ?, ?, ?)');
     for (const p of processedItems) {
       insItem.run(saleId, p.inventory_id, p.item_type, p.item_name, p.unit_cost, p.unit_price, p.quantity, p.total_price);
       if (p.inventory_id && p.item_type === 'part') {
-        if (!decStock.get(p.quantity, p.inventory_id, p.quantity)) throw new Error(`Insufficient stock for ${p.item_name}. Available: 0`);
+        if (!decStock.get(p.quantity, p.inventory_id, p.quantity)) {
+          const left = db.prepare('SELECT stock_quantity FROM inventory WHERE id = ?').get(p.inventory_id);
+          throw new Error(`Insufficient stock for ${p.item_name}. Available: ${left ? left.stock_quantity : 0}`);
+        }
         enqueueRow(db, 'inventory', p.inventory_id);
         enqueueRow(db, 'stock_movements', Number(insMov.run(p.inventory_id, -p.quantity, 'sale', '', saleCode, now).lastInsertRowid));
       }
@@ -215,7 +220,9 @@ function getSaleDetails(db, saleId) {
 }
 
 function voidSale(db, saleId, reason, ctx = {}) {
-  const r = str(reason);
+  // Same 500-char cap as the RMA notes: a pasted blob must not ride every
+  // later sales list response forever (append-only rows keep it).
+  const r = capped(str(reason), 500);
   if (!r) throw new Error('Void reason is required');
   return txn(db, () => {
     const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);

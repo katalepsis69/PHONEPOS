@@ -392,3 +392,52 @@ test('cloud top_products equals the workstation for FRACTIONAL quantities (F13)'
     try { fs.rmSync(cloudDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
+
+test('cloud standing and reorder ignore unstocked 0-qty catalog entries just like workstation', async () => {
+  const { createInventoryItem } = require('../src/inventory');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-catalog-shop-'));
+  const cloudDir = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-catalog-cloud-'));
+  fs.writeFileSync(path.join(cloudDir, 'manager-pin.txt'), '2468\n');
+  const db = initDb(path.join(dir, 'shop.db'));
+  let child;
+  try {
+    const stockedLow = createInventoryItem(db, {
+      brand: 'Apple', model_name: 'iPhone 11', part_type: 'Battery',
+      cost_price: 400, price_retail: 950, stock_quantity: 3, min_stock_alert: 3
+    });
+    const depleted = createInventoryItem(db, {
+      brand: 'Samsung', model_name: 'Galaxy A12', part_type: 'LCD',
+      cost_price: 450, price_retail: 1100, stock_quantity: 1, min_stock_alert: 2
+    });
+    adjustStock(db, depleted.id, -1, { reason: 'correction', note: 'Depleted' });
+    const unstocked = createInventoryItem(db, {
+      brand: 'huawe', model_name: 'y9 prime bat', part_type: 'battery',
+      cost_price: 280, price_retail: 600, stock_quantity: 0, min_stock_alert: 3
+    });
+
+    const localStanding = getStandingStats(db);
+    const localReorder = getReorderList(db, '30d');
+    assert.strictEqual(localStanding.low_stock_count, 2);
+    assert.strictEqual(localStanding.unstocked_catalog_count, 1);
+    assert.deepStrictEqual(localReorder.map(r => r.id).sort((a, b) => a - b), [stockedLow.id, depleted.id]);
+    assert.ok(!localReorder.some(r => r.id === unstocked.id));
+
+    const running = await startCloud(cloudDir, { SHOP_SYNC_CREDENTIALS: JSON.stringify({ north: TOKEN_A }) });
+    child = running.child;
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(running.base);
+    db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_token', ?)").run(TOKEN_A);
+    let guard = 0;
+    while ((await drainOutbox(db)).synced > 0) { if (++guard > 2000) throw new Error('the mirror never drained'); }
+
+    const { cookie } = await login(running.base);
+    const cloudStanding = await (await fetch(`${running.base}/api/standing`, { headers: { cookie } })).json();
+    const cloudReorder = await (await fetch(`${running.base}/api/reorder?period=30d`, { headers: { cookie } })).json();
+    assert.strictEqual(cloudStanding.low_stock_count, 2);
+    assert.deepStrictEqual(cloudReorder.map(r => r.id).sort((a, b) => a - b), [stockedLow.id, depleted.id]);
+  } finally {
+    if (child) await stopCloud(child);
+    try { db.close(); } catch (_) {}
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(cloudDir, { recursive: true, force: true }); } catch (_) {}
+  }
+});

@@ -11,6 +11,7 @@ This document provides the data dictionary (the money tables in full, the operat
 - **PRAGMAs Applied**:
   - `PRAGMA foreign_keys = ON;` (Enforces referential integrity and cascading deletes).
   - `PRAGMA journal_mode = WAL;` (Enables Write-Ahead Logging for high-concurrency read operations and atomic transactions).
+  - `PRAGMA busy_timeout = 5000;` (Writers wait up to 5 s for a lock instead of failing instantly with SQLITE_BUSY).
 
 ---
 
@@ -283,9 +284,9 @@ Defined in `src/db.js`; read `src/sync.js` and `src/server.js` for the write pat
 - `stock_movements` - append-only stock ledger: `inventory_id`, `delta`, `reason` (receive, sale, void, correction, ...), `note`, `ref` (sale code), `created_at`. Indexed by `(inventory_id, id)`.
 - `customer_profiles` - one row per customer, `customer_name` `PRIMARY KEY COLLATE NOCASE`, `credit_limit`, `phone`, `notes` (never leaves the shop), `created_at`/`updated_at`. Synced by folded name with the implicit rowid as `local_id`.
 - `shifts` - drawer shifts: `staff_id` (no FK on purpose), `staff_name`, `opened_at`, `opening_float`, `closed_at`, `counted_cash`, `expected_cash`, `variance`, `status`.
-- `day_reconciliations` - one signed row per local day (`day` `UNIQUE`): per-method `buckets` JSON, `counted_cash`, `expected_cash`, `variance`, `status`, `signed_by`, `created_at`. A day close refuses a re-close.
+- `day_reconciliations` - one signed row per local day (`day` `UNIQUE`): per-method `buckets` JSON, `counted_cash`, `expected_cash`, `variance`, `status`, `closed_by`, `created_at`. A day close refuses a re-close.
 - `staff` - cashier accounts: `name` (`COLLATE NOCASE`), `pin_hash` (PBKDF2), `active`, timestamps.
-- `audit_log` - append-only trail with a hash chain: `category`, `action`, `actor_json`, `ok`, `detail`, `row_hash`, `prev_hash`. Verified paged by `src/audit.js`.
+- `audit_log` - append-only trail with a hash chain: `actor_type`, `actor_id`, `actor_name`, `category`, `action`, `detail`, `elevated`, and `row_hash` (added by guarded migration, chained over the row content). Verified paged by `src/audit.js`.
 - `op_log` - write-dedup keys for inventory mutations (adjustments, CSV rows, part creation, bulk edits), pruned after 2 days.
 - `sync_outbox` - the push queue: `table_name`, `local_id`, `payload` (full row JSON), `created_at`, `synced_at` (null until the cloud acks). Partial index on unsynced rows; pruned 30 days after sync, and 30 days after creation while sync is off.
 

@@ -12,7 +12,8 @@ function decorateItem(row) {
 }
 
 function listInventory(db, { search = '', brand = '', part_type = '', lowStockOnly = false, include_archived = false, limit, offset } = {}) {
-  let query = 'SELECT * FROM inventory WHERE 1=1';
+  const everStockedSql = '(EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.inventory_id = inventory.id) OR EXISTS (SELECT 1 FROM sale_items si WHERE si.inventory_id = inventory.id))';
+  let query = `SELECT inventory.*, ${everStockedSql} AS ever_stocked FROM inventory WHERE 1=1`;
   const params = [];
 
   if (!include_archived) {
@@ -38,7 +39,7 @@ function listInventory(db, { search = '', brand = '', part_type = '', lowStockOn
   }
 
   if (lowStockOnly) {
-    query += ' AND stock_quantity <= min_stock_alert';
+    query += ` AND stock_quantity <= min_stock_alert AND (stock_quantity > 0 OR ${everStockedSql})`;
   }
 
   query += ' ORDER BY brand ASC, model_name ASC, part_type ASC';
@@ -378,6 +379,8 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
   const byTriple = db.prepare(`SELECT * FROM inventory WHERE brand = ? COLLATE NOCASE AND model_name = ? COLLATE NOCASE AND part_type = ? COLLATE NOCASE ORDER BY id LIMIT 1`);
   const errors = [];
   const steps = [];
+  const applied = [];
+  const seenNewSkus = new Set();
   rows.forEach((raw, idx) => {
     try {
       const r = normalizeRow(raw);
@@ -420,7 +423,16 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
           if (qty !== 0) adjustStock(db, match.id, qty, { reason: 'receive', note: 'CSV import' }, ctx);
           return 'updated';
         });
+        applied.push({ row: idx + 1, label: partLabel(match), quantity: qty, action: 'updated' });
       } else {
+        // Two rows minting the same brand-new SKU both pass the catalog
+        // pre-check, then the second insert hits the NOCASE UNIQUE constraint
+        // and rolls back the whole file with a generic 500. Name the row instead.
+        if (sku) {
+          const skuKey = sku.toLowerCase();
+          if (seenNewSkus.has(skuKey)) throw new Error(`Duplicate SKU in this file: ${sku} (an earlier row already creates it)`);
+          seenNewSkus.add(skuKey);
+        }
         const rowData = {
           ...r,
           allow_fractional: allowFrac ? 1 : 0,
@@ -442,20 +454,23 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
         validateInventory({ ...rowData, stock_quantity: qty });
         const snap = { ...rowData, stock_quantity: qty };
         steps.push(() => { createInventoryItem(db, snap, { reason: 'receive', note: 'CSV import' }, ctx); return 'created'; });
+        applied.push({ row: idx + 1, label: partLabel(snap), quantity: qty, action: 'created' });
       }
     } catch (err) { errors.push(`Row ${idx + 1}: ${err.message}`); }
   });
   // Nothing applied at all: report without burning the op_id, so a corrected
   // file can still land.
-  if (steps.length === 0) return { created: 0, updated: 0, errors };
+  if (steps.length === 0) return { created: 0, updated: 0, errors, applied: [] };
   return txn(db, () => {
     const opId = opIdOf(meta.op_id);
-    if (opId && opReplayed(db, opId)) return { created: 0, updated: 0, errors: [], replayed: true };
+    if (opId && opReplayed(db, opId)) return { created: 0, updated: 0, errors: [], applied: [], replayed: true };
     let created = 0, updated = 0;
     for (const s of steps) (s() === 'created' ? created++ : updated++);
     if (opId) opRecord(db, opId);
     audit(db, ctx.actor, ctx.elevated, 'inventory', 'import', { created, updated, rejected: errors.length });
-    return { created, updated, errors };
+    // The applied list lets the partial-apply UI name the rows that already
+    // landed: quantity is a DELTA, so a corrected re-import must omit them.
+    return { created, updated, errors, applied };
   });
 }
 
@@ -654,7 +669,10 @@ function receiveInventory(db, items, ctx = {}) {
       throw e;
     }
     if (cost !== null) {
-      updateInventoryItem(db, item.id, { cost_price: cost }, meta, ctx);
+      // No op_id here: adjustStock already recorded this line's key, and the
+      // dedup would read it as a replay and skip the cost update. The line
+      // pre-check above owns replay for the whole receive.
+      updateInventoryItem(db, item.id, { cost_price: cost }, { reason: 'receive', note: 'Supplier receive' }, ctx);
     }
     return { id: item.id, name: partLabel(item), received: qty, unit_cost: cost ?? item.cost_price };
   }));

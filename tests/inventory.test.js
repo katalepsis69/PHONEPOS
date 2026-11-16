@@ -254,7 +254,10 @@ dbTest('CSV import creates new parts, tops up stock, writes movements, stays ato
     { brand: 'Samsung', model_name: 'A32', part_type: 'LCD (OLED)', cost_price: '120', price_retail: '260', stock_quantity: '4' },           // create
     { sku_barcode: 'AP-LCD-11', stock_quantity: '2' }                                                                                        // sku match
   ]);
-  assert.deepStrictEqual(result, { created: 1, updated: 2, errors: [] });
+  assert.strictEqual(result.created, 1);
+  assert.strictEqual(result.updated, 2);
+  assert.deepStrictEqual(result.errors, []);
+  assert.deepStrictEqual(result.applied.map(a => [a.row, a.quantity, a.action]), [[1, 3, 'updated'], [2, 4, 'created'], [3, 2, 'updated']]);
 
   const topped = db.prepare(`SELECT * FROM inventory WHERE brand = 'Apple' AND model_name = 'iPhone 11'`).get();
   assert.strictEqual(topped.stock_quantity, 5 + 3 + 2);
@@ -281,15 +284,47 @@ dbTest('CSV import creates new parts, tops up stock, writes movements, stays ato
     { brand: '', model_name: 'X', part_type: 'LCD', stock_quantity: '1' },
     { brand: 'Oppo', model_name: 'A5s', part_type: 'LCD', stock_quantity: 'not-a-number' }
   ]);
-  assert.deepStrictEqual(partial, { created: 2, updated: 0, errors: ['Row 3: stock_quantity must be an integer'] });
+  assert.strictEqual(partial.created, 2);
+  assert.strictEqual(partial.updated, 0);
+  assert.deepStrictEqual(partial.errors, ['Row 3: stock_quantity must be an integer']);
+  assert.deepStrictEqual(partial.applied.map(a => [a.row, a.quantity, a.action]), [[1, 1, 'created'], [2, 1, 'created']]);
   assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM inventory').get().n, before + 2);
   const generalRow = db.prepare(`SELECT * FROM inventory WHERE model_name = 'X'`).get();
   assert.strictEqual(generalRow.brand, 'General', 'a brandless row falls back to General from its model name');
 
   // A file where every row is bad applies nothing and reports every row.
   const allBad = importInventory(db, [{ brand: '', model_name: '', part_type: '', stock_quantity: 'x' }]);
-  assert.deepStrictEqual(allBad, { created: 0, updated: 0, errors: ['Row 1: stock_quantity must be an integer'] });
+  assert.deepStrictEqual(allBad, { created: 0, updated: 0, errors: ['Row 1: stock_quantity must be an integer'], applied: [] });
   assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM inventory').get().n, before + 2);
+});
+
+dbTest('importInventory names a duplicate brand-new SKU as a row error, not a file abort', (db) => {
+  const result = importInventory(db, [
+    { brand: 'Dup', model_name: 'D1', part_type: 'LCD', stock_quantity: '2', sku_barcode: 'DUP-NEW-1' },
+    { brand: 'Dup', model_name: 'D2', part_type: 'LCD', stock_quantity: '3', sku_barcode: 'dup-new-1' }
+  ]);
+  assert.strictEqual(result.created, 1, 'the first row lands');
+  assert.strictEqual(result.errors.length, 1);
+  assert.match(result.errors[0], /^Row 2: Duplicate SKU in this file: dup-new-1/);
+  const part = db.prepare("SELECT stock_quantity FROM inventory WHERE sku_barcode = 'DUP-NEW-1' COLLATE NOCASE").get();
+  assert.strictEqual(part.stock_quantity, 2, 'the refused row added nothing');
+  assert.deepStrictEqual(result.applied.map(a => [a.row, a.quantity, a.action]), [[1, 2, 'created']]);
+});
+
+dbTest('importInventory applied list is the re-import guard: quantity is a delta, zero moves nothing', (db) => {
+  createInventoryItem(db, { brand: 'Delta', model_name: 'D1', part_type: 'LCD', cost_price: 1, price_retail: 2, stock_quantity: 5, sku_barcode: 'DELTA-1' });
+  const first = importInventory(db, [
+    { sku_barcode: 'DELTA-1', stock_quantity: '3' },
+    { sku_barcode: 'DELTA-1', stock_quantity: '0' }
+  ]);
+  assert.deepStrictEqual(first.applied.map(a => [a.row, a.quantity, a.action]), [[1, 3, 'updated'], [2, 0, 'updated']]);
+  assert.strictEqual(getInventoryItem(db, 1).stock_quantity, 8);
+  // The corrected-file recovery path: omit the applied row, keep the fix. A
+  // re-import of the SAME delta row would add again; the applied list is what
+  // the UI shows so the operator removes it. Pin the delta semantics itself.
+  const second = importInventory(db, [{ sku_barcode: 'DELTA-1', stock_quantity: '3' }], {}, { op_id: 'delta-reimport' });
+  assert.strictEqual(getInventoryItem(db, 1).stock_quantity, 11, 'quantity is a delta: a fresh op_id adds again (the UI must list applied rows)');
+  assert.deepStrictEqual(second.applied.map(a => [a.row, a.quantity]), [[1, 3]]);
 });
 
 dbTest('text bounds: catalog columns cap, movement notes keep what the manager typed', (db) => {
@@ -554,8 +589,21 @@ dbTest('import pre-validates the adjustStock floor per row (audit 2026-11-14-b f
   assert.deepStrictEqual(mixed, {
     created: 1,
     updated: 0,
-    errors: ['Row 1: Insufficient stock: cannot reduce Floor Test - LCD by 10 (current: 5)']
+    errors: ['Row 1: Insufficient stock: cannot reduce Floor Test - LCD by 10 (current: 5)'],
+    applied: [{ row: 2, label: 'Row', quantity: 2, action: 'created' }]
   });
   assert.strictEqual(db.prepare(`SELECT stock_quantity FROM inventory WHERE sku_barcode = 'FLOOR-1'`).get().stock_quantity, 5, 'the floored row touched nothing');
   assert.strictEqual(db.prepare(`SELECT stock_quantity FROM inventory WHERE model_name = 'Row'`).get().stock_quantity, 2, 'the good row still landed');
+});
+
+dbTest('bulkEditInventory rolls back the whole batch when a later row fails', (db) => {
+  const mk = (model) => createInventoryItem(db, { brand: 'Bulk', model_name: model, part_type: 'LCD', cost_price: 1, price_retail: 5, stock_quantity: 1, supplier: 'Old' });
+  const a = mk('One'), b = mk('Two'), c = mk('Three');
+  // A row that cannot pass validation (brandless) sits in the middle of the
+  // batch: the first row must not keep its edit when the second throws.
+  db.prepare('UPDATE inventory SET brand = ? WHERE id = ?').run('', b.id);
+  assert.throws(() => bulkEditInventory(db, { ids: [a.id, b.id, c.id], action: 'update_fields', params: { supplier: 'New' } }, {}), /Brand is required/);
+  for (const id of [a.id, b.id, c.id]) {
+    assert.strictEqual(getInventoryItem(db, id).supplier, 'Old', 'all-or-nothing: no partial bulk edit survives');
+  }
 });

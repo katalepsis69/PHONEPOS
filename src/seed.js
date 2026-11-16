@@ -58,6 +58,7 @@ function seedInitialParts(db, opts = {}) {
     if (!salesCount || salesCount.count === 0) {
       if (createdParts.length >= 3) {
         const { createSale } = require('./sales');
+        txn(db, () => {
         // 1. GCash Sale
         createSale(db, {
           customer_name: 'Alice Repair Tech',
@@ -90,6 +91,7 @@ function seedInitialParts(db, opts = {}) {
           discount: 50.0,
           amount_paid: createdParts[2].price_retail
         });
+        });
         console.log('Seeded sample POS transactions and customer credit ledger!');
       }
     }
@@ -99,12 +101,16 @@ function seedInitialParts(db, opts = {}) {
 }
 
 function resetDemoData(db, ctx = {}) {
+  let seeded = 0;
+  // One savepoint around wipe AND reseed: a crash between them used to leave
+  // an empty demo shop. expenses and repairs joined the demo surface on
+  // 2026-11-13 and must be wiped and tombstoned like the rest (11-15 #7).
   txn(db, () => {
     // Deletions must reach the cloud as tombstones, or the mirror keeps the
     // demo rows forever and still pushes their queued snapshots. stock_movements
     // goes first: its rows die by CASCADE with inventory and get no hook of
     // their own.
-    for (const table of ['cash_adjustments', 'day_reconciliations', 'shifts', 'stock_movements', 'warranty_returns', 'credit_payments', 'sale_items', 'sales', 'inventory']) {
+    for (const table of ['cash_adjustments', 'day_reconciliations', 'shifts', 'stock_movements', 'warranty_returns', 'credit_payments', 'sale_items', 'sales', 'inventory', 'expenses', 'repairs']) {
       for (const { id } of db.prepare(`SELECT id FROM ${table}`).all()) enqueueDelete(db, table, id);
     }
     for (const { id } of db.prepare('SELECT rowid AS id FROM customer_profiles').all()) enqueueDelete(db, 'customer_profiles', id);
@@ -119,9 +125,12 @@ function resetDemoData(db, ctx = {}) {
     db.exec('DELETE FROM sale_items;');
     db.exec('DELETE FROM sales;');
     db.exec('DELETE FROM inventory;');
+    db.exec('DELETE FROM expenses;');
+    db.exec('DELETE FROM repairs;');
     audit(db, ctx.actor, ctx.elevated, 'system', 'reset_demo', {});
+    seeded = seedInitialParts(db);
   });
-  return seedInitialParts(db);
+  return seeded;
 }
 
 if (require.main === module) {

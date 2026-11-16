@@ -96,7 +96,7 @@ test('completeSale executes: the in-flight lock, the op_id round trip, and the b
   // button is disabled for the whole flight.
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  const busy = build({ fetchImpl: async () => { await gate; return { ok: true, json: async () => ({ id: 7, sale_code: 'SALE-7' }) }; } });
+  const busy = build({ fetchImpl: async () => { await gate; return { ok: true, json: async () => ({ id: 7, sale_code: 'SALE-7', items: [{ inventory_id: 1, quantity: 1 }] }) }; } });
   const first = vm.runInContext('completeSale', busy.ctx)();
   assert.equal(busy.S.saleInFlight, true, 'the flag must be set before the await');
   assert.equal(busy.button.disabled, true, 'the checkout button must be disabled during the flight');
@@ -111,10 +111,24 @@ test('completeSale executes: the in-flight lock, the op_id round trip, and the b
 
   // The op_id: a stored one is adopted and sent as-is, so a retry after a lost
   // response replays instead of charging twice.
-  const replay = build({ storedOpId: 'op-from-last-attempt', fetchImpl: async () => ({ ok: true, json: async () => ({ id: 8, sale_code: 'SALE-8' }) }) });
+  const replay = build({ storedOpId: 'op-from-last-attempt', fetchImpl: async () => ({ ok: true, json: async () => ({ id: 8, sale_code: 'SALE-8', items: [{ inventory_id: 1, quantity: 1 }] }) }) });
   await vm.runInContext('completeSale', replay.ctx)();
   assert.equal(replay.S.saleOpId, 'op-from-last-attempt', 'the stored op_id must be adopted');
   assert.deepEqual(replay.calls.setItem[0], ['pos_sale_op_id', 'op-from-last-attempt'], 'the adopted op_id must be persisted');
+
+  // A replayed sale whose lines differ from the edited restored cart must
+  // resubmit under a fresh key, not wipe the edits (11-15 #17).
+  let editedFetches = 0;
+  const edited = build({ storedOpId: 'op-old-sale', fetchImpl: async (url, opts) => {
+    editedFetches++;
+    const sent = JSON.parse(opts.body).items;
+    if (editedFetches === 1) return { ok: true, json: async () => ({ id: 9, sale_code: 'SALE-9', items: [{ inventory_id: 99, quantity: 5 }] }) };
+    return { ok: true, json: async () => ({ id: 10, sale_code: 'SALE-10', items: sent.map(i => ({ inventory_id: i.inventory_id, quantity: i.quantity })) }) };
+  } });
+  await vm.runInContext('completeSale', edited.ctx)();
+  assert.equal(editedFetches, 2, 'the edited cart is submitted as a new sale');
+  assert.notEqual(edited.S.saleOpId, 'op-old-sale', 'a fresh key is minted for the edited cart');
+  assert.ok(edited.calls.toasts.some(t => t.includes('edited cart')), 'the cashier is told what happened');
 
   // The success path drops the flag BEFORE resetRepairCounter, whose internal
   // setPaymentMethod stands down while a sale is in flight.
@@ -1302,6 +1316,138 @@ test('claim stub renderer escapes intake text and refuses broken money', () => {
     /refused/, 'a broken total refuses to print instead of rendering P0.00');
 });
 
+// Import quantity is a DELTA: a corrected re-import adds the already-applied
+// rows again (11-15 audit #2). The guard helpers must key rows, remember what
+// landed, and flag the overlap; the partial-apply UI must name the applied rows.
+test('import re-import guard keys rows, remembers the last import, and flags overlap', () => {
+  const src = source('public/js/views/inventory.js');
+  const start = src.indexOf('const LAST_IMPORT_KEY');
+  const end = src.indexOf('export function openImportPreview');
+  const code = src.slice(start, end).replaceAll('export ', '');
+  const store = new Map();
+  const ctx = vm.createContext({
+    localStorage: {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+    },
+  });
+  vm.runInContext(code, ctx);
+
+  const auto = { sku_barcode: 0, brand: 1, model_name: 2, part_type: 3 };
+  const keys = ctx.importKeysFromRaw([
+    ['SKU-1', 'Apple', '11', 'LCD'],
+    ['', 'Samsung', 'A32', 'OLED'],
+    ['', '', '', ''],
+  ], auto);
+  assert.equal(keys.join('|'), 'sku:sku-1|triple:samsung|a32|oled', 'sku wins, triple falls back, empty rows drop');
+
+  assert.equal(ctx.lastImportOverlap(keys), null, 'no previous import, no warning');
+  ctx.rememberImport(keys);
+  const overlap = ctx.lastImportOverlap(['sku:sku-1', 'sku:other']);
+  assert.equal(overlap.count, 1, 'the matching row is counted');
+  store.set('techparts_last_import', JSON.stringify({ at: Date.now() - 8 * 24 * 3600 * 1000, keys }));
+  assert.equal(ctx.lastImportOverlap(keys), null, 'a week-old import no longer warns');
+
+  const objs = [{ sku_barcode: 'SKU-1' }, { brand: 'Samsung', model_name: 'A32', part_type: 'OLED' }];
+  assert.equal(ctx.importKeysFromObjects(objs, [{ row: 2 }]).join('|'), 'triple:samsung|a32|oled', 'applied row numbers map to the submitted rows');
+
+  // Wiring pins: the partial-apply state renders the applied list escaped, and
+  // both success paths remember what landed.
+  assert.match(src, /appliedBox\.innerHTML = `<p class="font-semibold">Already applied/, 'the partial-apply state lists the applied rows');
+  assert.match(src, /escHtml\(`Row \$\{a\.row\}: \$\{a\.label\}/, 'applied row text goes through escHtml');
+  assert.match(src, /Remove these rows from the sheet or set their quantity to 0 before re-importing/, 'the recovery instruction names the delta hazard');
+  assert.match(src, /Quantity changes current stock: positive adds, negative removes, 0 leaves it/, 'the preview states the delta semantics');
+  const rememberCalls = src.match(/rememberImport\(importKeysFromObjects\(rows, data\.applied\)\)/g) || [];
+  assert.equal(rememberCalls.length, 2, 'partial and full success both remember the applied rows');
+});
+
+// The catalog used to rebuild every row per debounced keystroke (11-15 #20):
+// 1500 rows meant ~3.2MB of HTML per render. One page renders; the pager walks
+// the cached array; metrics and bulk selection keep the full set.
+test('inventory table renders one page and the pager walks the catalog', () => {
+  const src = source('public/js/views/inventory.js');
+  const start = src.indexOf('export function itemMatchesProfile');
+  const end = src.indexOf('export const TEMPLATE_BRANDS');
+  const code = src.slice(start, end).replaceAll('export ', '');
+  const wireStart = src.indexOf("for (const [id, delta] of [['inv-pager-prev'");
+  const wireEnd = src.indexOf('const tbody = document.getElementById', wireStart);
+  const wire = src.slice(wireStart, wireEnd);
+  const els = {};
+  const el = id => els[id] || (els[id] = {
+    textContent: '', disabled: false, dataset: {},
+    classList: { hidden: false, add(c) { if (c === 'hidden') this.hidden = true; }, remove(c) { if (c === 'hidden') this.hidden = false; } },
+    addEventListener(ev, fn) { this.click = fn; },
+    set innerHTML(v) { this.html = v; }, get innerHTML() { return this.html || ''; },
+  });
+  const rows = Array.from({ length: 1500 }, (_, i) => ({
+    id: i + 1, brand: 'B', model_name: `M${i}`, part_type: 'LCD', cost_price: 1,
+    price_retail: 2, price_technician: 1.5, stock_quantity: 5, min_stock_alert: 2, archived: 0,
+  }));
+  const ctx = vm.createContext({
+    S: { shopSettings: { business_type: 'hybrid' }, inventoryRowsCache: null },
+    document: { getElementById: el, querySelectorAll: () => [] },
+    escHtml: v => String(v ?? ''), t: (k, fb) => fb || k,
+    fmtMoney: n => String(n), formatCostPrice: n => String(n),
+    isStaff: () => false, hasElevation: () => true,
+    selectedPartIds: new Set(), updateBulkBar: () => {},
+  });
+  vm.runInContext(code, ctx);
+  vm.runInContext(wire, ctx);
+  ctx.renderInventoryTable(rows);
+  assert.equal((el('inventory-tbody').innerHTML.match(/<tr/g) || []).length, 100, 'only one page of rows is built');
+  assert.equal(el('inv-pager').classList.hidden, false, 'the pager shows past 100 rows');
+  assert.equal(el('inv-pager-page').textContent, '1 / 15');
+  assert.equal(el('inv-pager-range').textContent, '1-100 of 1500');
+  assert.equal(el('inv-pager-prev').disabled, true);
+  assert.equal(el('inv-pager-next').disabled, false);
+  el('inv-pager-next').click();
+  assert.equal(el('inv-pager-range').textContent, '101-200 of 1500', 'next walks the cached catalog without a fetch');
+  assert.equal(el('inv-pager-page').textContent, '2 / 15');
+  ctx.renderInventoryTable(rows.slice(0, 60));
+  assert.equal(el('inv-pager').classList.hidden, true, 'a short catalog hides the pager');
+  assert.equal((el('inventory-tbody').innerHTML.match(/<tr/g) || []).length, 60);
+});
+
+// Group totals must sum the same rounded per-line cents the line cells and
+// cartTotals use; rounding the unit first disagreed by a centavo (11-15 #52).
+test('cart group totals sum the rounded line cents, not a rounded unit', () => {
+  const src = source('public/js/views/pos.js');
+  const start = src.indexOf('export function renderOrderLines');
+  const end = src.indexOf('export function renderCartSummary');
+  const code = src.slice(start, end).replaceAll('export ', '');
+  const counter = {};
+  const box = () => ({ innerHTML: '', style: {}, closest: () => null });
+  const ctx = vm.createContext({
+    S: {
+      currentPriceTier: 'retail',
+      posCatalog: [],
+      cart: [
+        { is_labor: true, name: 'Labor', unit_price: 1.005, qty: 1 },
+        { id: 9, is_labor: false, brand: 'B', model_name: 'M', part_type: 'LCD', price_retail: 1.005, qty: 3 },
+      ],
+    },
+    document: { getElementById: () => box() },
+    escHtml: v => String(v ?? ''),
+    t: (k, fb) => fb || k,
+    fmtMoney: n => String(n),
+    setCounterText: (id, v) => { counter[id] = v; },
+    updateHighlightedPartRow: () => {},
+  });
+  vm.runInContext(code, ctx);
+  ctx.renderOrderLines();
+  assert.equal(counter['sum-services-total'], '1.01', '1.005 labor rounds half away from zero');
+  assert.equal(counter['sum-parts-total'], '3.01', 'the group sums the line product cents (3.015 binary -> 3.01), not 3 x rounded-unit 1.01 = 3.03');
+});
+
+test('GCash/transfer checkout refuses a blank reference client-side; audit ids escape', () => {
+  const pos = source('public/js/views/pos.js');
+  assert.match(pos, /S\.currentPaymentMethod === 'gcash' && !paymentReference/, 'GCash ref is checked before the POST');
+  assert.match(pos, /S\.currentPaymentMethod === 'transfer' && !paymentReference/, 'transfer ref is checked before the POST');
+  const auth = source('public/js/auth.js');
+  assert.ok(!auth.includes('Part #${d.id}'), 'no raw id interpolation remains in the audit sentences');
+  assert.equal((auth.match(/Part #\$\{txt\(d\.id\)\}/g) || []).length, 3, 'every id-bearing audit sentence escapes the id');
+});
+
 test('the sync chip shows the error state only for a synced-but-refused credential', () => {
   // The chip's label rule lives in main.js; drive the real expression with
   // the /api/sync/status shapes that matter instead of pinning its text.
@@ -1932,6 +2078,7 @@ test('Add Item form hides UOM/decimals/serial for profiles that do not use them 
 
   const ctx = vm.createContext({
     S,
+    crypto: { randomUUID: () => 'add-part-op-id' },
     escHtml: s => String(s ?? ''),
     t: (_k, d) => d,
     hasElevation: () => true,
@@ -2005,4 +2152,643 @@ test('Add/Edit item attribute rows line the checkboxes up with the Unit of Measu
   assert.doesNotMatch(html, /sm:mt-3/, 'no hand-tuned margin to fake the alignment');
   const boxes = html.match(/<label class="check [^"]*px-2 py-1 border border-transparent[^"]*">/g) || [];
   assert.equal(boxes.length, 4, 'both checkboxes in both rows share the select box height');
+});
+
+// The held print lock used to answer like success: no paper, no toast (#15).
+// A fallback that rendered nothing used to window.print() the previous slip (#11).
+test('autoPrintSlip distinguishes the held lock and refuses an unrendered fallback', async () => {
+  const src = source('public/js/receipts.js');
+  const start = src.indexOf('let modalPrintInFlight');
+  const end = src.indexOf("// The receipt modal's Print button");
+  const code = src.slice(start, end).replaceAll('export ', '');
+  const toasts = [];
+  let prints = 0;
+  const ctx = vm.createContext({
+    showToast: (m, k) => toasts.push([m, k]),
+    window: { print: () => { prints++; } },
+    fetch: async () => { throw new Error('response lost'); },
+  });
+  vm.runInContext(code, ctx);
+  const p1 = ctx.autoPrintSlip({ kind: 'claim_stub' }, () => {});
+  const locked = await ctx.autoPrintSlip({ kind: 'claim_stub' }, () => {});
+  assert.equal(locked, 'locked', 'the held lock is a distinct answer');
+  assert.equal(await p1, true, 'the first call fell back');
+  assert.equal(prints, 1);
+  const r2 = await ctx.autoPrintSlip({ kind: 'claim_stub' }, () => false);
+  assert.equal(r2, true);
+  assert.equal(prints, 1, 'an unrendered fallback never prints the previous slip');
+  assert.ok(toasts.some(([m]) => /could not be prepared/.test(m)), 'the refusal is surfaced');
+});
+
+test('a lost print response re-POSTs once for deduped kinds before the browser fallback', async () => {
+  const src = source('public/js/receipts.js');
+  const start = src.indexOf('let modalPrintInFlight');
+  const end = src.indexOf("// The receipt modal's Print button");
+  const code = src.slice(start, end).replaceAll('export ', '');
+  const toasts = [];
+  let calls = 0;
+  const ctx = vm.createContext({
+    showToast: (m, k) => toasts.push([m, k]),
+    window: { print: () => {} },
+    fetch: async () => {
+      calls++;
+      if (calls === 1) throw new Error('response lost');
+      return { ok: true, json: async () => ({ ok: true, deduplicated: true }) };
+    },
+  });
+  vm.runInContext(code, ctx);
+  const res = await ctx.printSlip({ kind: 'sale', sale_id: 1 });
+  assert.equal(res, true, 'the dedup answer means the first send landed');
+  assert.equal(calls, 2, 'exactly one re-POST');
+  assert.ok(toasts.some(([m]) => /duplicate suppressed/.test(m)));
+  calls = 0;
+  const stub = await ctx.printSlip({ kind: 'claim_stub' });
+  assert.equal(stub, false, 'a kind without a dedup window falls back directly');
+  assert.equal(calls, 1, 'no re-POST for non-deduped kinds');
+});
+
+test('the browser slips match paper: stub unit price, fractional qty, zero-refund guard, grouped money', () => {
+  const receipts = source('public/js/receipts.js');
+  assert.match(receipts, /@ \$\{printMoney\(unit\)\}/, 'the claim stub prints the unit price like paper');
+  assert.match(receipts, /Number\(sale\.refunded_amount\) > 0 \? `<span>-P/, 'a replacement-only RMA prints no -P0.00 total');
+  assert.match(receipts, /const moneyRow = \(l, v\) => .*printMoney\(v\)/, 'Z-report and period money rows group like the sale slip');
+  assert.ok(!receipts.includes('${it.quantity}x'), 'no hardcoded x on a possibly fractional quantity');
+});
+
+// 11-15 frontend UX batch: each pin names the finding it closes.
+test('checkout replays detect an edited cart and resubmit under a fresh key (#17)', () => {
+  const pos = source('public/js/views/pos.js');
+  assert.match(pos, /for \(let attempt = 0; attempt < 2; attempt\+\+\)/, 'the sale POST has a replay-retry loop');
+  assert.match(pos, /Submitting the edited cart as a new sale/, 'the cashier is told what happened');
+  assert.match(pos, /const lineKey = it => `\$\{it\.inventory_id \?\? it\.item_name \?\? ''\}\|\$\{Number\(it\.quantity\)\}`/, 'the comparison is identity + quantity, not price');
+});
+
+test('the audit feed has a generation guard (#18)', () => {
+  const auth = source('public/js/auth.js');
+  assert.match(auth, /let auditGen = 0;/, 'the generation token exists');
+  assert.match(auth, /const gen = \+\+auditGen;/, 'each load takes a generation');
+  assert.match(auth, /if \(gen !== auditGen\) return;/, 'a stale fetch cannot win the DOM');
+});
+
+test('add-part mints one op_id per modal open (#19)', () => {
+  const inv = source('public/js/views/inventory.js');
+  const open = inv.slice(inv.indexOf('export function openAddPartModal'), inv.indexOf('// Slow POST'));
+  assert.match(open, /addPartOpId = crypto\.randomUUID\(\);/, 'the key is minted on open, not per submit');
+  assert.match(inv, /op_id: addPartOpId \|\| crypto\.randomUUID\(\)/, 'the submit sends the modal key');
+});
+
+test('the update check error toast uses a real type (#41)', () => {
+  const bo = source('public/js/views/backoffice.js');
+  assert.ok(!/showToast\([^)]*'warn'\)/.test(bo), "'warn' is not a toast type; it renders unstyled");
+});
+
+test('a blocked scanner audio surface says so once (#56)', () => {
+  const pos = source('public/js/views/pos.js');
+  const resume = pos.slice(pos.indexOf('S.audioCtx.resume().catch'), pos.indexOf('const osc = S.audioCtx.createOscillator'));
+  assert.match(resume, /showToast/, 'the resume failure reaches the screen, not just the console');
+});
+
+test('the report pill judges freshness on return from hidden (#59)', () => {
+  const rep = source('public/js/report.js');
+  const vis = rep.slice(rep.indexOf("document.addEventListener('visibilitychange'"), rep.indexOf('/* ---------- boot'));
+  assert.match(vis, /if \(age > POLL_MS\) setOnline\(false\);/, 'the pill is re-judged before the first refresh lands');
+});
+
+// The fractional branch of the cart quantity editor: the integer refusals are
+// pinned above; these are the fractional-only answers (11-15 audit #50).
+test('cart quantity editor fractional branch: valid, min, garbage, ceiling, zero', async () => {
+  const src = source('public/js/views/pos.js');
+  const start = src.indexOf('export async function editCartQtyPrompt(');
+  const end = src.indexOf('export function removeCartItem(');
+  const code = src.slice(start, end).replaceAll('export ', '');
+  const toasts = [];
+  let removed = false;
+  const S = {
+    saleInFlight: false,
+    cart: [{ id: 7, brand: 'Wire', model_name: 'Cable', part_type: 'Cable', qty: 1, stock: 2.5, allow_fractional: 1 }],
+    posCatalog: [{ id: 7, stock_quantity: 2.5, allow_fractional: 1 }],
+  };
+  const answer = { v: null };
+  const ctx = vm.createContext({
+    S,
+    inputModal: async () => answer.v,
+    removeCartItem: () => { removed = true; },
+    renderCart() {},
+    renderPartsTable() {},
+    showToast: (m) => toasts.push(m),
+    t: (k, fb) => fb || k,
+    roundQty: v => Math.round(v * 1000) / 1000,
+  });
+  vm.runInContext(code, ctx);
+
+  answer.v = '1.5';
+  await ctx.editCartQtyPrompt(0);
+  assert.equal(S.cart[0].qty, 1.5, 'a fractional quantity lands');
+
+  answer.v = '0.0004';
+  await ctx.editCartQtyPrompt(0);
+  assert.equal(S.cart[0].qty, 1.5, 'a quantity that rounds to zero is refused');
+  assert.ok(toasts.some(m => /at least 0\.001/.test(m)));
+
+  answer.v = 'abc';
+  await ctx.editCartQtyPrompt(0);
+  assert.equal(S.cart[0].qty, 1.5, 'garbage is refused');
+
+  answer.v = '-1';
+  await ctx.editCartQtyPrompt(0);
+  assert.equal(S.cart[0].qty, 1.5, 'negative is refused');
+
+  answer.v = '9';
+  await ctx.editCartQtyPrompt(0);
+  assert.equal(S.cart[0].qty, 1.5, 'over the fractional ceiling is refused');
+  assert.ok(toasts.some(m => /Only 2\.5 available/.test(m)));
+
+  answer.v = '2.5';
+  await ctx.editCartQtyPrompt(0);
+  assert.equal(S.cart[0].qty, 2.5, 'the ceiling itself is accepted');
+
+  answer.v = '0';
+  await ctx.editCartQtyPrompt(0);
+  assert.equal(removed, true, 'zero removes the fractional line too');
+});
+
+// Pagers sit inside flex panels and beside 100%-wide .btn-quiet defaults: lock
+// button widths, single-line page counters, fixed table columns, and scroll reset.
+test('table pagers defeat btn-quiet full-width crush and lock column geometry', () => {
+  const html = source('public/index.html');
+  const css = source('public/styles.css');
+
+  for (const prefix of ['pos-parts-pager', 'customers-pager', 'inv-pager', 'returns-pager']) {
+    assert.match(html, new RegExp(`id="${prefix}"[^>]*class="[^"]*\\btable-pager\\b[^"]*\\bshrink-0\\b`));
+    assert.match(html, new RegExp(`id="${prefix}-range"[^>]*class="[^"]*\\btabular-nums\\b[^"]*\\bwhitespace-nowrap\\b`));
+    assert.match(html, new RegExp(`id="${prefix}-page"[^>]*class="[^"]*\\btabular-nums\\b[^"]*\\bwhitespace-nowrap\\b`));
+  }
+
+  assert.match(css, /\.table-pager\s+\.btn-quiet\s*\{[^}]*width:\s*auto;[^}]*min-height:\s*44px;[^}]*white-space:\s*nowrap;/s);
+  assert.match(css, /\.table-pager\s+\[id\$="-pager-page"\]\s*\{[^}]*min-width:\s*7ch;[^}]*white-space:\s*nowrap;/s);
+  assert.match(css, /\.panel\s+\.overflow-y-auto\s*\{[^}]*scrollbar-gutter:\s*stable;/s);
+  assert.match(css, /\.shelf-panel\s+\.ptable-wrap\s*\{[^}]*scrollbar-gutter:\s*stable;/s);
+  assert.match(css, /#view-inventory\s+table\.ptable:not\(\.reorder-table\)[^}]*table-layout:\s*fixed;/s);
+});
+
+test('paging prev/next resets table scrollTop across inventory and shared pagers', () => {
+  const invSrc = source('public/js/views/inventory.js');
+  const invStart = invSrc.indexOf('export function itemMatchesProfile');
+  const invEnd = invSrc.indexOf('export const TEMPLATE_BRANDS');
+  const invCode = invSrc.slice(invStart, invEnd).replaceAll('export ', '');
+  const wireStart = invSrc.indexOf("for (const [id, delta] of [['inv-pager-prev'");
+  const wireEnd = invSrc.indexOf('const tbody = document.getElementById', wireStart);
+  const wireCode = invSrc.slice(wireStart, wireEnd);
+
+  const invScroller = { scrollTop: 420 };
+  const invEls = {};
+  const invEl = id => invEls[id] || (invEls[id] = {
+    textContent: '', disabled: false, dataset: {},
+    classList: { hidden: false, add(c) { if (c === 'hidden') this.hidden = true; }, remove(c) { if (c === 'hidden') this.hidden = false; } },
+    closest: (sel) => (id === 'inventory-tbody' && sel === '.overflow-y-auto' ? invScroller : null),
+    addEventListener(ev, fn) { this.click = fn; },
+    set innerHTML(v) { this.html = v; }, get innerHTML() { return this.html || ''; },
+  });
+  const invRows = Array.from({ length: 250 }, (_, i) => ({
+    id: i + 1, brand: 'B', model_name: `M${i}`, part_type: 'LCD', cost_price: 1,
+    price_retail: 2, price_technician: 1.5, stock_quantity: 5, min_stock_alert: 2, archived: 0,
+  }));
+  const invCtx = vm.createContext({
+    S: { shopSettings: { business_type: 'hybrid' }, inventoryRowsCache: null },
+    document: { getElementById: invEl, querySelectorAll: () => [] },
+    escHtml: v => String(v ?? ''), t: (k, fb) => fb || k,
+    fmtMoney: n => String(n), formatCostPrice: n => String(n),
+    isStaff: () => false, hasElevation: () => true,
+    selectedPartIds: new Set(), updateBulkBar: () => {},
+  });
+  vm.runInContext(invCode, invCtx);
+  vm.runInContext(wireCode, invCtx);
+  invCtx.renderInventoryTable(invRows);
+  invEl('inv-pager-next').click();
+  assert.equal(invScroller.scrollTop, 0, 'inventory Next resets table scrollTop');
+  invScroller.scrollTop = 310;
+  invEl('inv-pager-prev').click();
+  assert.equal(invScroller.scrollTop, 0, 'inventory Prev resets table scrollTop');
+
+  const uiSrc = source('public/js/ui.js');
+  const pStart = uiSrc.indexOf('const wiredPagerEls');
+  const pEnd = uiSrc.indexOf('export function showToast');
+  const pagerCode = uiSrc.slice(pStart, pEnd).replaceAll('export ', '');
+  const sharedScroller = { scrollTop: 550 };
+  const sharedParent = { querySelector: () => sharedScroller };
+  const pEls = {};
+  const pEl = id => pEls[id] || (pEls[id] = {
+    textContent: '', disabled: false,
+    parentElement: sharedParent,
+    classList: { hidden: true, add() {}, remove() {} },
+    addEventListener(ev, fn) { this.click = fn; },
+  });
+  const uiCtx = vm.createContext({ document: { getElementById: pEl }, WeakSet });
+  vm.runInContext(pagerCode, uiCtx);
+  let page = 1;
+  uiCtx.updateTablePager('pos-parts-pager', 250, page, 100, (step) => { page += step; });
+  pEl('pos-parts-pager-next').click();
+  assert.equal(sharedScroller.scrollTop, 0, 'shared pager Next resets scroller scrollTop');
+  assert.equal(page, 2);
+});
+
+test('profile-filtered inventory badge reconciles low stock count across store presets', () => {
+  const invSrc = source('public/js/views/inventory.js');
+  const start = invSrc.indexOf('export function refreshInventoryBadge');
+  const end = invSrc.indexOf('export const TEMPLATE_CATEGORIES');
+  const badgeCode = invSrc.slice(start, end).replaceAll('export ', '');
+  const matchStart = invSrc.indexOf('export function itemMatchesProfile');
+  const matchEnd = invSrc.indexOf('export function renderInventoryTable');
+  const matchCode = invSrc.slice(matchStart, matchEnd).replaceAll('export ', '');
+
+  const badge = {
+    textContent: '0',
+    title: '',
+    hidden: true,
+    classList: { toggle(c, force) { if (c === 'hidden') badge.hidden = Boolean(force); } },
+  };
+  const S = { shopSettings: { business_type: 'phone' }, inventoryItems: [] };
+  const ctx = vm.createContext({
+    S,
+    document: { getElementById: id => (id === 'nav-lowstock-badge' ? badge : null) },
+  });
+  vm.runInContext(matchCode, ctx);
+  vm.runInContext(badgeCode, ctx);
+
+  const items = [
+    { brand: 'Apple', model_name: 'iPhone 11', part_type: 'LCD', stock_quantity: 0, min_stock_alert: 2, archived: 0 },
+    { brand: 'Apple', model_name: 'iPhone 12', part_type: 'Battery', stock_quantity: 5, min_stock_alert: 2, archived: 0 },
+    { brand: 'Samsung', model_name: 'A12', part_type: 'LCD', stock_quantity: 1, min_stock_alert: 3, archived: 1 },
+    { brand: 'ASUS', model_name: 'ROG', part_type: 'Motherboard', category: 'Motherboards', stock_quantity: 0, min_stock_alert: 2, archived: 0 },
+  ];
+  ctx.refreshInventoryBadge(items);
+  assert.equal(badge.textContent, '1', 'phone preset counts only active phone low/out items');
+  assert.equal(badge.hidden, false);
+
+  S.shopSettings.business_type = 'hybrid';
+  ctx.refreshInventoryBadge(items);
+  assert.equal(badge.textContent, '2', 'hybrid preset includes active phone + PC low items, skipping archived');
+});
+
+test('getPeriodStats daily mode emits hourly_trend while keeping daily trend parity', () => {
+  const os = require('node:os');
+  const { initDb } = require('../src/db');
+  const { getPeriodStats } = require('../src/analytics');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tp-hourly-'));
+  const db = initDb(path.join(dir, 'shop.db'));
+  try {
+    db.prepare(`
+      INSERT INTO sales (sale_code, customer_name, subtotal, discount, total_amount, amount_paid, payment_method, created_at)
+      VALUES ('S-H1', 'Walk-in', 500, 0, 500, 500, 'cash', datetime('now', 'localtime', '-2 hours'))
+    `).run();
+    const res = getPeriodStats(db, 'day');
+    assert.equal(res.days, 1);
+    assert.ok(Array.isArray(res.hourly_trend), 'daily stats include hourly_trend array');
+    assert.equal(res.hourly_trend.reduce((s, r) => s + r.revenue, 0), 500);
+    assert.equal(res.trend.length, 1);
+    assert.equal(res.trend[0].revenue, 500);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renderTrend expands multi-day ranges and chart renders summary strip with nice ticks', async () => {
+  const { renderTrendChart } = await import('../public/js/chart.js');
+  const boSrc = source('public/js/views/backoffice.js');
+  const tStart = boSrc.indexOf('function renderTrend(s)');
+  const tEnd = boSrc.indexOf('function renderTopProducts(');
+  const trendCode = boSrc.slice(tStart, tEnd);
+
+  const elements = new Map();
+  const makeEl = id => {
+    const el = { id, textContent: '', innerHTML: '', clientWidth: 900 };
+    elements.set(id, el);
+    return el;
+  };
+  const ctx = vm.createContext({
+    dashState: { trendMode: 'revenue' },
+    fday: v => v.slice(5),
+    fmonth: v => v,
+    fmtMoney: n => `P${Number(n || 0).toFixed(2)}`,
+    renderTrendChart,
+    $id: id => elements.get(id) || makeEl(id),
+  });
+  vm.runInContext(trendCode, ctx);
+
+  ctx.renderTrend({
+    days: 7,
+    period: '7d',
+    range: { from: '2026-11-10', to: '2026-11-16' },
+    current: { parts_revenue: 950, labor_revenue: 250, net_profit: 600 },
+    trend: [{ bucket: '2026-11-16', revenue: 950, profit: 550, count: 1, refunded: 0 }],
+  });
+  const html = elements.get('dash-trend').innerHTML;
+  assert.equal((html.match(/class="chart__bucket\b/g) || []).length, 7, 'sparse 7d range zero-fills across all 7 days');
+  assert.match(html, /class="chart-meta"/);
+  assert.match(html, /data-chart-readout/);
+  assert.doesNotMatch(html, /237\.50|712\.50/, 'ugly fractional quarter ticks replaced by clean nice ticks');
+
+  ctx.renderTrend({
+    days: 1,
+    period: 'day',
+    current: {
+      revenue: 700, gross_profit: 350, net_profit: 300,
+      parts_revenue: 700, labor_revenue: 0,
+      credit_issued: 200, credit_settled: 100, refunded_total: 50, expenses_total: 25
+    },
+    standing: { low_stock_count: 3 },
+    dead_stock: [{ id: 9 }],
+    trend: [{ bucket: '2026-11-16', revenue: 700, cost: 350, profit: 300, count: 2, refunded: 50, expenses: 25 }],
+    hourly_trend: [{ bucket: '14', revenue: 700, cost: 350, profit: 300, count: 2, refunded: 50, expenses: 25 }],
+  });
+  const hourlyHtml = elements.get('dash-trend').innerHTML;
+  assert.equal((hourlyHtml.match(/class="chart__bucket\b/g) || []).length, 12, 'daily view expands into 12 2-hour intraday blocks');
+  assert.match(hourlyHtml, /2 PM: P700\.00 \(2-4 PM · 2 sales · Cost P350\.00 · Net P300\.00 · -P50\.00 ref · -P25\.00 exp/, 'hover detail exposes full bucket cost, net, refund, and expense breakdown');
+  assert.match(hourlyHtml, /Cost \/ Net/, 'replaces dead Parts / Labor 0 readout with Cost / Net when labor is 0');
+  assert.match(hourlyHtml, /Utang \+P200\.00 \/ P100\.00 paid/);
+  assert.match(hourlyHtml, /RMA -P50\.00/);
+  assert.match(hourlyHtml, /Exp -P25\.00/);
+  assert.match(hourlyHtml, /3 low stock/);
+  assert.match(hourlyHtml, /1 dead stock/);
+  for (const lbl of ['12 AM', '2 AM', '4 AM', '6 AM', '8 AM', '10 AM', '12 PM', '2 PM', '4 PM', '6 PM', '8 PM', '10 PM']) {
+    assert.ok(hourlyHtml.includes(`>${lbl}</text>`), `daily chart renders explicit X-axis label ${lbl}`);
+  }
+});
+
+test('sidebar badges, uniform inventory toolbar, and revamped settings structure are wired', () => {
+  const html = source('public/index.html');
+  const css = source('public/styles.css');
+  const auth = source('public/js/auth.js');
+
+  for (const id of ['nav-debtors-badge', 'nav-lowstock-badge', 'nav-returns-badge', 'nav-reports-badge']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(css, /\.rail-count:not\(\.hidden\) \+ \.rail-link__hint\s*\{\s*margin-left:\s*6px;/);
+  assert.match(css, /\.rail-quick \.rail-link--logout\s*\{[\s\S]*?grid-column:\s*1 \/ -1;/);
+  assert.match(css, /#view-inventory \.parts-tools \.check--pill,[\s\S]*?height:\s*36px;/);
+  assert.match(css, /\.field-search i\.ph\s*\{[\s\S]*?z-index:\s*1;/, 'search icon paints above field-search input');
+  assert.match(html, /class="tools-btn-group"/);
+  assert.doesNotMatch(auth, /fill="#1e293b"/, 'fallback QR SVG avoids murky dark box');
+  for (const id of [
+    'settings-profile-summary', 'settings-markup-preview',
+    'staff-pin-status-chip', 'staff-recovery-chip', 'staff-count-chip',
+    'printing-width-badge', 'settings-sync-meta', 'data-backup-summary',
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`), `settings contains #${id}`);
+  }
+  assert.match(html, /class="apcard apcard--wide"/);
+  assert.match(html, /class="apcard__row apcard__row--5"/);
+
+  const boSrc = source('public/js/views/backoffice.js');
+  const rStart = boSrc.indexOf('export function updateReturnsBadge');
+  const rEnd = boSrc.indexOf('\n// Idempotency keys', rStart);
+  const badgeCode = boSrc.slice(rStart, rEnd).replace('export function ', 'function ');
+  const badgeEl = { textContent: '0', title: '', classList: { toggle(c, force) { this.hidden = force; } } };
+  const bCtx = vm.createContext({ document: { getElementById: id => (id === 'nav-returns-badge' ? badgeEl : null) } });
+  vm.runInContext(badgeCode, bCtx);
+  const localNow = new Date();
+  localNow.setHours(0, 15, 0, 0);
+  bCtx.updateReturnsBadge([{ created_at: localNow.toISOString() }]);
+  assert.equal(badgeEl.textContent, '1', 'updateReturnsBadge converts UTC ISO timestamps to local day');
+});
+
+test('table density modes, returns column sizing, receive refresh, and cloud expense audit stay wired', () => {
+  const styles = source('public/styles.css');
+  const html = source('public/index.html');
+  const theme = source('public/js/theme.js');
+  const bo = source('public/js/views/backoffice.js');
+  const cloudApp = source('cloud/public/app.js');
+  const cloudDeployApp = source('cloud-deploy/public/app.js');
+
+  assert.match(styles, /html\[data-density='compact'\] \.ptable tbody td[\s\S]*?padding-top:\s*2px;/);
+  assert.match(styles, /html\[data-density='cozy'\] \.ptable tbody td[\s\S]*?padding-top:\s*8px;/);
+  assert.match(styles, /html\[data-density='roomy'\] \.ptable tbody td[\s\S]*?padding-top:\s*15px;/);
+  assert.doesNotMatch(styles, /@media \(max-height: 700px\)[\s\S]*?padding:\s*4px 8px !important;/);
+  assert.match(html, /id="appreview-density-pill"/);
+  assert.match(theme, /appreview-density-pill/);
+
+  assert.match(styles, /#view-returns table\.ptable thead th:nth-child\(1\) \{ width: 192px; \}/);
+  assert.match(styles, /#view-returns table\.ptable thead th:nth-child\(2\) \{ width: 224px; \}/);
+  assert.match(styles, /#view-returns \.overflow-y-auto \{\s*overflow-x: auto;/);
+
+  const rxIdx = bo.indexOf('[data-action="receive-part"]');
+  assert.ok(rxIdx !== -1, 'receive-part handler exists');
+  const rxSlice = bo.slice(rxIdx, rxIdx + 2200);
+  assert.match(rxSlice, /loadDashboardData\(\);/);
+  assert.match(rxSlice, /loadPosCatalog\(\);/);
+  assert.match(rxSlice, /loadInventoryTable\(\);/);
+
+  assert.equal(cloudApp, cloudDeployApp, 'cloud/public/app.js matches cloud-deploy/public/app.js');
+  assert.match(cloudApp, /\/api\/rows\?table=expenses/);
+  assert.match(cloudApp, /\{\s*id:\s*'expenses',\s*label:\s*'Expenses'\s*\}/);
+});
+
+test('must-have bundle: utang reminders & SOA, 58mm Z-read, claim stub conditions, cost jump alert, Code128 labels, and Cloud briefing', () => {
+  const html = source('public/index.html');
+  const bo = source('public/js/views/backoffice.js');
+  const inv = source('public/js/views/inventory.js');
+  const receipts = source('public/js/receipts.js');
+  const cloudHtml = source('cloud/public/index.html');
+  const cloudDeployHtml = source('cloud-deploy/public/index.html');
+  const cloudApp = source('cloud/public/app.js');
+
+  // Repairs queue stays hidden unless explicitly unhidden by owner
+  assert.match(html, /id="tab-btn-repairs"[^>]*class="[^"]*\bhidden\b/);
+
+  // 1. Utang overdue tiers (0-7d, 8-29d, 30d+), reminder copy, and SOA
+  assert.match(html, /id="btn-copy-utang-reminder"/);
+  assert.match(html, /id="btn-print-soa"/);
+  const ageFnStart = bo.indexOf('export function utangAgeBadge(');
+  const remFnEnd = bo.indexOf('export function renderCustomersTable(');
+  const ageCtx = vm.createContext({
+    S: { shopSettings: { gcash_name: 'TechParts Cebu', gcash_number: '09171112222' } },
+    PLACEHOLDER_SHOP: { gcash_name: 'TechParts Repair & POS', gcash_number: '0917-123-4567' },
+    shopIdentityIsPlaceholder: () => false,
+    fmtMoney: n => `P${Number(n || 0).toFixed(2)}`,
+    showToast() {},
+    printCustomerSoa() {},
+    customersCache: [],
+  });
+  vm.runInContext(bo.slice(ageFnStart, remFnEnd).replaceAll('export ', ''), ageCtx);
+  const d3 = new Date(Date.now() - 3 * 86400000).toISOString();
+  const d15 = new Date(Date.now() - 15 * 86400000).toISOString();
+  const d45 = new Date(Date.now() - 45 * 86400000).toISOString();
+  assert.equal(ageCtx.utangAgeBadge({ total_credit_balance: 500, credit_date: d3 }).label, '0-7d');
+  assert.match(ageCtx.utangAgeBadge({ total_credit_balance: 500, credit_date: d15 }).html, /tag--warn/);
+  assert.equal(ageCtx.utangAgeBadge({ total_credit_balance: 500, credit_date: d45 }).label, '30d+');
+  const remText = ageCtx.buildUtangReminderText({
+    customer_name: 'Jun',
+    total_credit_balance: 1500,
+    sales: [{ sale_code: 'SALE-101', credit_balance: 1500, voided: 0 }]
+  });
+  assert.match(remText, /Jun/);
+  assert.match(remText, /P1500\.00/);
+  assert.match(remText, /SALE-101/);
+  assert.match(remText, /09171112222/);
+
+  // 2 & 3. Day close Z-Read trigger + Claim stub condition checkboxes & Seal #
+  assert.match(html, /id="intake-conditions-row"/);
+  assert.match(html, /id="intake-seal-no"/);
+  assert.match(bo, /data-action="print-z-read"/);
+  assert.match(bo, /printDayZRead\(data\.day\)/);
+
+  // 4. Cost jump warning + pure Code128 SVG encoder
+  assert.match(html, /id="inv-bulk-labels-btn"/);
+  assert.match(bo, /Supplier Cost Jump Alert/);
+  assert.match(inv, /Supplier Cost Jump Alert/);
+  const c128Start = receipts.indexOf('const CODE128_PATTERNS =');
+  const c128End = receipts.indexOf('export function printSkuLabels(');
+  const cCtx = vm.createContext({
+    escHtml: v => String(v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+  });
+  const [patLen, svg] = vm.runInContext(
+    `${receipts.slice(c128Start, c128End).replaceAll('export ', '')}\n;[CODE128_PATTERNS.length, encodeCode128Svg('SKU-BAT-11')];`,
+    cCtx
+  );
+  assert.equal(patLen, 107);
+  assert.match(svg, /^<svg[^>]*aria-label="Barcode SKU-BAT-11"/);
+  assert.match(svg, /<rect /);
+
+  // 5. Cloud Morning Briefing card + SMS/Copy reminder parity
+  assert.equal(cloudHtml, cloudDeployHtml, 'cloud/public/index.html matches cloud-deploy/public/index.html');
+  assert.match(cloudHtml, /id="morning-briefing"/);
+  assert.match(cloudApp, /function renderMorningBriefing\(/);
+  assert.match(cloudApp, /sms:/);
+  assert.match(cloudApp, /data-copy-debtor-idx/);
+
+  // Verify Morning Briefing counts only >=30d aging buckets (never '8–30 days') and picks newest close day.
+  const posSrc = source('public/js/views/pos.js');
+  assert.match(posSrc, /saveRepairDraft[\s\S]*conditions:\s*intakeExtras\.conditions/);
+  assert.match(posSrc, /resumeRepairDraft[\s\S]*applyIntakeExtras\(draft\.conditions,\s*draft\.seal_no\)/);
+  const brStart = cloudApp.indexOf('function renderMorningBriefing(');
+  const brEnd = cloudApp.indexOf('function setDeltaPill(');
+  const briefCard = { innerHTML: '', classList: { remove() {} } };
+  const bCtx = vm.createContext({
+    period: 'day',
+    fmtMoney: n => `P${Number(n || 0).toFixed(2)}`,
+    esc: s => String(s ?? ''),
+    document: { getElementById: id => (id === 'morning-briefing' ? briefCard : null) }
+  });
+  vm.runInContext(cloudApp.slice(brStart, brEnd), bCtx);
+  bCtx.renderMorningBriefing({
+    analytics: { current: { net_profit: 1200, gross_profit: 1400, revenue: 3000, sale_count: 4 } },
+    standing: {
+      debtors: 3,
+      aging: [
+        { label: '0–7 days', count: 1, amount: 500 },
+        { label: '8–30 days', count: 1, amount: 9000 },
+        { label: '31–60 days', count: 1, amount: 750 },
+        { label: '60+ days', count: 1, amount: 250 }
+      ]
+    },
+    reorder: [],
+    reconciliations: [
+      { day: '2026-11-10', variance: -200 },
+      { day: '2026-11-16', variance: 0 }
+    ],
+    shifts: []
+  });
+  assert.match(briefCard.innerHTML, /Close 2026-11-16: Balanced/, 'picks latest day even if reconciliations[0] is older');
+  assert.match(briefCard.innerHTML, /P1000\.00/, '30d+ overdue excludes 8–30 days bucket (only 750 + 250 = 1000)');
+});
+
+test('reports & profit, reorder, badge, and phone profile ignore unstocked catalog rows and match imported shorthands', async () => {
+  const { renderTrendChart } = await import('../public/js/chart.js');
+  const invSrc = source('public/js/views/inventory.js');
+  const boSrc = source('public/js/views/backoffice.js');
+  const matchCode = invSrc.slice(
+    invSrc.indexOf('export function itemMatchesProfile'),
+    invSrc.indexOf('export function renderInventoryTable')
+  ).replaceAll('export ', '');
+  const badgeCode = invSrc.slice(
+    invSrc.indexOf('export function refreshInventoryBadge'),
+    invSrc.indexOf('export const TEMPLATE_CATEGORIES')
+  ).replaceAll('export ', '');
+  const dashCode = boSrc.slice(
+    boSrc.indexOf('function renderDashboard(s)'),
+    boSrc.indexOf('function renderTopProducts(')
+  );
+  const reorderCode = boSrc.slice(
+    boSrc.indexOf('const REORDER_PREVIEW'),
+    boSrc.indexOf('function syncPeriodUi(')
+  );
+
+  const elements = new Map();
+  const mk = id => {
+    const el = {
+      id, textContent: '', innerHTML: '', title: '', value: '', clientWidth: 900,
+      classList: { hidden: true, toggle(c, force) { if (c === 'hidden') this.hidden = force !== undefined ? Boolean(force) : !this.hidden; } },
+      setAttribute() {},
+    };
+    elements.set(id, el);
+    return el;
+  };
+  const S = {
+    shopSettings: { business_type: 'phone' },
+    inventoryItems: [
+      { id: 1, brand: 'Apple', model_name: 'iPhone 11', part_type: 'Battery', item_name: null, stock_quantity: 3, min_stock_alert: 3, ever_stocked: 1, archived: 0 },
+      { id: 2, brand: 'huawe', model_name: 'bat hb386589ecw', part_type: 'battery', item_name: null, stock_quantity: 0, min_stock_alert: 3, ever_stocked: 0, archived: 0 },
+      { id: 3, brand: 'inifnix', model_name: 'chb camon 20 pro', part_type: 'charging board', item_name: null, stock_quantity: 0, min_stock_alert: 3, ever_stocked: 0, archived: 0 },
+      { id: 4, brand: 'iredmi', model_name: 'swich poco x3 gt', part_type: 'power swich', item_name: null, stock_quantity: 0, min_stock_alert: 3, ever_stocked: 0, archived: 0 },
+      { id: 5, brand: 'iphone', model_name: 'iph 13 pro gx', part_type: 'gx', item_name: null, stock_quantity: 0, min_stock_alert: 3, ever_stocked: 0, archived: 0 },
+      { id: 6, brand: 'samsung', model_name: 'chb sam a56', part_type: 'charging board', item_name: null, stock_quantity: 0, min_stock_alert: 3, ever_stocked: 0, archived: 0 },
+      { id: 7, brand: 'soldering', model_name: 'soldering tip t12 200', part_type: 'tip', item_name: null, stock_quantity: 0, min_stock_alert: 3, ever_stocked: 0, archived: 0 },
+      { id: 8, brand: 'iphone', model_name: 'center case 13', part_type: 'center case', item_name: null, stock_quantity: 0, min_stock_alert: 3, ever_stocked: 0, archived: 0 },
+      { id: 9, brand: 'iphone', model_name: 'e-p 13 pro max', part_type: 'air piece', item_name: null, stock_quantity: 0, min_stock_alert: 3, ever_stocked: 0, archived: 0 },
+      { id: 10, brand: 'iphone', model_name: 'cam iph 13', part_type: 'camera', item_name: null, stock_quantity: 0, min_stock_alert: 3, ever_stocked: 0, archived: 0 },
+    ],
+  };
+
+  const ctx = vm.createContext({
+    S,
+    dashState: { trendMode: 'revenue', reorderExpanded: false },
+    $id: id => elements.get(id) || mk(id),
+    document: { getElementById: id => elements.get(id) || mk(id), querySelectorAll: () => [] },
+    windowLabel: () => 'Today',
+    t: (_k, fb) => fb || _k,
+    fmtMoney: n => `P${Number(n || 0).toFixed(2)}`,
+    escHtml: v => String(v ?? ''),
+    deltaTag() {},
+    fday: v => v.slice(5),
+    fmonth: v => v,
+    renderTrendChart,
+    renderTopProducts() {},
+    renderDeadStock() {},
+    emptyPanel: (_i, title) => title,
+  });
+  vm.runInContext(`${matchCode}\n${badgeCode}\n${dashCode}\n${reorderCode}`, ctx);
+
+  for (const item of S.inventoryItems) {
+    assert.equal(ctx.itemMatchesProfile(item, 'phone'), true, `${item.brand} ${item.part_type} matches phone profile`);
+  }
+  assert.equal(ctx.itemMatchesProfile({ brand: 'ASUS', model_name: 'RTX 4060', part_type: 'GPU', category: 'GPU' }, 'phone'), false);
+
+  ctx.refreshInventoryBadge(S.inventoryItems);
+  assert.equal(elements.get('nav-lowstock-badge').textContent, '1', 'sidebar badge counts only stocked low part');
+
+  ctx.renderDashboard({
+    period: 'day',
+    days: 1,
+    range: { from: '2026-11-16', to: '2026-11-16' },
+    current: { revenue: 950, sale_count: 1, avg_ticket: 950, gross_profit: 550, net_profit: 550, cash_collected: 950, gcash_collected: 0, transfer_collected: 0, credit_settled: 0, collected_total: 950, parts_revenue: 950, labor_revenue: 0, credit_issued: 0, refunded_total: 0, replacement_cost: 0, expenses_total: 0, return_cash: 0, return_credit: 0, return_replacements: 0, warranty_returns: 0 },
+    previous: { revenue: 0 },
+    deltas: {},
+    standing: { low_stock_count: 1, unstocked_catalog_count: 9, total_credit_outstanding: 0, total_debtors_count: 0, total_inventory_retail_value: 2850, total_parts_stock: 3 },
+    backup: { stale: false, age_hours: 0 },
+    dead_stock: [],
+    trend: [{ bucket: '2026-11-16', revenue: 950, profit: 550, count: 1, refunded: 0 }],
+    hourly_trend: [{ bucket: '10', revenue: 950, profit: 550, count: 1, refunded: 0 }],
+    reorder: [
+      { id: 1, brand: 'Apple', model_name: 'iPhone 11', part_type: 'Battery', name: 'Apple iPhone 11 - Battery', stock_quantity: 3, min_stock_alert: 3, units_sold: 2, below_min: true, cover_days: 45, suggested_qty: 1, cost_price: 400 },
+      { id: 99, brand: 'ASUS', model_name: 'ROG Strix', part_type: 'Motherboard', name: 'ASUS ROG Strix - Motherboard', stock_quantity: 1, min_stock_alert: 2, units_sold: 0, below_min: true, cover_days: null, suggested_qty: 2, cost_price: 5000 },
+    ],
+  });
+
+  assert.match(elements.get('dash-standing').innerHTML, /<strong class="block">1<\/strong>/, 'standing shows 1 low stock');
+  assert.match(elements.get('dash-standing').innerHTML, /9 unstocked catalog/, 'standing clarifies unstocked catalog count');
+  assert.match(elements.get('dash-trend').innerHTML, /1 low stock/, 'trend flows show 1 low stock');
+  assert.equal(elements.get('dash-reorder-count').textContent, '1 part', 'reorder count filters to phone profile');
+  assert.match(elements.get('dash-reorder').innerHTML, /Receive 1/, 'reorder renders Receive CTA');
+  assert.equal(elements.get('nav-lowstock-badge').textContent, '1', 'dashboard keeps badge at 1');
 });

@@ -35,7 +35,10 @@ const MAX_AGE_HOURS = Number(process.env.POS_BACKUP_MAX_AGE_HOURS) > 0
 function newestSnapshotMs(dir) {
   let newest = 0;
   for (const f of fs.readdirSync(dir)) {
-    if (!/^shop(_backup)?_.*\.db$/.test(f)) continue;
+    // Both snapshot families: automatic daily shop-YYYY-MM-DD.db (hyphen) and
+    // manual shop_backup_*.db. The old underscore-only shape ignored every
+    // automatic snapshot, so a healthy install failed its own freshness gate.
+    if (!/^shop.*\.db$/.test(f)) continue;
     const m = fs.statSync(path.join(dir, f)).mtimeMs;
     if (m > newest) newest = m;
   }
@@ -51,7 +54,7 @@ if (!dest) {
 } else if (!(newestSnapshotMs(src) > Date.now() - MAX_AGE_HOURS * 3600000)) {
   const newest = newestSnapshotMs(src);
   console.error(`FAIL ${src} holds no snapshot newer than ${MAX_AGE_HOURS}h (newest: ${newest ? new Date(newest).toISOString() : 'none'}). `
-    + 'This is probably not the live install: set POS_BACKUP_DIR to its backups folder.');
+    + 'Either this is not the live install (set POS_BACKUP_DIR to its backups folder) or automatic snapshots have not been running (check Settings > Data and pos-server.log).');
   process.exitCode = 2;
 } else {
   // Args array, never a shell string: a path with spaces or quotes must not

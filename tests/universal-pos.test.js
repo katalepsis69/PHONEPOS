@@ -107,14 +107,14 @@ dbTest('universal shop settings allow business profile and module switches', (db
   updateShopSettings(db, 'enable_service_bench', '0');
   updateShopSettings(db, 'enable_fractional_qty', '1');
   updateShopSettings(db, 'enable_serial_tracking', '0');
-  updateShopSettings(db, 'wholesale_tier_label', 'Wholesale');
+  updateShopSettings(db, 'shop_footer_note', 'Salamat po');
 
   const settings = getShopSettings(db);
   assert.strictEqual(settings.business_type, 'grocery');
   assert.strictEqual(settings.enable_service_bench, '0');
   assert.strictEqual(settings.enable_fractional_qty, '1');
   assert.strictEqual(settings.enable_serial_tracking, '0');
-  assert.strictEqual(settings.wholesale_tier_label, 'Wholesale');
+  assert.strictEqual(settings.shop_footer_note, 'Salamat po');
 });
 
 const fs = require('node:fs');

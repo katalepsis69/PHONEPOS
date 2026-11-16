@@ -227,6 +227,18 @@ async function downloadReleaseWithResume(targetUrl, targetBytes, stagingDir) {
         // Server ignored Range header; restart from byte 0
         chunks = [];
         received = 0;
+      } else if (res.status === 206) {
+        // A nonconforming intermediary can answer 206 with a different start;
+        // concatenating that body corrupts the exe. The published digest would
+        // refuse it, but restart from byte 0 instead of wasting the download.
+        const m = String((res.headers && res.headers.get && res.headers.get('content-range')) || '').match(/^bytes (\d+)-/);
+        if (m && Number(m[1]) !== received) {
+          clearTimeout(stallTimer);
+          updateLog(`apply: Content-Range start ${m[1]} does not match resume offset ${received}; restarting from byte 0`);
+          chunks = [];
+          received = 0;
+          throw new Error('Content-Range start does not match the resume offset');
+        }
       } else if (res.status !== 200 && res.status !== 206) {
         clearTimeout(stallTimer);
         updateLog(`apply: download failed with HTTP ${res.status}`);
@@ -302,8 +314,18 @@ const updateLog = (msg) => {
   console.log(line);
 };
 
+// One outbound feed call per 5 minutes process-wide: /check is unauthenticated
+// in LAN mode, and a peer looping it used to burn GitHub's 60/hr anonymous
+// quota for the whole shop IP (11-15 audit #27). Errors cache too, so a 403
+// storm cannot turn every retry into a fresh outbound call. Tests bypass it.
+const FEED_CACHE_MS = 5 * 60 * 1000;
+let feedCache = null;
 async function checkForUpdates(currentVer = CURRENT_VERSION) {
+  if (process.env.NODE_ENV !== 'test' && feedCache && feedCache.ver === currentVer && Date.now() - feedCache.at < FEED_CACHE_MS) {
+    return { ...feedCache.result };
+  }
   const result = await checkForUpdatesInner(currentVer);
+  feedCache = { at: Date.now(), ver: currentVer, result };
   updateLog(result.checkError
     ? `check: ${result.checkError}`
     : (result.hasUpdate
@@ -686,6 +708,13 @@ async function applyUpdateInner({ downloadUrl, expectedBytes = 0, currentVer = C
         stdio: 'ignore',
         windowsHide: true
       });
+      // Spawn errors surface as an async 'error' event, not a throw: without
+      // this listener an unresolvable cmd.exe kills the server with the exe
+      // already renamed to .old. Restore it and leave a durable trace.
+      helper.on('error', (err) => {
+        try { fs.renameSync(oldExe, currentExe); } catch (_) {}
+        updateLog(`apply: swap helper failed to start (${err.code || err.message}); previous executable restored`);
+      });
       helper.unref();
     } catch (err) {
       try { fs.renameSync(oldExe, currentExe); } catch (_) {}
@@ -717,6 +746,7 @@ module.exports = {
   buildApplyScript,
   defaultUpdateStagingDir,
   consumeHandoffStatus,
+  downloadReleaseWithResume,
   setUpdateLogSink,
   setUpdateTestHooks,
   checkForUpdates,

@@ -420,6 +420,40 @@ test('backfill never enqueues the secret-bearing tables', async () => {
   }
 });
 
+test('backfill event window keeps the recent side of the 30-day edge', () => {
+  const { db, dir } = tmpDb();
+  try {
+    db.prepare(`INSERT INTO inventory (brand, model_name, part_type, cost_price, price_retail, price_technician, stock_quantity, min_stock_alert)
+      VALUES ('Edge', 'E1', 'LCD', 10, 20, 15, 10, 2)`).run();
+    const mk = () => createSale(db, {
+      customer_name: 'Edge Window', payment_method: 'cash',
+      items: [{ inventory_id: 1, item_type: 'part', quantity: 1, unit_price: 20 }],
+      amount_paid: 20,
+    });
+    const recent = mk();
+    const old = mk();
+    db.prepare("UPDATE sales SET created_at = datetime('now', '-29 days') WHERE id = ?").run(recent.id);
+    db.prepare("UPDATE sales SET created_at = datetime('now', '-31 days') WHERE id = ?").run(old.id);
+    db.prepare('DELETE FROM sync_outbox').run();
+
+    const { backfillMirror } = require('../src/sync');
+    backfillMirror(db);
+    const saleIds = db.prepare("SELECT local_id FROM sync_outbox WHERE table_name = 'sales'").all().map(r => r.local_id);
+    assert.ok(saleIds.includes(recent.id), 'a sale 29 days old backfills');
+    assert.ok(!saleIds.includes(old.id), 'a sale 31 days old stays out of the mirror');
+    const itemSales = db.prepare(`SELECT si.sale_id FROM sync_outbox o JOIN sale_items si ON si.id = o.local_id
+      WHERE o.table_name = 'sale_items'`).all().map(r => r.sale_id);
+    assert.ok(itemSales.includes(recent.id), 'the recent sale items ride along');
+    assert.ok(!itemSales.includes(old.id), 'the old sale items do not');
+    // Current-state tables ignore the window: the part backfills in full.
+    const inv = db.prepare("SELECT local_id FROM sync_outbox WHERE table_name = 'inventory'").all().map(r => r.local_id);
+    assert.ok(inv.includes(1), 'inventory is current-state, not windowed');
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('cloud commands audit the actor and replay idempotently (F3/F4)', async () => {
   const { db, dir } = tmpDb();
   db.prepare(`INSERT INTO inventory (brand, model_name, part_type, cost_price, price_retail, price_technician, stock_quantity, min_stock_alert)
@@ -471,7 +505,7 @@ test('a deterministically refused cloud command acks, logs and self-corrects the
     { id: 21, kind: 'adjust_stock', payload: { id: 1, delta: -100, reason: 'sale' } },
     { id: 22, kind: 'import_inventory', payload: { rows: [
       { brand: 'New', model_name: 'Coil', part_type: 'Filter', sku_barcode: 'DUP-2', stock_quantity: 1, cost_price: 10, price_retail: 20 },
-      { brand: 'New', model_name: 'Coil', part_type: 'Filter', sku_barcode: 'DUP-2', stock_quantity: 1, cost_price: 10, price_retail: 20 }
+      { sku_barcode: 'DUP-1', min_stock_alert: 'abc' }
     ] } },
   ];
   const bodies = [];
@@ -490,17 +524,18 @@ test('a deterministically refused cloud command acks, logs and self-corrects the
   try {
     db.prepare("INSERT OR REPLACE INTO shop_settings (key, value) VALUES ('sync_url', ?)").run(`http://127.0.0.1:${server.address().port}`);
     await drainOutbox(db);
-    // Both refusals (floor breach, duplicate SKU inside one import) are
+    // Both refusals (floor breach, invalid field inside one import) are
     // deterministic: they must ack on the first drain so a poison command
     // cannot retry on every drain forever, and the refusal must land in the
     // log an operator can actually read.
     const acked = (bodies.find(b => Array.isArray(b.ack_command_ids)) || {}).ack_command_ids || [];
     assert.ok(acked.includes(21), 'floor-breach command acked');
-    assert.ok(acked.includes(22), 'duplicate-SKU command acked');
+    assert.ok(acked.includes(22), 'invalid-field import command acked');
     assert.strictEqual(db.prepare('SELECT stock_quantity FROM inventory WHERE id = 1').get().stock_quantity, 5, 'register stock untouched by the floor refusal');
+    assert.strictEqual(db.prepare("SELECT COUNT(*) AS c FROM inventory WHERE model_name = 'Coil'").get().c, 0, 'the refused import rolled back its good row too');
     const refusals = logs.filter(m => m.includes('refused:'));
     assert.ok(refusals.some(m => m.includes('#21') && /insufficient/i.test(m)), 'floor refusal logged: ' + JSON.stringify(refusals));
-    assert.ok(refusals.some(m => m.includes('#22') && /UNIQUE constraint/i.test(m)), 'duplicate-SKU refusal logged');
+    assert.ok(refusals.some(m => m.includes('#22') && /must be/i.test(m)), 'invalid-field refusal logged');
     // The refused adjustment re-enqueues the register's real row so the
     // cloud's optimistic mirror self-corrects on the next drain.
     const pushed = bodies.filter(b => (b.events || []).some(e => e.table === 'inventory' && e.local_id === 1));
@@ -670,6 +705,27 @@ test('a whole-window of unreadable payloads is dropped without touching the netw
     assert.strictEqual(posts, 0, 'nothing was posted: there was nothing valid to send');
   } finally {
     server.close();
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('backfill covers expenses and repairs over the same 30-day window', () => {
+  const { db, dir } = tmpDb();
+  try {
+    db.prepare("INSERT INTO expenses (category, amount, created_at) VALUES ('Rent', 100, datetime('now', '-5 days'))").run();
+    db.prepare("INSERT INTO expenses (category, amount, created_at) VALUES ('Old', 100, datetime('now', '-40 days'))").run();
+    db.prepare("INSERT INTO repairs (ref_code, customer_name, status, created_at, updated_at) VALUES ('R-NEW', 'Juan', 'intake', datetime('now', '-5 days'), datetime('now'))").run();
+    db.prepare("INSERT INTO repairs (ref_code, customer_name, status, created_at, updated_at) VALUES ('R-OLD', 'Juan', 'intake', datetime('now', '-40 days'), datetime('now'))").run();
+    db.prepare('DELETE FROM sync_outbox').run();
+    const { backfillMirror } = require('../src/sync');
+    backfillMirror(db);
+    const rows = db.prepare("SELECT table_name, payload FROM sync_outbox").all();
+    const exp = rows.filter(r => r.table_name === 'expenses').map(r => JSON.parse(r.payload).category);
+    const rep = rows.filter(r => r.table_name === 'repairs').map(r => JSON.parse(r.payload).ref_code);
+    assert.deepEqual(exp, ['Rent'], 'the recent expense backfills, the 40-day-old one does not');
+    assert.deepEqual(rep, ['R-NEW'], 'the recent repair backfills, the 40-day-old one does not');
+  } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }

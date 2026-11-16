@@ -35,6 +35,10 @@ test('server survives a held preferred port (EACCES) by drifting to the next por
     env: {
       ...process.env,
       PORT: String(HELD_PORT),
+      // Explicit HOST: the direct-run default is loopback now, and a 127.0.0.1
+      // bind can coexist with a 0.0.0.0 holder on Windows. The field collision
+      // (bun.exe holding 0.0.0.0) is reproduced by binding the same shape.
+      HOST: '0.0.0.0',
       NO_AUTO_BROWSER: '1',
       NO_AUTO_EXIT: '1',
       NODE_ENV: 'test',

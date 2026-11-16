@@ -532,7 +532,7 @@ separate read-only report token.
 | POST | `/api/inventory/import` | elevated +PIN | CSV import, idempotent by `op_id` |
 | POST | `/api/inventory/bulk-edit` | elevated +PIN | Bulk price/markup/field/archive edit, idempotent by `op_id` |
 | POST | `/api/inventory/seed-starter` | elevated +PIN | Seed the starter catalog |
-| GET | `/api/inventory/barcode/:code` | session | Barcode/SKU lookup |
+| GET | `/api/inventory/barcode/:code` | session | Barcode/SKU lookup (programmatic-only; the POS resolves scans against its catalog copy) |
 | GET | `/api/inventory/reorder` | session | Supplier reorder sheet over a trailing window (`days` 1-90; costs stripped for staff) |
 | POST | `/api/inventory/:id/adjust-stock` | elevated | Stock adjustment, idempotent by `op_id` |
 | GET | `/api/inventory/:id/movements` | session | Stock movement ledger for one part |
@@ -589,12 +589,12 @@ separate read-only report token.
 | POST | `/api/auth/logout` | session | End the session |
 | POST | `/api/auth/change-pin` | exempt | Change the manager PIN |
 | GET | `/api/auth/recovery-status` | exempt | Whether a recovery password is set |
-| POST | `/api/auth/recovery-password` | elevated +PIN | Set the manager recovery password (8+ chars, PBKDF2) |
+| POST | `/api/auth/recovery-password` | elevated +PIN | Set the manager recovery password (6+ chars, PBKDF2) |
 | POST | `/api/auth/recover-pin` | exempt (15m lockout) | Reset the manager PIN with the recovery password |
 | POST | `/api/system/heartbeat` | exempt | Kiosk heartbeat that feeds the auto-exit watchdog |
 | POST | `/api/system/shutdown` | elevated +PIN | Clean shutdown |
 | GET | `/api/system/update/check` | exempt (budgeted 10/min per client) | GitHub release check |
-| GET | `/api/system/update/progress` | exempt (budgeted 300/min per client) | Read-only update state machine snapshot |
+| GET | `/api/system/update/progress` | exempt (budgeted 300/min per client) | Read-only update state machine snapshot. Unauthenticated by decision: a LAN observer can learn when the shop updates and to what version, but cannot perturb the update; the budget bounds the polling |
 | POST | `/api/system/update/apply` | elevated +PIN | Download, verify and stage an update |
 
 Anything else under `/api/` answers `404 {"error":"Endpoint not found"}`.
@@ -611,7 +611,7 @@ Anything else under `/api/` answers `404 {"error":"Endpoint not found"}`.
 | POST | `/api/pair` | live pairing code (20/min) | Mint a shop credential; refuses an existing `shop_id` |
 | GET | `/events` | manager session | SSE change stream |
 | POST | `/api/pairing-code/generate` | manager session | Mint a 6-digit pairing code |
-| POST | `/api/create-store` | exempt (30/min), first run only | Bootstrap the first store account; refuses once any claimed store exists |
+| POST | `/api/create-store` | exempt (30/min); owner PIN once claimed | Bootstrap the first store account; once any store is claimed, adding another needs the server manager PIN |
 | GET | `/api/overview` | manager session | Shops, row counts, backup age |
 | GET | `/api/standing` | manager session | Outstanding utang, debtor list, inventory value |
 | GET | `/api/rows` | manager session | Mirror rows per table (capped at 500) |

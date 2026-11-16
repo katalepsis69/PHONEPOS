@@ -8,9 +8,11 @@ function colsFor(paperWidth) {
 }
 
 // Thermal clones disagree about high-bit code pages, so anything outside
-// printable ASCII is dropped rather than risked as mojibake.
+// printable ASCII is dropped rather than risked as mojibake. Newlines and tabs
+// fold to a space first: a multiline shop address must not glue words together
+// on paper while the browser fallback shows a space (11-15 audit #42).
 function plain(value) {
-  return String(value ?? '').replace(/[^\x20-\x7e]/g, '');
+  return String(value ?? '').replace(/[\n\r\t]/g, ' ').replace(/[^\x20-\x7e]/g, '');
 }
 
 // Shop time, always. The audit rows and SQLite store UTC, so a slice of
@@ -156,7 +158,8 @@ function money(n) {
     err.amountRefusal = true;
     throw err;
   }
-  return 'P' + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const sign = value <= -0.005 ? '-' : '';
+  return sign + 'P' + Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Read the flag the throw above sets, on either side of the route.
@@ -596,7 +599,9 @@ function warrantyDays(days) {
   const raw = String(days ?? '').trim();
   if (!raw) return 7;
   const value = Number(raw);
-  return Number.isFinite(value) && value >= 0 ? value : 7;
+  // Floor: the header prints the day count and setDate floors the expiry, so
+  // 7.5 must not print "7.5 DAYS" over a 7-day expiry.
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 7;
 }
 
 // Date-only expiry, shop-local: a UTC slice would land the warranty on the
@@ -637,6 +642,9 @@ function renderClaimStubSlip(job, settings) {
   if (job.device) for (const line of labelled('Device:', job.device, cols)) push(line);
   if (job.imei) for (const line of labelled('IMEI/SN:', job.imei, cols)) push(line);
   if (job.note) for (const line of labelled('Job Note:', job.note, cols)) push(line);
+  const conditions = Array.isArray(job.conditions) ? job.conditions.map(c => plain(c)).filter(Boolean) : [];
+  if (conditions.length) for (const line of labelled('Condition:', conditions.join(', '), cols)) push(line);
+  if (job.seal_no) for (const line of labelled('Seal #:', job.seal_no, cols)) push(line);
   const items = Array.isArray(job.items) ? job.items : [];
   if (items.length) {
     push(rule(cols));
@@ -686,6 +694,74 @@ function renderPickupReadySlip(ticket, settings) {
   for (const line of wrap('Your unit is repaired and ready for pickup.', cols)) push(line, { centered: true });
   for (const line of wrap('Please present this notice and settle any balance at the counter.', cols)) push(line, { centered: true });
   push(rule(cols));
+  return slip;
+}
+
+// End-of-day / shift Z-Read handover slip. Formats cleanly at 58mm (32 cols)
+// and 80mm (48 cols): collections by payment method, refunds out, expected vs
+// counted drawer cash, variance, shift sub-counts, and a signature line.
+function renderZReadSlip(reconcile, settings) {
+  const cols = colsFor(settings.receipt_paper_width);
+  const slip = [];
+  const push = (text, opts) => slip.push({ text, ...opts });
+  const lines = (v, wide) => wrap(v, wide ? Math.floor(cols / 2) : cols).forEach((t) => push(t, wide ? { wide: true, centered: true } : {}));
+  for (const line of nameLines(settings.gcash_name, Math.floor(cols / 2))) push(line, { wide: true, centered: true });
+  lines(settings.shop_address || defaultShopSubtitle(settings));
+  lines('Tel/GCash: ' + (settings.gcash_number || ''));
+  push(rule(cols));
+  push('END OF DAY Z-READ', { wide: cols >= 40, centered: true });
+  push(row('Date:', plain(reconcile.day || localDate(new Date())), cols));
+  push(row('Printed:', localStamp(new Date()), cols));
+  if (reconcile.stored?.closed_by) {
+    for (const line of labelled('Closed By:', reconcile.stored.closed_by, cols)) push(line);
+  }
+  push(rule(cols));
+  const methods = Object.entries(reconcile.buckets || {});
+  if (methods.length) {
+    for (const [m, b] of methods) {
+      const name = String(m || 'other').charAt(0).toUpperCase() + String(m || 'other').slice(1);
+      push(row(`${name} (${b.count || 0}):`, money(b.collected || 0), cols));
+    }
+  } else {
+    push('No collections recorded.');
+  }
+  const refundVal = Math.abs(Number(reconcile.refund_total || 0));
+  push(row('Cash refunds (-):', (refundVal >= 0.005 ? '-' : '') + money(refundVal), cols));
+  push(row('Gross sales:', money(reconcile.gross_sales || 0), cols));
+  push(row('Voided tickets:', String(reconcile.void_count || 0), cols));
+  if (Number(reconcile.expenses_total) > 0) {
+    push(row('Expenses (book):', '-' + money(Math.abs(Number(reconcile.expenses_total))), cols));
+  }
+  push(rule(cols));
+  push(row('EXPECTED CASH:', money(reconcile.expected_cash || 0), cols));
+  if (reconcile.stored) {
+    const variance = Number(reconcile.stored.variance || 0);
+    const varSign = variance > 0.004 ? '+' : (variance < -0.004 ? '-' : '');
+    push(row('COUNTED CASH:', money(reconcile.stored.counted_cash || 0), cols));
+    push(row('VARIANCE:', varSign + money(Math.abs(variance)), cols));
+    push(row('STATUS:', plain(String(reconcile.stored.status || 'closed').toUpperCase()), cols));
+  } else {
+    push(row('STATUS:', 'OPEN / NOT SIGNED', cols));
+  }
+  const shifts = Array.isArray(reconcile.shifts) ? reconcile.shifts : [];
+  if (shifts.length) {
+    push(rule(cols));
+    push(`SHIFTS (${shifts.length})`);
+    for (const sh of shifts) {
+      const who = plain(sh.staff_name || 'Counter');
+      if (sh.status === 'closed') {
+        const v = Number(sh.variance || 0);
+        const sign = v > 0.004 ? '+' : (v < -0.004 ? '-' : '');
+        push(row(`#${sh.id} ${who}:`, `${money(sh.counted_cash || 0)} (${sign}${money(Math.abs(v))})`, cols));
+      } else {
+        push(row(`#${sh.id} ${who} OPEN:`, money(sh.opening_float || 0), cols));
+      }
+    }
+  }
+  push(rule(cols));
+  push('');
+  push('_'.repeat(Math.min(cols, 24)), { centered: true });
+  push('Cashier / Manager Sign', { centered: true });
   return slip;
 }
 
@@ -743,6 +819,18 @@ const { spawn } = require('node:child_process');
 // interpolated into a command line or a script literal, which is what keeps a
 // Settings-supplied queue name from ever becoming code.
 const SEND_SCRIPT = `$ErrorActionPreference = 'Stop'
+# WritePrinter succeeds even with the printer unplugged, so an offline queue
+# used to answer ok with no paper and a drawer kick hours late. Refuse here and
+# let the route fall back to the browser. WorkOffline is not trustworthy for
+# every driver (documented residual, OPERATIONS 2.6); a missing PrintManagement
+# module must not break printing, so the probe is best-effort.
+try {
+  $pp = Get-Printer -Name $env:TP_PRINTER -ErrorAction SilentlyContinue
+  if ($pp -and $pp.WorkOffline) {
+    ConvertTo-Json -Compress -InputObject @{ ok = $false; offline = $true; error = 'the printer reports offline; power it on or reconnect it, then reprint' }
+    exit
+  }
+} catch {}
 $sig = @'
 using System;
 using System.Runtime.InteropServices;
@@ -925,12 +1013,20 @@ function runPowerShell(script, env) {
 }
 
 function buildSendJob(printerName, bytes) {
+  const payload = Buffer.from(bytes).toString('base64');
+  // Windows caps one environment variable at 32767 chars and base64 inflates
+  // 4/3, so 24000 raw bytes is the ceiling. A bigger job (a 100-line claim
+  // stub with a long note) refuses here and the route's browser fallback
+  // prints it, instead of a helper that cannot start.
+  if (payload.length > 32000) {
+    throw new Error('the print job is too large for the printer helper; printing through the browser instead');
+  }
   return {
     args: powerShellArgs(SEND_SCRIPT),
     env: {
       TP_PRINTER: String(printerName),
       TP_DOC: 'TechParts POS',
-      TP_PAYLOAD: Buffer.from(bytes).toString('base64'),
+      TP_PAYLOAD: payload,
     },
     script: SEND_SCRIPT,
   };
@@ -986,7 +1082,12 @@ function parsePrinterLookup(stdout, transportError) {
 }
 
 async function sendRaw(printerName, bytes) {
-  const job = buildSendJob(printerName, bytes);
+  let job;
+  try {
+    job = buildSendJob(printerName, bytes);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
   const { out, error } = await runPowerShell(job.script, job.env);
   // A transport that never delivered an answer already carries the drained
   // stderr as its reason; hand it to the operator rather than letting
@@ -1000,4 +1101,4 @@ async function listPrinters() {
   return parsePrinterLookup(out, error);
 }
 
-module.exports = { colsFor, plain, localStamp, localDate, wrap, nameLines, row, labelled, rule, ruler, encode, DRAWER_KICK, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, renderPickupReadySlip, calculateWarrantyExpiry, warrantyDays, money, isAmountRefusal, DEVICE_LINE_PREFIX, buildSendJob, parseSendResult, parsePrinters, parsePrinterLookup, defaultPrinter, runCommand, POWER_SHELL_TIMEOUT_MS, sendRaw, listPrinters };
+module.exports = { colsFor, plain, localStamp, localDate, wrap, nameLines, row, labelled, rule, ruler, encode, DRAWER_KICK, renderTestSlip, renderSaleSlip, renderSettlementSlip, renderClaimStubSlip, renderPickupReadySlip, renderZReadSlip, calculateWarrantyExpiry, warrantyDays, money, isAmountRefusal, DEVICE_LINE_PREFIX, buildSendJob, parseSendResult, parsePrinters, parsePrinterLookup, defaultPrinter, runCommand, POWER_SHELL_TIMEOUT_MS, sendRaw, listPrinters };

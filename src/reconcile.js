@@ -1,5 +1,5 @@
 const { money } = require('./money');
-const { audit, txn } = require('./audit');
+const { audit, txn, nowIso } = require('./audit');
 const { enqueueRow } = require('./sync');
 
 // One drawer rule, two windows: a shop-local calendar day and an arbitrary
@@ -85,7 +85,7 @@ function closeDay(db, dateStr, countedCash, ctx = {}) {
     const variance = money(counted - summary.expected_cash);
     const status = Math.abs(variance) < 0.005 ? 'balanced' : 'flagged';
     const r = db.prepare('INSERT INTO day_reconciliations (day, counted_cash, expected_cash, variance, buckets, status, closed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-      dateStr, counted, summary.expected_cash, variance, JSON.stringify(summary.buckets), status, ctx.actor?.name || '', new Date().toISOString());
+      dateStr, counted, summary.expected_cash, variance, JSON.stringify(summary.buckets), status, ctx.actor?.name || '', nowIso());
     enqueueRow(db, 'day_reconciliations', Number(r.lastInsertRowid));
     const id = Number(r.lastInsertRowid);
     audit(db, ctx.actor, ctx.elevated, 'day_close', 'close', { day: dateStr, counted_cash: counted, expected_cash: summary.expected_cash, variance, status });

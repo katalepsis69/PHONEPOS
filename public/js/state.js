@@ -71,6 +71,7 @@ const _state = {
   // restored per layer on close.
   modalStack: [],
   catalogLoadFailed: false,
+  catalogLoadError: '',
   currentTheme: null, // set by main.js from localStorage
 };
 

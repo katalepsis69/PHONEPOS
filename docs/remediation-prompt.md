@@ -48,7 +48,21 @@ NON-NEGOTIABLES WHILE FIXING (AGENTS.md, restated as fix constraints)
   sentinel printer queue and the sendRaw patch; never hand-roll createServer() in a
   test (the default dbPath resolves to the real data/shop.db).
 - escHtml on every interpolation in public/; 44px touch targets; npm run build:css
-  after any utility class change.
+  after any style/utility change (runs @tailwindcss/cli plus scripts/compat-css.js to
+  strip @layer, oklch(), and bare rotate: for Edge 92).
+- Low-end performance & legacy Edge 92 contracts: keep SQLite WAL tuning (NORMAL,
+  temp_store = MEMORY, cache_size = -16000) and indexes (src/db.js); keep 100-row
+  pagination (updateTablePager) and O(1) lookupBarcode() Map in pos.js; never add
+  backdrop-filter: blur(...) or remove .grain { display: none; }; keep plain fallback
+  lines directly above color-mix() and dvh in public/styles.css; keep syncAppInert()
+  [inert] toggling and api.js crypto.randomUUID() polyfill; keep 1366x768 / <= 700 px
+  compact layout rules and zero em dashes inside the small-monitor media block
+  (tests/perf-optimizations.test.js, tests/old-browser-compat.test.js,
+  tests/small-monitor-counter-typography.test.js).
+- Keep printMoney() call-site count in public/js/receipts.js synced with
+  docs/OPERATIONS_AND_DEPLOYMENT.md (tests/printer.test.js); keep cloud/ and
+  cloud-deploy/ byte-identical; keep #tab-btn-repairs hidden and technician commissions
+  out unless explicitly requested by the owner.
 - isReleaseShaped(): never write into release/ or publish/. On Program Files installs,
   getBaseDir() routes runtime data and backups into C:\ProgramData\TechPartsPOS; --service
   binds 127.0.0.1 only and returns 400 on POST /api/system/shutdown.
@@ -76,24 +90,15 @@ A gate goes red and stays red on rerun; a fix would change behavior the finding 
 not cover; the approved list is exhausted; or the tree shows signs of concurrent
 interference (see baseline step 3). Report and stop.
 
-TREE STATE (measured 2026-11-14; refresh to observed state on every run)
-- HEAD: bbab7d4 (4 commits past tag v1.3 = 3d8dc46: the env-gated sync soak harness
-  e535a58, the sync drain starvation fix 719b396, the soak browser-env test fix 9143185,
-  and the inventory import partial-apply fix bbab7d4; origin/main is behind, pushes are
-  an owner action; tags v1.2 = 8f181f7 and v1.3 = 3d8dc46). Full source is tracked in
-  git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 682 tests, 681 pass, 1 skipped (the
-  env-gated sync soak, skips by design without SYNC_SOAK=1), 0 fail, exit 0 across 57
-  test files, about 28 s.
-- Working tree: 30 dirty tracked files plus 2 untracked (docs/audit-2026-11-14.md and
-  tests/generate-changelog.test.js): the UNCOMMITTED 2026-11-14 Stage Build rewrite
-  graft batch. An external tool rewrote generate-changelog.js/publish.bat/
-  publish-release.ps1 and the contract surfaces were grafted back (publish.bat,
-  publish-release.bat, scripts/publish-release.ps1, scripts/generate-changelog.js,
-  package.json, src/updater.js, public/index.html, public/js/i18n.js, public/js/main.js,
-  public/js/ui.js, public/js/views/backoffice.js, public/js/views/pos.js,
-  public/styles.css, public/tailwind.build.css, CHANGELOG.md, README.md,
-  RELEASE_NOTES.md, the six docs/ pass prompts, and the audit-regressions,
-  barcode-scan, frontend-regressions, i18n, packaging-workflows,
-  pos-repair-counter-ergonomics, updater-ui tests). It is unreviewed by any audit and
-  rides in every gate. Verify against `git status --short` on your run.
+TREE STATE (measured 2026-11-16; refresh to observed state on every run)
+- HEAD: 81a31fe (1 commit past tag v1.4 = f8bd979; tags v1.0..v1.4; local main tracks
+  repo history, and the release pipeline commits mid-session so never --amend).
+- Gates: npm run build:css exit 0 (tailwindcss v4.3.3 + scripts/compat-css.js); npm test
+  772 tests, 771 pass, 1 skipped (the env-gated sync soak, skips by design without
+  SYNC_SOAK=1), 0 fail, exit 0 across 59 test files, about 22 s (measured after the
+  2026-11-16 audit fixes).
+- Working tree: carries uncommitted Low-End Optimization, Edge 92 Compatibility
+  (scripts/compat-css.js), Table Density/Chart/Ergonomics, 5-Feature Must-Have Bundle,
+  the 11-15 remediation batch, and the 2026-11-16 audit fixes (trial seal redaction,
+  pickup print-lock toast, z_read docs). Refresh from `git status --short`. Version is
+  1.4 across package.json, CURRENT_VERSION, and MyAppVersion.

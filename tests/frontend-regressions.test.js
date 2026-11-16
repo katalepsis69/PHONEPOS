@@ -73,6 +73,9 @@ test('POS search stays local and printable reports keep counts non-monetary', ()
   // stays local: one input wiring, no global routing left in main.js.
   assert.ok(!main.includes('routeGlobalSearch'), 'the global search routing must stay deleted');
   assert.equal((main.match(/on\('pos-search-input', 'input'/g) || []).length, 1);
+  // The shelf rebuilds every filtered row; a keystroke burst must collapse to
+  // one render (11-15 audit #21). Enter/arrows read getFilteredParts() live.
+  assert.match(main, /on\('pos-search-input', 'input', debounce\(\(\) => renderPartsTable\(\), 150\)\)/, 'POS search render is debounced');
   assert.equal((pos.match(/pos-search-input'\)\?\.addEventListener\('input'/g) || []).length, 0);
   assert.match(receipts, /moneyRow\('Parts', c\.parts_revenue\)/);
   assert.match(receipts, /moneyRow\('Labor', c\.labor_revenue\)/);
@@ -99,7 +102,7 @@ test('counter hygiene: tier resets per job, discount caps at subtotal, zero-peso
   // F14: nothing billable means no sale and no receipt
   assert.match(pos, /Order has nothing to charge/);
   // F6 client half: counted cash uses the numbered modal, not prompt()
-  assert.match(pos, /inputModal\('Counted cash', \{ inputType: 'number'/);
+  assert.match(pos, /inputModal\(t\('pos\.counted_cash', 'Counted cash'\), \{ inputType: 'number'/);
   assert.doesNotMatch(pos, /prompt\('Counted cash/);
 });
 

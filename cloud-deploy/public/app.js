@@ -13,6 +13,13 @@ let reorderCustomTimer = null;
 const reorderOrderQtyOverrides = new Map();
 let activeStockModalItem = null;
 let pendingImportRows = [];
+let cloudDebtorReminders = [];
+// One op_id per user intent (modal open), reused on retry: a lost response
+// followed by a second Save must dedup, not double the stock. No crypto API:
+// the factory-Edge floor predates randomUUID.
+let stockModalOpId = '';
+let importModalOpId = '';
+const newOpId = prefix => prefix + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
 
 const fmtMoney = n => '₱' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -578,6 +585,73 @@ function updateAuditBanner({ sales, rets, reconciliations, adjustments }) {
     : 'No drawer shortages, voids, or returns logged';
 }
 
+function renderMorningBriefing({ analytics, standing, reorder, reconciliations, shifts }) {
+  const card = document.getElementById('morning-briefing');
+  if (!card) return;
+  const c = analytics?.current || {};
+  const labelMap = { day: 'Today', '7d': '7 Days', '30d': '30 Days', custom: 'Custom' };
+  const periodLabel = labelMap[period] || 'Today';
+  const netProfit = Number(c.net_profit ?? c.gross_profit ?? 0);
+  const rev = Number(c.revenue || 0);
+  const marginPct = rev > 0 ? Math.round(((Number(c.gross_profit || 0)) / rev) * 100) : 0;
+
+  const latestRecon = (reconciliations || []).reduce((best, r) => {
+    if (!r || !r.day) return best;
+    return (!best || String(r.day) > String(best.day)) ? r : best;
+  }, null);
+  const openShift = [...(shifts || [])].sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0)).find(s => s.status !== 'closed');
+  let drawerBadge = 'No drawer close yet';
+  let drawerCls = '';
+  if (latestRecon) {
+    const v = Number(latestRecon.variance) || 0;
+    if (Math.abs(v) < 0.01) {
+      drawerBadge = `Close ${latestRecon.day}: Balanced`;
+      drawerCls = 'cash';
+    } else {
+      drawerBadge = `Close ${latestRecon.day}: ${v < 0 ? 'Short' : 'Over'} ${fmtMoney(Math.abs(v))}`;
+      drawerCls = v < 0 ? 'utang' : 'warn';
+    }
+  } else if (openShift) {
+    drawerBadge = `Shift #${openShift.id} OPEN · Float ${fmtMoney(openShift.opening_float)}`;
+    drawerCls = 'gcash';
+  }
+
+  // Match only buckets whose lower day boundary is >= 30 (e.g. '31–60 days', '60+ days', '30d+'),
+  // never '8–30 days' which contains '30' as the upper bound.
+  const overdueRows = (standing?.aging || []).filter(a => {
+    const lo = parseInt(String(a.label || ''), 10);
+    return Number.isFinite(lo) && lo >= 30;
+  });
+  const overdueAmt = overdueRows.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const overdueCnt = overdueRows.reduce((s, a) => s + (Number(a.count) || 0), 0);
+  const lowItems = (reorder || []).filter(i => i.below_min);
+  const stockoutCnt = lowItems.filter(i => Number(i.stock_quantity) <= 0).length;
+
+  card.classList.remove('hidden');
+  card.innerHTML = `
+    <div class="briefing-head">
+      <span class="briefing-title">Owner Briefing · ${esc(periodLabel)}</span>
+      <button type="button" class="badge ${drawerCls}" data-brief-tab="audit" style="border:0;cursor:pointer;">${esc(drawerBadge)}</button>
+    </div>
+    <div class="briefing-grid">
+      <button type="button" class="briefing-cell" data-brief-tab="reports">
+        <span class="briefing-cell__k">Net Profit</span>
+        <span class="briefing-cell__v" style="color:${netProfit >= 0 ? 'var(--cash)' : 'var(--alert)'};">${fmtMoney(netProfit)}</span>
+        <span class="briefing-cell__sub">${c.sale_count || 0} sales · ${marginPct}% gross margin</span>
+      </button>
+      <button type="button" class="briefing-cell" data-brief-tab="utang">
+        <span class="briefing-cell__k">Overdue 30d+</span>
+        <span class="briefing-cell__v" style="color:${overdueAmt > 0 ? 'var(--alert)' : 'var(--text)'};">${fmtMoney(overdueAmt)}</span>
+        <span class="briefing-cell__sub">${overdueAmt > 0 ? `${overdueCnt} aged sale${overdueCnt === 1 ? '' : 's'}` : `${standing?.debtors || 0} open debtor(s)`}</span>
+      </button>
+      <button type="button" class="briefing-cell" data-brief-tab="stock">
+        <span class="briefing-cell__k">Stock Alerts</span>
+        <span class="briefing-cell__v" style="color:${stockoutCnt > 0 ? 'var(--alert)' : (lowItems.length ? 'var(--warn)' : 'var(--cash)')};">${stockoutCnt} out</span>
+        <span class="briefing-cell__sub">${lowItems.length} below minimum</span>
+      </button>
+    </div>`;
+}
+
 function setDeltaPill(el, delta) {
   if (!el) return;
   const v = Number(delta);
@@ -606,7 +680,7 @@ async function refresh() {
       const t = document.getElementById('range-to')?.value;
       analyticsQuery = `period=custom&from=${encodeURIComponent(f || '')}` + (t ? `&to=${encodeURIComponent(t)}` : '') + shopQuery;
     }
-    const [sales, utang, reorder, rets, reconciliations, adjustments, shifts, overview, analytics, standing, deadStock, reorderSheet, inventory] = await Promise.all([
+    const [sales, utang, reorder, rets, reconciliations, adjustments, shifts, expenses, overview, analytics, standing, deadStock, reorderSheet, inventory] = await Promise.all([
       api('/api/rows?table=sales' + shopQuery),
       api('/api/rows?table=credit_payments' + shopQuery),
       api('/api/reorder?days=' + reorderDays + shopQuery),
@@ -614,6 +688,7 @@ async function refresh() {
       api('/api/rows?table=day_reconciliations' + shopQuery),
       api('/api/rows?table=cash_adjustments' + shopQuery),
       api('/api/rows?table=shifts' + shopQuery),
+      api('/api/rows?table=expenses' + shopQuery).catch(() => []),
       api('/api/overview'),
       api('/api/analytics?' + analyticsQuery),
       api(standingPath),
@@ -705,6 +780,7 @@ async function refresh() {
     }
 
     updateAuditBanner({ sales, rets, reconciliations, adjustments });
+    renderMorningBriefing({ analytics, standing, reorder, reconciliations, shifts });
     setCloudFreshness(true);
 
     lastLoadedData = {
@@ -719,6 +795,7 @@ async function refresh() {
       reconciliations,
       adjustments,
       shifts,
+      expenses,
       deadStock,
       debtors: standing.debtor_list,
       aging: Array.isArray(standing.aging) ? standing.aging : []
@@ -768,6 +845,7 @@ const CHIP_CONFIG = {
     { id: 'shifts', label: 'Shifts' },
     { id: 'voids', label: 'Voided Sales' },
     { id: 'cash_adj', label: 'Cash In/Out' },
+    { id: 'expenses', label: 'Expenses' },
     { id: 'rma', label: 'RMA Returns' }
   ]
 };
@@ -949,17 +1027,30 @@ function renderTab(data) {
       box.innerHTML = agingHtml + '<div class="empty-state">No open utang balances found.</div>';
       return;
     }
-    box.innerHTML = agingHtml + sorted.map(d => `
+    cloudDebtorReminders = sorted.map(d => {
+      const cname = d.name || 'Customer';
+      return `Hi ${cname}, reminder: unpaid shop balance is ${fmtMoney(d.balance)}. Please settle at your convenience. Thank you!`;
+    });
+    box.innerHTML = agingHtml + sorted.map((d, idx) => {
+      const cleanTel = d.phone ? String(d.phone).replace(/[^+\d]/g, '') : '';
+      const smsLink = cleanTel
+        ? `<a class="debtor-btn" href="sms:${esc(encodeURIComponent(cleanTel))}?body=${esc(encodeURIComponent(cloudDebtorReminders[idx]))}">SMS</a>`
+        : '';
+      return `
       <div class="feed-item">
         <div class="feed-left">
           <span class="feed-code">${esc(d.name || 'Walk-in')}</span>
           <div class="feed-meta">Last transaction ${timeAgo(d.last_at)}${d.phone ? ` · <a class="debtor-tel" href="tel:${esc(d.phone)}">${esc(d.phone)}</a>` : ''}</div>
         </div>
         <div class="feed-right" style="display: flex; align-items: center; gap: 8px;">
+          <div class="debtor-actions">
+            ${smsLink}
+            <button type="button" class="debtor-btn" data-copy-debtor-idx="${idx}">Copy</button>
+          </div>
           <div class="feed-amt debt">${fmtMoney(d.balance)}</div>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
   } else if (currentTab === 'stock') {
     if (feedChip === 'catalog') {
       const catalog = (data.inventory || []).filter(item => {
@@ -1188,6 +1279,20 @@ function renderTab(data) {
           meta: a.reason || 'Manual drawer adjustment',
           amt: fmtMoney(amt),
           amtClass: amt < 0 ? 'warn' : ''
+        });
+      }
+    }
+    if (feedChip === 'all' || feedChip === 'expenses') {
+      for (const ex of (data.expenses || [])) {
+        const amt = Number(ex.amount) || 0;
+        events.push({
+          ts: ex.created_at || ex.expense_date || '',
+          code: ex.category || 'Expense',
+          badge: 'Expense',
+          badgeClass: 'warn',
+          meta: `Operating expense${ex.expense_date ? ` · ${ex.expense_date}` : ''} (note offline-only)`,
+          amt: `-${fmtMoney(amt)}`,
+          amtClass: 'warn'
         });
       }
     }
@@ -1454,6 +1559,36 @@ document.getElementById('audit-banner')?.addEventListener('click', () => {
   setActiveTab('audit');
 });
 
+document.getElementById('morning-briefing')?.addEventListener('click', e => {
+  const btn = e.target.closest('[data-brief-tab]');
+  if (!btn) return;
+  setActiveTab(btn.dataset.briefTab);
+  document.getElementById('feed-body')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+
+document.getElementById('feed-body')?.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-copy-debtor-idx]');
+  if (!btn) return;
+  const idx = Number(btn.dataset.copyDebtorIdx);
+  const text = cloudDebtorReminders[idx];
+  if (!text) return;
+  let copied = false;
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); copied = true; } catch (_) {}
+  }
+  if (!copied) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { copied = document.execCommand('copy'); } catch (_) {}
+    ta.remove();
+  }
+  showToast(copied ? 'Reminder copied. Paste in Messenger or SMS' : text);
+});
+
 document.querySelectorAll('.period-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.period-tab').forEach(t => {
@@ -1716,9 +1851,9 @@ function parseCloudImportRows(text) {
       uom: String(get('uom')).trim(),
       allow_fractional: rawFrac !== '' ? (/^(1|true|yes)$/i.test(rawFrac) ? 1 : 0) : '',
       sku_barcode: String(get('sku_barcode')).trim(),
-      cost_price: num(get('cost_price')),
-      price_retail: num(get('price_retail')),
-      price_technician: get('price_technician') !== '' ? num(get('price_technician')) : num(get('price_retail')),
+      cost_price: get('cost_price') !== '' ? num(get('cost_price')) : '',
+      price_retail: get('price_retail') !== '' ? num(get('price_retail')) : '',
+      price_technician: get('price_technician') !== '' ? num(get('price_technician')) : '',
       stock_quantity: Math.max(0, Math.round(num(get('stock_quantity')) * 1000) / 1000),
       min_stock_alert: rawMin !== '' ? Math.max(0, Math.round(num(rawMin) * 1000) / 1000) : '',
       supplier: String(get('supplier')).trim(),
@@ -1730,6 +1865,7 @@ function parseCloudImportRows(text) {
 
 function openStockModal(item) {
   activeStockModalItem = item;
+  stockModalOpId = newOpId('cloud-adj-');
   const modal = document.getElementById('stock-modal');
   const partEl = document.getElementById('stock-modal-part');
   const deltaEl = document.getElementById('stock-modal-delta');
@@ -1775,6 +1911,7 @@ async function submitStockModal() {
         delta,
         reason: reasonEl?.value || 'receive',
         note: noteEl?.value || 'Added from Cloud',
+        op_id: stockModalOpId,
       }),
     });
     document.getElementById('stock-modal')?.classList.remove('open');
@@ -1794,6 +1931,7 @@ async function submitStockModal() {
 
 function openCloudImportModal(fileName, rows) {
   pendingImportRows = rows;
+  importModalOpId = newOpId('cloud-imp-');
   const modal = document.getElementById('import-modal');
   const subEl = document.getElementById('import-modal-sub');
   const previewEl = document.getElementById('import-modal-preview');
@@ -1837,6 +1975,7 @@ async function confirmCloudCsvImport() {
       body: JSON.stringify({
         shop_id: selectedShop || '',
         rows: pendingImportRows,
+        op_id: importModalOpId,
       }),
     });
     document.getElementById('import-modal')?.classList.remove('open');

@@ -16,26 +16,12 @@ const generateReturnCode = () => `RMA-${crypto.randomUUID().replace(/-/g, '').sl
 // unknown payment methods.
 const RETURN_TYPES = ['replacement', 'credit_refund', 'cash_refund'];
 
-function createWarrantyReturn(db, {
+function validateWarrantyClaim(db, {
   sale_id,
   sale_item_id,
   quantity = 1,
-  return_type = 'replacement',
-  return_reason = 'other',
-  replacement_inventory_id = null,
-  refund_amount = 0.0,
-  technician_notes = '',
-  op_id = null
+  return_type = 'replacement'
 }, ctx = {}) {
-  // Idempotency, same contract as sales: a client op_id replays as the
-  // original RMA. Without it, a double submit on a qty-2 line drew two
-  // replacement units (measured 2026-09-27).
-  const opId = String(op_id || '').trim() || null;
-  if (opId && opId.length > 64) throw new Error('op_id too long');
-  if (opId) {
-    const existing = db.prepare('SELECT id FROM warranty_returns WHERE op_id = ?').get(opId);
-    if (existing) return getWarrantyReturnDetails(db, existing.id);
-  }
   const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(sale_id);
   if (!sale) throw new Error(`Sale ID ${sale_id} not found`);
   if (sale.voided) throw new Error('Cannot return items on a voided sale: stock was already restored by the void');
@@ -86,6 +72,18 @@ function createWarrantyReturn(db, {
     throw new Error(`Cannot return item: already returned ${alreadyReturned} of ${item.quantity} purchased unit(s)`);
   }
 
+  return { sale, item, qty, outOfWindow };
+}
+
+function persistWarrantyReturn(db, claim, {
+  return_type,
+  return_reason,
+  replacement_inventory_id,
+  refund_amount,
+  technician_notes,
+  opId
+}, ctx = {}) {
+  const { sale, item, qty, outOfWindow } = claim;
   const returnCode = generateReturnCode();
   const notes = (technician_notes || '').trim().slice(0, 500);
   const customerName = sale.customer_name || 'Walk-in Customer';
@@ -192,6 +190,31 @@ function createWarrantyReturn(db, {
 
     return getWarrantyReturnDetails(db, Number(result.lastInsertRowid));
   });
+}
+
+function createWarrantyReturn(db, {
+  sale_id,
+  sale_item_id,
+  quantity = 1,
+  return_type = 'replacement',
+  return_reason = 'other',
+  replacement_inventory_id = null,
+  refund_amount = 0.0,
+  technician_notes = '',
+  op_id = null
+}, ctx = {}) {
+  // Idempotency, same contract as sales: a client op_id replays as the
+  // original RMA. Without it, a double submit on a qty-2 line drew two
+  // replacement units (measured 2026-09-27).
+  const opId = String(op_id || '').trim() || null;
+  if (opId && opId.length > 64) throw new Error('op_id too long');
+  if (opId) {
+    const existing = db.prepare('SELECT id FROM warranty_returns WHERE op_id = ?').get(opId);
+    if (existing) return getWarrantyReturnDetails(db, existing.id);
+  }
+  const params = { sale_id, sale_item_id, quantity, return_type, return_reason, replacement_inventory_id, refund_amount, technician_notes };
+  const claim = validateWarrantyClaim(db, params, ctx);
+  return persistWarrantyReturn(db, claim, { ...params, opId }, ctx);
 }
 
 function listWarrantyReturns(db, { search = '', return_type = '' } = {}) {

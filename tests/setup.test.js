@@ -277,6 +277,7 @@ test('service mode via POS_TEST_SERVICE_MODE env: status returns service_mode: t
     const res = createServer({ dbPath: ':memory:' });
     server = res.server;
     db = res.db;
+    require('./helper').seedSentinelPrinter(db);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = server.address().port;
     const baseUrl = `http://127.0.0.1:${port}`;

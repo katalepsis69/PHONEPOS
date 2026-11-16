@@ -1,10 +1,10 @@
 import { S } from './state.js';
-import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, initConfirmModal, initInputModal, initLiveClock, openModal, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
-import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, syncCloudUi, openForgotPinPanel, closeForgotPinPanel, submitRecoveryPinReset, submitRecoveryPasswordChange } from './auth.js';
+import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, debounce, initConfirmModal, initInputModal, initLiveClock, openModal, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
+import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, updateStoreMarkupPreview, syncCloudUi, openForgotPinPanel, closeForgotPinPanel, submitRecoveryPinReset, submitRecoveryPasswordChange } from './auth.js';
 import { autoPrintEnabled, calculateChange, calculateCreditBalance, clearDeviceSelection, setPosBrandFilter, clearRepairOrder, completeSale, copyRepairRef, customerComboboxInit, editCartQtyPrompt, fillExactAmount, focusImeiForScan, formatPhPhone, loadCustomerSuggestions, loadPosCatalog, newRepairRef, onCustomerNameInput, onDeviceSelected, onPartSearchKeydown, onRepairIntakeInput, printClaimStub, quickAddPart, refreshDraftChip, removeCartItem, renderCartSummary, resetPosFilters, resetRepairCounter, restoreCartRecovery, saveRepairDraft, setPartCategory, setInStockOnly, setPaymentMethod, setPriceTier, toggleRepairNote, renderPartsTable, initScanListeners, resumeRepairDraft, clearRefusedScans, openScanRefusals } from './views/pos.js';
-import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, setAddItemTemplate, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
+import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, printBulkSkuLabels, printEditModalLabel, setAddItemTemplate, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
 import { loadRepairs, wireRepairsView } from './views/repairs.js';
-import { editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, openUpdateModal, downloadBackup } from './views/backoffice.js';
+import { copyUtangReminder, editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printActiveCustomerSoa, printDayZRead, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, openUpdateModal, downloadBackup, updateReturnsBadge } from './views/backoffice.js';
 import { openShiftPrompt, closeShiftPrompt } from './views/pos.js';
 import { printModalSlip, printTestReceipt, printZReport, reprintLastReceipt } from './receipts.js';
 import './api.js'; // side effect: session/auth-aware fetch wrapper
@@ -130,14 +130,7 @@ export function initUxEnhancements() {
     else deactivateStaffPrompt(id, btn.dataset.staffName);
   });
 
-  // V5: F2 hint on the credits nav link (every other tab shows its shortcut).
-  const creditsBtn = document.getElementById('tab-btn-credits');
-  if (creditsBtn) {
-    const hint = document.createElement('span');
-    hint.className = 'rail-link__hint';
-    hint.textContent = 'F2';
-    creditsBtn.insertBefore(hint, document.getElementById('nav-debtors-badge'));
-  }
+  // F2 hint now lives directly in index.html alongside #nav-debtors-badge.
 
   // F4: reprint lives in the rail now — static button in index.html wired
   // through ACTIONS as "reprint-last".
@@ -231,6 +224,7 @@ const ACTIONS = {
   'open-settings': () => openSettingsModal(),
   'open-staff-settings': () => openSettingsModal('staff'),
   'open-cloud-settings': () => openSettingsModal('cloud'),
+  'refresh-cloud-status': () => refreshSyncChip(true),
   'disconnect-cloud': () => disconnectCloud(),
   'settings-tab': el => switchSettingsTab(el.dataset.tab),
   'setup-width': el => {
@@ -312,6 +306,12 @@ const ACTIONS = {
   'import-template': () => downloadImportTemplate(),
   'bulk-clear': () => clearInventorySelection(),
   'bulk-edit': () => openBulkEditModal(),
+  'bulk-print-labels': () => printBulkSkuLabels(),
+  'print-edit-label': () => printEditModalLabel(),
+  'copy-utang-reminder': () => copyUtangReminder(),
+  'copy-row-reminder': el => copyUtangReminder(el.dataset.customer),
+  'print-customer-soa': () => printActiveCustomerSoa(),
+  'print-z-read': () => printDayZRead(),
   'print-slip': () => printModalSlip(),
   // The receipt modal's Print button lives here, but what it prints is decided
   // in receipts.js: whichever renderer filled the modal declared its own print
@@ -451,7 +451,7 @@ function initFormWiring() {
   on('repair-device-input', 'input', e => onDeviceSelected(e.target.value));
   on('repair-imei', 'input', onRepairIntakeInput);
   on('pos-search-input', 'keydown', onPartSearchKeydown);
-  on('pos-search-input', 'input', () => renderPartsTable());
+  on('pos-search-input', 'input', debounce(() => renderPartsTable(), 150));
   on('pos-category-filter', 'change', e => setPartCategory(e.target.value));
   on('pos-instock-only', 'change', e => setInStockOnly(e.target.checked));
   on('pos-customer-name', 'input', onCustomerNameInput);
@@ -499,6 +499,8 @@ function initFormWiring() {
   on('settings-item-rows', 'change', loadReceiptPreview);
   on('settings-paper-width', 'change', loadReceiptPreview);
   on('settings-business-type', 'change', e => applyBusinessPreset(e.target.value));
+  on('settings-default-retail-markup', 'input', updateStoreMarkupPreview);
+  on('settings-default-wholesale-markup', 'input', updateStoreMarkupPreview);
 
   on('form-add-part', 'submit', submitAddPart);
   on('form-edit-part', 'submit', submitEditPart);
@@ -656,6 +658,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadPosCatalog();
   await loadCustomerSuggestions();
   refreshDraftChip();
+  // Hydrate Warranty & returns badge at boot without blocking counter launch.
+  if (typeof updateReturnsBadge === 'function') {
+    fetch('/api/returns?limit=25').then(r => r.ok ? r.json() : []).then(updateReturnsBadge).catch(() => {});
+  }
   // Dashboard data loads lazily via switchTab('dashboard') — it is
   // manager-elevation-gated server-side now.
 
@@ -963,10 +969,6 @@ function initMobileNav() {
     tabBar.querySelectorAll('[data-tabbar]').forEach(b =>
       b.classList.toggle('is-active', b.dataset.tabbar === S.currentTab));
   };
-  const origSwitch = switchTab;
-  // wrap: switchTab is imported; monkey-patch not possible on import binding —
-  // instead observe clicks + a MutationObserver-free interval is overkill:
-  // the delegated switch-tab action above already fires; sync on every tab action:
   document.addEventListener('click', e => {
     if (e.target.closest('[data-action="switch-tab"]')) setTimeout(syncTabbar, 0);
   });
@@ -978,7 +980,7 @@ function initMobileNav() {
 // CLOUD SYNC CHIP — mirrors /api/sync/status in the topbar. Hidden
 // while sync is off so the offline-first default stays visually quiet.
 // -------------------------------------------------------------
-export async function refreshSyncChip() {
+export async function refreshSyncChip(manual = false) {
   const chip = document.getElementById('sync-status-chip');
   try {
     const res = await fetch('/api/sync/status');
@@ -990,6 +992,7 @@ export async function refreshSyncChip() {
     if (!res.ok) throw new Error('status unavailable');
     const s = await res.json();
     syncCloudUi(s);
+    if (manual) showToast(s.url_configured ? 'Cloud sync status updated' : 'Local telemetry status updated', 'info');
     if (!chip) return;
     if (!s.url_configured) { chip.classList.add('hidden'); return; }
     chip.classList.remove('hidden');
@@ -1020,6 +1023,7 @@ export async function refreshSyncChip() {
       + (s.last_error ? `. Last error: ${s.last_error}` : '');
   } catch (_) {
     syncCloudUi({ offline: true });
+    if (manual) showToast('Could not reach cloud sync status', 'warning');
     if (chip) {
       chip.classList.remove('is-synced', 'is-syncing', 'is-local');
       chip.classList.add('is-error');

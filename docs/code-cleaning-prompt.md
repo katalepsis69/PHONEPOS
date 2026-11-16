@@ -61,6 +61,21 @@ TRAPS (look dead, are deliberately kept; ask before touching ANY of these)
   src/server.js, isProgramFilesPath in src/db.js, schtasks restart in src/updater.js,
   PIN_NAMESPACES.recovery in src/auth.js, PRIVATE_SETTINGS recovery keys in
   src/settings.js, and GET /api/backup/download.
+- Low-end performance & legacy Edge 92 compatibility contracts (all tested; NEVER delete
+  as "redundant" or "unused"): scripts/compat-css.js, plain hex/rgba/var() fallback
+  lines directly above color-mix() in public/styles.css, vh lines directly above dvh,
+  .grain { display: none; } compositor opt-out, body[data-tab] print rule, [inert] CSS
+  and syncAppInert() attribute toggle + focus blur in public/js/ui.js,
+  crypto.randomUUID() polyfill in public/js/api.js, execCommand('copy') fallbacks,
+  100-row table pagination (POS_PAGE_SIZE, INV_PAGE_SIZE, BACKOFFICE_PAGE_SIZE,
+  updateTablePager), O(1) lookupBarcode() Map in pos.js, verifyChainIncremental() +
+  chainCache in src/audit.js, getCustomerDetails chunking, ?lite=1 poll branch in
+  src/server.js / backoffice.js, Server-Timing headers, os.networkInterfaces() 30s TTL
+  cache, 2500 ms deferred boot backup tick, and SQLite indexes/pragmas in src/db.js.
+- Parked / intentional product scope: #tab-btn-repairs (`hidden` by owner request; code
+  stays intact in public/js/views/repairs.js and src/repairs.js), renderZReadSlip +
+  buildReconcileSummary, encodeCode128Svg + printSkuLabels, utangAgeBadge +
+  printCustomerSoa, and docs/perf-optimization-prompt.md.
 
 STRAY FILES (report, ask before deleting)
 pos-server.log at the repo root, publish/ contents, dist/installer/ build artifacts, live
@@ -87,22 +102,12 @@ STOP CONDITIONS
 A gate goes red after a deletion and stays red on rerun (restore the item, report);
 the user declines an item; the tree shows concurrent interference. Report and stop.
 
-TREE STATE (measured 2026-11-14; refresh to observed state on every run)
-- HEAD: bbab7d4 (4 commits past tag v1.3 = 3d8dc46: the env-gated sync soak harness
-  e535a58, the sync drain starvation fix 719b396, the soak browser-env test fix 9143185,
-  and the inventory import partial-apply fix bbab7d4; origin/main is behind, pushes are
-  an owner action; tags v1.2 = 8f181f7 and v1.3 = 3d8dc46). Full source is tracked in
-  git (since 2026-11-07); the release pipeline commits mid-session, so never --amend.
-- Gates: npm run build:css exit 0; npm test 682 tests, 681 pass, 1 skipped (the
-  env-gated sync soak, skips by design without SYNC_SOAK=1), 0 fail, exit 0 across 57
-  test files, about 28 s.
-- Working tree: 30 dirty tracked files plus 2 untracked (docs/audit-2026-11-14.md and
-  tests/generate-changelog.test.js): the UNCOMMITTED 2026-11-14 Stage Build rewrite
-  graft batch (publish.bat, publish-release.bat, scripts/publish-release.ps1,
-  scripts/generate-changelog.js, package.json, src/updater.js, public/index.html,
-  public/js/i18n.js, public/js/main.js, public/js/ui.js, public/js/views/backoffice.js,
-  public/js/views/pos.js, public/styles.css, public/tailwind.build.css, CHANGELOG.md,
-  README.md, RELEASE_NOTES.md, the six docs/ pass prompts, and the audit-regressions,
-  barcode-scan, frontend-regressions, i18n, packaging-workflows,
-  pos-repair-counter-ergonomics, updater-ui tests). It is unreviewed by any audit and
-  rides in every gate. Verify against `git status --short`.
+TREE STATE (measured 2026-11-16; refresh to observed state on every run)
+- HEAD: 81a31fe (1 commit past tag v1.4 = f8bd979; tags v1.0..v1.4). Full source is tracked
+  in git; the release pipeline commits mid-session, so never --amend.
+- Gates: npm run build:css exit 0 (tailwindcss v4.3.3 + scripts/compat-css.js); npm test
+  772 tests, 771 pass, 1 skipped (the env-gated sync soak, skips by design without
+  SYNC_SOAK=1), 0 fail, exit 0 across 59 test files, about 22 s.
+- Working tree: carries uncommitted Low-End Optimization, Edge 92 Compatibility
+  (scripts/compat-css.js), Table Density/Chart/Ergonomics, 5-Feature Must-Have Bundle,
+  and Perf pass prompt updates. Verify against `git status --short`.

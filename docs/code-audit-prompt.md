@@ -1,19 +1,15 @@
-# Code and System Audit Prompt (v9)
+# Code and System Audit Prompt (v10)
 
-[v9, 2026-11-12, measured refresh 2026-11-14, supersedes v8 of 2026-11-09 (which superseded
-v7 of 2026-11-05, v6 of 2026-11-02, v5 of 2026-10-14, v4 and v3 of 2026-10-02; a frozen v3
-sits at backups/code-pre-fixbatch-2026-10-04/docs/code-audit-prompt.md). THIS EDITION IS
-MEASURED ON 2026-11-14 at HEAD bbab7d4 (branch main, 4 commits past tag v1.3 = 3d8dc46;
-origin/main is behind, pushes are an owner action):
-npm test reports 682 tests across 57 tracked files (681 pass + 1 skipped, the env-gated
-sync soak that skips by design without SYNC_SOAK=1; 0 fail, exit 0 in about 28 s; the rerun
-rule in GATES stands), and npm run build:css exits 0. Version is 1.3 across package.json:3,
-CURRENT_VERSION (src/updater.js:11), and MyAppVersion (installer/TechPartsPOS.iss:19). The
-working tree carries 30 dirty files plus 2 untracked: the uncommitted 2026-11-14 Stage
-Build rewrite graft batch (see the GATES section). [Refreshed 2026-11-14, pre-pipeline
-update; earlier the same day this block read 670 tests across 55 files at 3d8dc46 with
-the uncommitted fix-everything batch, superseded by landing 7 below.]
-POST-v2.8 LANDINGS ALREADY MERGED ON MAIN (94d1206..3d8dc46, first-look audit targets):
+[v10, 2026-11-16, supersedes v9 of 2026-11-12/14 (which superseded v8 through v3). THIS EDITION IS
+MEASURED ON 2026-11-16 at HEAD 81a31fe (branch main, 1 commit past tag v1.4 = f8bd979;
+origin/main pushes are an owner action):
+npm test reports 766 tests across 59 test files (765 pass + 1 skipped, the env-gated sync soak
+that skips by design without SYNC_SOAK=1; 0 fail, exit 0 in about 22 s; the rerun rule in GATES
+stands), and npm run build:css exits 0. Version is 1.4 across package.json:3, CURRENT_VERSION
+(src/updater.js:11), and MyAppVersion (installer/TechPartsPOS.iss:19). The working tree carries the
+uncommitted Low-End Optimization, Edge 92 Legacy Compatibility, Dashboard/Density, and 5-Feature
+Must-Have Bundle changes on top of 81a31fe (check `git status --short`).]
+LANDED v1.4 & CURRENT WORKSPACE CHANGES (first-look audit targets):
 1) Universal POS & Cloud Hardening (113ebc2): store profiles (phone_repair / general_retail /
    pc_components), fractional quantities, wholesale price tiers, cloud/workstation analytics
    parity suite (tests/analytics-parity.test.js), EN/TL copy expansion (public/js/i18n.js),
@@ -117,9 +113,10 @@ scripts/deploy-cloud.js copies cloud/ INTO cloud-deploy/ and uploads the cloud/ 
 POST /api/deploy, so cloud/ is the script's source of truth and cloud-deploy/ the mirror;
 deploy-cloud.bat's own prompt says the reverse. Treat EITHER tree's server.js as the same
 code only while byte-identical; verify hash parity first.
-Companion: docs/refactoring-prompt.md (now v3) governs zero-behavior-change refactoring
-passes; docs/remediation-prompt.md, docs/code-cleaning-prompt.md,
-docs/test-hardening-prompt.md and docs/feature-batch-prompt.md complete the six-pass
+Companion: docs/refactoring-prompt.md (v5) governs zero-behavior-change refactoring
+passes, and docs/perf-optimization-prompt.md (v1) governs low-end hardware and Edge 92
+compatibility optimization passes; docs/remediation-prompt.md, docs/code-cleaning-prompt.md,
+docs/test-hardening-prompt.md and docs/feature-batch-prompt.md complete the seven-pass
 system dispatched by the techparts-pass skill (.agents/skills/techparts-pass/SKILL.md).
 WORKFLOW CHANGE SINCE v6: this prompt still reports before it fixes, but the operator has
 granted STANDING BLANKET APPROVAL for the run that follows the report: every finding in the
@@ -135,8 +132,10 @@ Under the standing blanket approval recorded in the header, the same run then fi
 finding; the report is never retro-fitted to the fixes.
 
 OPERATING SCALE (judge every finding against THIS)
-- One shop, one Windows PC, 1 to 3 cashier/manager seats. The UI is the vanilla
-  ES-module SPA in public/, served locally by the Node process. In dev/direct runs, the
+- One shop, one Windows PC (target field spec: i5-3570T class or slower, 4 to 8 GB RAM,
+  128 GB SSD, weak integrated/driverless GPU, 1366x768 or <= 700 px height Edge `--app` kiosk
+  viewport, frozen Windows 10 IoT LTSC ~2021 Edge 92 floor), 1 to 3 cashier/manager seats. The UI is
+  the vanilla ES-module SPA in public/, served locally by the Node process. In dev/direct runs, the
   process launches an Edge/Chrome window with --kiosk-printing and exits via its
   heartbeat watchdog when closed. In installed Program Files setups (--service mode via
   scheduled task TechPartsPOS-Server under NT AUTHORITY\SYSTEM), the server binds 127.0.0.1
@@ -377,6 +376,26 @@ that the implementation still matches, then move on)
   least quantity (:104-105), labor lines cannot be replaced, refund ceilings scale by
   quantity, notes cap at 500. Both the return and the settlement path enqueue the parent
   sale row (src/returns.js:132 and :151) so a return reaches the cloud mirror.
+- Low-end performance & legacy Edge 92 compatibility contracts (audit that all hold, never flag as
+  bloat): SQLite runs WAL + synchronous=NORMAL + temp_store=MEMORY + cache_size=-16000 with
+  secondary indexes (src/db.js); audit verification runs via verifyChainIncremental() with keyset
+  paging and PRAGMA data_version anchor checks (src/audit.js); getCustomerDetails chunks IN clauses
+  at 500; /api/dashboard?lite=1 skips heavy panel queries on intermediate silent poll ticks;
+  Server-Timing telemetry headers emit from src/server.js; os.networkInterfaces() caches for 30 s
+  and initial boot backup defers 2500 ms. On the frontend, POS/Inventory/Backoffice tables paginate
+  at 100 rows via updateTablePager(), barcode scans index via O(1) lookupBarcode() Map, .grain is
+  disabled and backdrop-filter is banned, npm run build:css runs scripts/compat-css.js to strip
+  @layer / oklch() / bare rotate:, every color-mix() and dvh has a plain fallback on the line
+  above, syncAppInert() syncs the [inert] DOM attribute, api.js polyfills crypto.randomUUID(), and
+  1366x768 / <= 700 px media blocks preserve compact chrome with >= 44 px money-path touch targets
+  (pinned by tests/perf-optimizations.test.js, tests/old-browser-compat.test.js, and
+  tests/small-monitor-counter-typography.test.js).
+- Must-Have Feature Bundle & Intentional Scope Boundaries: the workspace includes 5 shipped counter
+  upgrades (#1 Utang 0-7d / 8-29d / 30d+ aging, 1-click Copy reminder, Print SOA, and Cloud SMS/Copy;
+  #2/#5 58mm/80mm renderZReadSlip + Cloud Morning Briefing; #3 Claim stub intake condition
+  checkboxes + Seal #; #4 >5% Supplier Cost Jump Alert + pure SVG Code128 SKU barcode labels).
+  #tab-btn-repairs stays intentionally hidden (`class="... hidden"`) and technician commissions stay
+  out of the system by explicit owner decision.
 - Frontend: escHtml on every interpolation (verified zero XSS on 2026-09-27); toasts sit
   top-right; the dashboard supports a custom range (period=custom&from). showToast
   escapes (public/js/ui.js:7-9, interpolation at :72, both intact), so a toast that
@@ -432,10 +451,9 @@ that the implementation still matches, then move on)
   license surface (machine id, trial seal, anti-rollback) is NEW and unaudited, see below.
 
 GATES (recount and rerun at audit time; report the current numbers)
-- npm test (node --test tests/*.test.js). Measured 2026-11-14 at bbab7d4 with the uncommitted
-  Stage Build rewrite graft batch in the tree: 682 tests across
-  57 tracked files; 681 pass + 1 skipped (the env-gated sync soak, skipped by design without
-  SYNC_SOAK=1), 0 fail, about 28 s (tests/ui-fixes.test.js
+- npm test (node --test tests/*.test.js). Measured 2026-11-16 at 81a31fe with uncommitted perf,
+  legacy-compat, and Must-Have work: 766 tests across 59 test files; 765 pass + 1 skipped
+  (the env-gated sync soak, skipped by design without SYNC_SOAK=1), 0 fail, about 22 s (tests/ui-fixes.test.js
   normalizes CRLF line endings inside source()). The 11-05 history stands: one parallel run that
   day produced no output for over ten minutes and was killed; the immediate rerun was
   green, so a HANG is also a rerun, not a regression. The v6
@@ -449,11 +467,12 @@ GATES (recount and rerun at audit time; report the current numbers)
 - The suite is scratch-env by construction: tests/helper.js points every test database at
   temp directories and enforces the sentinel printer queue (see the Printing bullet), so
   tests cannot corrupt a real cache or database and cannot print paper. Verify rather
-  than trust: no test may hand-roll createServer(). Two files still call it
-  (tests/cloud-hardening.test.js, which spawns a whole separate cloud process with its own
-  temp DATA_DIR, and tests/remediation-final.test.js). Check whether the latter still
-  resolves RUNTIME_DB_PATH to the real data/shop.db (src/server.js:211 area) with sendRaw
-  unpatched, which is the exact exception v5 recorded as closed for the updater route test.
+  than trust: no test may hand-roll createServer() without seeding the sentinel printer.
+  Two files call createServer directly (tests/setup.test.js and tests/updater.test.js);
+  both seed the sentinel immediately after, and the cloud suites (cloud-hardening,
+  remediation-final) spawn a whole separate cloud process with its own temp DATA_DIR.
+  Check that any new direct createServer call seeds the sentinel too, with sendRaw
+  patched, which is the exact exception v5 recorded as closed for the updater route test.
   tests/updater-ui.test.js imports nothing from helper.js at all; find out what it
   touches instead of assuming it touches nothing.
 - npm test is the only automated gate. There is no compile step in dev. If you change UI
@@ -787,7 +806,10 @@ AUDIT CATEGORIES (cover all ten; report per category)
    .part / .part.json pair left by a killed download, then reused by a next attempt whose
    release asset changed underneath it.
 
-3. PERFORMANCE & BOTTLENECKS (judged against the stated scale ONLY)
+3. PERFORMANCE & BOTTLENECKS (judged against the stated field-PC & Edge 92 scale ONLY)
+   Judge every cost on the target workstation (i5-3570T class, 8 GB RAM, 128 GB SSD,
+   1366x768 / <= 700 px Edge --app kiosk, Edge ~92 floor) alongside
+   docs/perf-optimization-prompt.md:
    Full-table loads where a filtered query or LIMIT would do, missing indexes for the
    queries actually run, repeated computation per request, work inside loops that could
    be one prepared statement, unbounded client state, the PowerShell spawn per slip, the
@@ -1001,19 +1023,17 @@ AUDIT CATEGORIES (cover all ten; report per category)
    gitignored files is visible anywhere but a git tag.
 
 8. TEST QUALITY
-   682 tests across 57 tracked files (measured 2026-11-14 at bbab7d4 with the uncommitted
-   Stage Build rewrite graft batch; the same-day earlier refresh counted 670 across 55 at 3d8dc46,
-   the 2026-11-13 refresh counted 661 across 55 at c91f354, the cf06069 same-day
-   refresh counted 638 across 51, v9 counted 610 across
-   49 at 533f07a, v8 counted 568 across 49 files including untracked universal-pos, v7
-   counted 505 in 44), with mix of
+   766 tests across 59 test files (measured 2026-11-16 at 81a31fe with the uncommitted
+   Low-End Optimization, Edge 92 Compatibility, Table Density/Chart, Must-Have Bundle, and
+   Perf pass work; prior refreshes measured 682/57 at bbab7d4 and 670/55 at 3d8dc46), with mix of
    behavioral, hybrid vm-slice, and static greps. Recount per file, keep the
    behavioral / hybrid / pure-static split as the useful axis, and name what each group can
-   actually detect. Recent additions: tests/setup.test.js, tests/backup-restore.test.js,
-   tests/analytics-parity.test.js, tests/universal-pos.test.js, tests/receipt-choices.test.js,
-   tests/reorder.test.js, tests/port-drift.test.js, tests/packaging-workflows.test.js,
-   tests/sync-soak.test.js (env-gated, adds the 1 skip), and tests/generate-changelog.test.js
-   (untracked, part of the Stage Build graft batch)
+   actually detect. Recent additions: tests/perf-optimizations.test.js,
+   tests/old-browser-compat.test.js, tests/small-monitor-counter-typography.test.js,
+   tests/setup.test.js, tests/backup-restore.test.js, tests/analytics-parity.test.js,
+   tests/universal-pos.test.js, tests/receipt-choices.test.js, tests/reorder.test.js,
+   tests/port-drift.test.js, tests/packaging-workflows.test.js, tests/sync-soak.test.js
+   (env-gated, adds the 1 skip), and tests/generate-changelog.test.js.
    (covering installer/TechPartsPOS.iss task XML, ssDone cleanup, installer-only releases
    without .zip, and publish-release.ps1 ordering), plus the v1.0-release additions
    tests/appearance-tones.test.js and tests/build-exe-icon.test.js. Also verify tests/ui-fixes.test.js CRLF

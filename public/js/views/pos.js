@@ -1,7 +1,7 @@
 import { S } from '../state.js';
 import { t } from '../i18n.js';
-import { attachCombo, confirmModal, escHtml, fmtMoney, inputModal, openModal, setCounterText, showToast } from '../ui.js';
-import { renderInvBrandFilter, renderPartTypeOptions, itemMatchesProfile, TEMPLATE_BRANDS, TEMPLATE_CATEGORIES } from '../views/inventory.js';
+import { attachCombo, confirmModal, describeLoadFailure, escHtml, fmtMoney, inputModal, openModal, setCounterText, showToast, updateTablePager } from '../ui.js';
+import { renderInvBrandFilter, renderPartTypeOptions, itemMatchesProfile, refreshInventoryBadge, TEMPLATE_BRANDS, TEMPLATE_CATEGORIES } from '../views/inventory.js';
 import { autoPrintSlip, renderClaimStub, renderReceipt, shopIdentityIsPlaceholder } from '../receipts.js';
 import { serializeCartForRecovery, deserializeCartForRecovery } from '../cart-recovery.js';
 
@@ -32,6 +32,13 @@ export async function loadCustomerSuggestions() {
       // The cache feeds the combobox and the utang badge; the <datalist>
       // itself is retired (the combobox replaces its popup).
       S.allCustomersCache = await res.json();
+      const debtorsBadge = document.getElementById('nav-debtors-badge');
+      if (debtorsBadge && Array.isArray(S.allCustomersCache)) {
+        const debtors = S.allCustomersCache.filter(c => (Number(c.total_credit_balance) || 0) > 0.001).length;
+        debtorsBadge.textContent = debtors;
+        debtorsBadge.title = debtors ? `${debtors} customer${debtors === 1 ? '' : 's'} with active utang balance` : '';
+        debtorsBadge.classList.toggle('hidden', !(debtors > 0));
+      }
     }
   } catch (err) {
     console.error('Failed to load customer suggestions:', err);
@@ -219,6 +226,8 @@ export function playScanSound(isSuccess = true) {
         if (scanAudioWarned) return;
         scanAudioWarned = true;
         console.warn(`[scan-sound] AudioContext resume failed: ${err && err.message ? err.message : err}`);
+        // Silence with no on-screen signal reads as a broken scanner (#56).
+        showToast(t('pos.audio_failed', 'Scanner sound is unavailable (audio blocked or muted). Scans still work.'), 'info');
       });
     }
 
@@ -247,26 +256,49 @@ export function playScanSound(isSuccess = true) {
   } catch (_) {}
 }
 
+const POS_PAGE_SIZE = 100;
+let posPage = 1;
+let lastPosFilterKey = '';
+let barcodeMapSource = null;
+let barcodeMapLen = -1;
+let barcodeMap = new Map();
+
+function lookupBarcode(code) {
+  const key = String(code || '').trim().toLowerCase();
+  if (!key) return null;
+  const catalog = (S.inventoryItems && S.inventoryItems.length) ? S.inventoryItems : (S.posCatalog || []);
+  if (catalog !== barcodeMapSource || catalog.length !== barcodeMapLen) {
+    barcodeMapSource = catalog;
+    barcodeMapLen = catalog.length;
+    barcodeMap = new Map();
+    for (const it of catalog) {
+      if (it?.sku_barcode) {
+        const k = it.sku_barcode.toLowerCase();
+        if (!barcodeMap.has(k)) barcodeMap.set(k, it);
+      }
+    }
+  }
+  return barcodeMap.get(key) || null;
+}
+
 export function handleBarcodeScan(scannedCode) {
   const code = (scannedCode || '').trim();
   if (!code) return false;
 
-  // Strict exact match on sku_barcode (case-insensitive) — no fuzzy fallbacks
-  const item = S.inventoryItems.find(it =>
-    it.sku_barcode && it.sku_barcode.toLowerCase() === code.toLowerCase()
-  );
+  // Strict exact match on sku_barcode (case-insensitive) via O(1) index map.
+  const item = lookupBarcode(code);
 
   if (!item) {
     playScanSound(false);
     recordRefusedScan(code, 'pos.refuse_unknown');
-    showToast(`Unknown barcode / SKU: "${code}"`, 'warning');
+    showToast(t('pos.scan_unknown', 'Unknown barcode / SKU: "{code}"').replace('{code}', code), 'warning');
     return false;
   }
 
   if (item.stock_quantity <= 0) {
     playScanSound(false);
     recordRefusedScan(code, 'pos.refuse_out');
-    showToast(`Cannot add "${item.brand} ${item.model_name}" — Out of stock!`, 'error');
+    showToast(t('pos.scan_out_of_stock', 'Cannot add "{name}" - Out of stock!').replace('{name}', `${item.brand} ${item.model_name}`), 'error');
     return false;
   }
 
@@ -274,14 +306,14 @@ export function handleBarcodeScan(scannedCode) {
   if (currentQty >= item.stock_quantity) {
     playScanSound(false);
     recordRefusedScan(code, 'pos.refuse_max');
-    showToast(`Max stock reached for "${item.brand} ${item.model_name}" (${item.stock_quantity} available)`, 'warning');
+    showToast(t('pos.scan_max_stock', 'Max stock reached for "{name}" ({n} available)').replace('{name}', `${item.brand} ${item.model_name}`).replace('{n}', item.stock_quantity), 'warning');
     return false;
   }
 
   // setPartQty adds the line or increments quantity (also advances repairStep to 3 — intentional)
   setPartQty(item.id, 1);
   playScanSound(true);
-  showToast(`Scanned: ${item.brand} ${item.model_name} (${item.part_type})`, 'success');
+  showToast(t('pos.scan_added', 'Scanned: {name} ({type})').replace('{name}', `${item.brand} ${item.model_name}`).replace('{type}', item.part_type), 'success');
 
   const searchInput = document.getElementById('pos-search-input');
   if (searchInput && document.activeElement === searchInput) {
@@ -360,8 +392,11 @@ export function onPartSearchKeydown(e) {
     e.preventDefault();
     const parts = getFilteredParts();
     if (!parts.length) return;
+    const pageStart = (posPage - 1) * POS_PAGE_SIZE;
+    const visibleLen = Math.min(POS_PAGE_SIZE, Math.max(0, parts.length - pageStart));
+    if (!visibleLen) return;
     const dir = e.key === 'ArrowDown' ? 1 : -1;
-    highlightedPartIndex = Math.max(0, Math.min(parts.length - 1, highlightedPartIndex + dir));
+    highlightedPartIndex = Math.max(0, Math.min(visibleLen - 1, highlightedPartIndex + dir));
     updateHighlightedPartRow();
     return;
   }
@@ -390,8 +425,7 @@ export function onPartSearchKeydown(e) {
       return;
     }
 
-    const catalog = S.posCatalog || S.inventoryItems;
-    const exactBarcode = catalog.find(it => it.sku_barcode && it.sku_barcode.toLowerCase() === query);
+    const exactBarcode = lookupBarcode(query);
     if (exactBarcode) {
       quickAddPart(exactBarcode.id);
       e.target.value = '';
@@ -402,13 +436,16 @@ export function onPartSearchKeydown(e) {
 
     const parts = getFilteredParts();
     if (parts.length > 0) {
-      const pickIdx = highlightedPartIndex >= 0 && highlightedPartIndex < parts.length ? highlightedPartIndex : 0;
-      quickAddPart(parts[pickIdx].id);
+      const pageStart = (posPage - 1) * POS_PAGE_SIZE;
+      const visible = parts.slice(pageStart, pageStart + POS_PAGE_SIZE);
+      const pool = visible.length ? visible : parts;
+      const pickIdx = highlightedPartIndex >= 0 && highlightedPartIndex < pool.length ? highlightedPartIndex : 0;
+      quickAddPart(pool[pickIdx].id);
       e.target.value = '';
       highlightedPartIndex = -1;
       renderPartsTable();
     } else {
-      showToast('No matching part found in stock', 'warning');
+      showToast(t('pos.no_match_in_stock', 'No matching part found in stock'), 'warning');
     }
   }
 }
@@ -431,11 +468,13 @@ function flushPendingScan() {
   pendingScan = null;
   if (!scan) return;
   S.scanBuffer = '';
+  // Restore the hijacked field even when the gate refuses the scan: the
+  // characters must not stay visible in the input behind a modal (#55).
+  if (scan.restore) scan.restore();
   // The keydown listener refuses to mutate the cart behind an overlay or off
   // the POS tab; the settle timer must honor the same gate, or a scan scheduled
   // just before a modal opens lands in the cart behind it.
   if (S.currentTab !== 'pos' || document.querySelector('.modal-backdrop:not(.hidden), .gate:not(.hidden)')) return;
-  if (scan.restore) scan.restore();
   handleBarcodeScan(scan.code);
 }
 function scheduleScan(code, restore) {
@@ -525,26 +564,31 @@ export function initScanListeners() {
 export async function loadPosCatalog() {
   // A reload keeps the session's refusal list alive: restore the chip with it.
   renderScanRefusalChip();
+  let res = null;
   try {
-    const res = await fetch('/api/inventory');
+    res = await fetch('/api/inventory');
     if (!res.ok) throw new Error('Inventory unavailable');
     S.inventoryItems = await res.json();
     S.posCatalog = S.inventoryItems;
+    if (typeof refreshInventoryBadge === 'function') refreshInventoryBadge(S.inventoryItems);
+    barcodeMapSource = null;
     S.catalogLoadFailed = false;
+    S.catalogLoadError = '';
   } catch (err) {
     console.error('Failed to load inventory for the repair counter:', err);
     // Keep any last-good catalog on screen: an empty shelf reads as "no parts
     // exist", which is a lie when the server is merely unreachable.
     if ((S.posCatalog || S.inventoryItems || []).length > 0) {
-      showToast('Catalog refresh failed — showing the last saved list', 'warning');
+      showToast(t('pos.catalog_refresh_failed', 'Catalog refresh failed - showing the last saved list'), 'warning');
     } else {
       S.catalogLoadFailed = true;
-      showToast('Could not load the parts catalog — check the server', 'error');
+      S.catalogLoadError = await describeLoadFailure(err, res);
+      showToast(t('pos.catalog_load_failed', 'Could not load the parts catalog - check the server'), 'error');
     }
   }
 
   populateDeviceDatalist();
-  renderBrandOptions();
+  renderBrandChips();
   renderPartTypeOptions();
   renderInvBrandFilter();
   renderCategoryOptions();
@@ -561,9 +605,9 @@ export function renderRepairRef() {
 export async function copyRepairRef() {
   try {
     await navigator.clipboard.writeText(S.repairRefCode);
-    showToast(`Copied ${S.repairRefCode}`, 'success');
+    showToast(t('pos.ref_copied', 'Copied {ref}').replace('{ref}', S.repairRefCode), 'success');
   } catch (err) {
-    showToast(`Job reference: ${S.repairRefCode}`, 'info');
+    showToast(t('pos.ref_label', 'Job reference: {ref}').replace('{ref}', S.repairRefCode), 'info');
   }
 }
 
@@ -591,10 +635,6 @@ export function categoryIcon(item) {
   return 'package';
 }
 
-export function renderBrandOptions() {
-  renderBrandChips();
-}
-
 // Brand chips on the parts shelf: one tap jumps between brands while selling.
 export function renderBrandChips() {
   const box = document.getElementById('pos-brand-chips');
@@ -607,7 +647,7 @@ export function renderBrandChips() {
   const chipItems = S.posInStockOnly ? profileItems.filter(i => i.stock_quantity > 0) : profileItems;
 
   const catalogBrands = [...new Set(chipItems.map(i => (i.brand || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const templateBrands = (TEMPLATE_BRANDS?.[mode] || TEMPLATE_BRANDS?.retail || []).filter(b => b !== 'Other');
+  const templateBrands = (TEMPLATE_BRANDS?.[mode] || TEMPLATE_BRANDS?.phone || []).filter(b => b !== 'Other');
   const brands = catalogBrands.length > 0 ? catalogBrands : templateBrands;
 
   if (S.posBrandFilter && !brands.includes(S.posBrandFilter)) {
@@ -686,7 +726,7 @@ export function focusImeiForScan() {
   if (!el) return;
   el.focus();
   el.select();
-  showToast('Scan now — the reader types straight into this field', 'info');
+  showToast(t('pos.scan_ready', 'Scan now - the reader types straight into this field'), 'info');
 }
 
 export function onRepairIntakeInput() {
@@ -786,22 +826,35 @@ export function renderPartsTable() {
   const rows = getFilteredParts();
   const catalog = S.posCatalog || S.inventoryItems;
   const partLines = S.cart.filter(c => !c.is_labor).length;
-
+  const qVal = (document.getElementById('pos-search-input')?.value || '').trim().toLowerCase();
+  const devStr = typeof S.activeDevice === 'string' ? S.activeDevice.toLowerCase() : (deviceLabel().toLowerCase());
   const mode = S.shopSettings?.business_type || 'hybrid';
-  const profileCatalog = (mode !== 'hybrid')
-    ? catalog.filter(i => itemMatchesProfile(i, mode))
-    : catalog;
+  const filterKey = `${mode}|${qVal}|${devStr}|${S.posBrandFilter}|${S.posCategoryFilter}|${S.posInStockOnly}|${rows.length}`;
+  if (filterKey !== lastPosFilterKey) {
+    lastPosFilterKey = filterKey;
+    posPage = 1;
+    highlightedPartIndex = -1;
+  }
+
+  let profileCount = catalog.length;
+  if (mode !== 'hybrid' && typeof itemMatchesProfile === 'function') {
+    profileCount = 0;
+    for (const item of catalog) {
+      if (itemMatchesProfile(item, mode)) profileCount++;
+    }
+  }
 
   // Failed load with nothing to fall back on: say so and offer a retry —
   // this must never wear the "no parts in inventory yet" empty state.
   if (S.catalogLoadFailed && catalog.length === 0) {
+    if (typeof updateTablePager === 'function') updateTablePager('pos-parts-pager', 0, 1, POS_PAGE_SIZE);
     body.innerHTML = `
       <tr>
         <td colspan="5">
           <div class="empty">
             <div class="empty__icon"><i class="ph ph-wifi-slash w-5 h-5"></i></div>
             <div class="empty__title">Couldn't load the parts catalog</div>
-            <p class="empty__body">The server didn't answer. Retry, or check that the POS server is running.</p>
+            <p class="empty__body">${escHtml(S.catalogLoadError || 'The POS server is not reachable. Start it from the desktop shortcut, then press Retry.')}</p>
             <button type="button" class="chip" data-action="reload-catalog">Retry</button>
           </div>
         </td>
@@ -809,7 +862,9 @@ export function renderPartsTable() {
     return;
   }
 
-  if (profileCatalog.length === 0) {
+  let visibleRows = rows;
+  if (profileCount === 0) {
+    if (typeof updateTablePager === 'function') updateTablePager('pos-parts-pager', 0, 1, POS_PAGE_SIZE);
     body.innerHTML = `
       <tr>
         <td colspan="5">
@@ -822,6 +877,7 @@ export function renderPartsTable() {
         </td>
       </tr>`;
   } else if (rows.length === 0) {
+    if (typeof updateTablePager === 'function') updateTablePager('pos-parts-pager', 0, 1, POS_PAGE_SIZE);
     const q = (document.getElementById('pos-search-input')?.value || '').trim();
     const active = [];
     if (deviceLabel()) active.push('device');
@@ -852,7 +908,18 @@ export function renderPartsTable() {
         </td>
       </tr>`;
   } else {
-    body.innerHTML = rows.map(item => {
+    const pages = Math.max(1, Math.ceil(rows.length / POS_PAGE_SIZE));
+    posPage = Math.max(1, Math.min(pages, posPage));
+    const start = (posPage - 1) * POS_PAGE_SIZE;
+    visibleRows = rows.slice(start, start + POS_PAGE_SIZE);
+    if (typeof updateTablePager === 'function') {
+      updateTablePager('pos-parts-pager', rows.length, posPage, POS_PAGE_SIZE, (step) => {
+        posPage += step;
+        highlightedPartIndex = -1;
+        renderPartsTable();
+      });
+    }
+    body.innerHTML = visibleRows.map(item => {
       const price = Number(isWholesaleTier(S.currentPriceTier) ? (item.price_wholesale ?? item.price_technician) : item.price_retail);
       const out = item.stock_quantity <= 0;
       const low = !out && item.stock_quantity <= item.min_stock_alert;
@@ -881,11 +948,11 @@ export function renderPartsTable() {
   }
 
   const countUnit = t('inv.parts_count', 'items');
-  setCounterText('parts-count-note', profileCatalog.length === 0
+  setCounterText('parts-count-note', profileCount === 0
     ? `No ${countUnit} in inventory yet`
-    : `${rows.length} of ${profileCatalog.length} ${countUnit} shown · ${partLines} in ticket`);
+    : `${rows.length} of ${profileCount} ${countUnit} shown${rows.length > POS_PAGE_SIZE ? ` (${visibleRows.length} on page)` : ''} · ${partLines} in ticket`);
 
-  if (highlightedPartIndex >= rows.length) highlightedPartIndex = -1;
+  if (highlightedPartIndex >= visibleRows.length) highlightedPartIndex = -1;
   updateHighlightedPartRow();
 }
 
@@ -949,7 +1016,28 @@ export async function clearRepairOrder() {
   if (S.saleInFlight) return; // sale in flight: the job on screen is the request payload
   if (S.cart.length > 0 && !await confirmModal('Clear this repair order?', { yes: 'Clear' })) return;
   resetRepairCounter();
-  showToast('Repair order cleared', 'info');
+  showToast(t('pos.order_cleared', 'Repair order cleared'), 'info');
+}
+
+const INTAKE_COND_IDS = ['intake-cond-nopower', 'intake-cond-cracked', 'intake-cond-liquid'];
+
+function readIntakeExtras() {
+  const conditions = INTAKE_COND_IDS
+    .map(id => document.getElementById(id))
+    .filter(el => el && el.checked)
+    .map(el => el.value);
+  const seal_no = document.getElementById('intake-seal-no')?.value.trim() || '';
+  return { conditions, seal_no };
+}
+
+function applyIntakeExtras(conditions = [], sealNo = '') {
+  const picked = new Set(Array.isArray(conditions) ? conditions : []);
+  for (const cid of INTAKE_COND_IDS) {
+    const cb = document.getElementById(cid);
+    if (cb) cb.checked = picked.has(cb.value);
+  }
+  const sealEl = document.getElementById('intake-seal-no');
+  if (sealEl) sealEl.value = sealNo || '';
 }
 
 // Held jobs live on this machine only — the shop is offline-first and a draft is
@@ -967,7 +1055,7 @@ export function readRepairDraft() {
 export async function saveRepairDraft() {
   if (S.saleInFlight) return; // sale in flight: the job on screen is the request payload
   if (S.cart.length === 0) {
-    showToast('Nothing to hold yet — add a part to the order', 'warning');
+    showToast(t('pos.hold_empty', 'Nothing to hold yet - add a part to the order'), 'warning');
     return;
   }
 
@@ -978,6 +1066,7 @@ export async function saveRepairDraft() {
     if (!ok) return;
   }
 
+  const intakeExtras = readIntakeExtras();
   const draft = {
     ref: S.repairRefCode,
     saleOpId: S.saleOpId,
@@ -986,6 +1075,8 @@ export async function saveRepairDraft() {
     deviceInput: document.getElementById('repair-device-input')?.value || '',
     imei: document.getElementById('repair-imei')?.value || '',
     note: document.getElementById('repair-note')?.value || '',
+    conditions: intakeExtras.conditions,
+    seal_no: intakeExtras.seal_no,
     customer: document.getElementById('pos-customer-name')?.value || '',
     phone: (document.getElementById('pos-customer-phone')?.value || '').replace(/^\+63$/, ''),
     discount: document.getElementById('pos-discount')?.value || 0,
@@ -996,7 +1087,7 @@ export async function saveRepairDraft() {
   try {
     localStorage.setItem(REPAIR_DRAFT_KEY, JSON.stringify(draft));
   } catch (err) {
-    showToast('This machine would not store the held job', 'error');
+    showToast(t('pos.hold_store_failed', 'This machine would not store the held job'), 'error');
     return;
   }
 
@@ -1022,13 +1113,13 @@ export async function saveRepairDraft() {
     });
     if (!res.ok) throw new Error('ticket save failed');
   } catch (_) {
-    showToast('Job held locally, but the repair ticket did not reach the server. It will attach when the sale is rung up.', 'warning');
+    showToast(t('pos.hold_ticket_failed', 'Job held locally, but the repair ticket did not reach the server. It will attach when the sale is rung up.'), 'warning');
   }
 
   const ref = draft.ref;
   resetRepairCounter({ clearSaleOp: false });
   refreshDraftChip();
-  showToast(`${ref} held — resume it from the chip above`, 'success');
+  showToast(t('pos.held', '{ref} held - resume it from the chip above').replace('{ref}', ref), 'success');
 }
 
 export async function resumeRepairDraft() {
@@ -1036,7 +1127,7 @@ export async function resumeRepairDraft() {
   const draft = readRepairDraft();
   if (!draft) {
     refreshDraftChip();
-    showToast('No held job to resume', 'warning');
+    showToast(t('pos.no_held_job', 'No held job to resume'), 'warning');
     return;
   }
   if (S.cart.length > 0 && !(await confirmModal('Replace the repair on screen with the held job?', { yes: 'Replace' }))) return;
@@ -1071,7 +1162,8 @@ export async function resumeRepairDraft() {
     if (el) el.value = v;
   });
 
-  if (draft.note) {
+  applyIntakeExtras(draft.conditions, draft.seal_no);
+  if (draft.note || (Array.isArray(draft.conditions) && draft.conditions.length) || draft.seal_no) {
     document.getElementById('repair-note-wrap')?.classList.remove('hidden');
     setCounterText('note-toggle-label', 'Hide note');
   }
@@ -1085,7 +1177,7 @@ export async function resumeRepairDraft() {
   renderSummaryDevice();
   renderCart();
   renderPartsTable();
-  showToast(`${S.repairRefCode} resumed`, 'success');
+  showToast(t('pos.resumed', '{ref} resumed').replace('{ref}', S.repairRefCode), 'success');
 }
 
 export function refreshDraftChip() {
@@ -1140,6 +1232,8 @@ export function resetRepairCounter({ clearSaleOp = true } = {}) {
 
   const inStock = document.getElementById('pos-instock-only');
   if (inStock) inStock.checked = true;
+
+  applyIntakeExtras([], '');
 
   document.getElementById('pos-cust-status-badge')?.classList.add('hidden');
   document.getElementById('repair-note-wrap')?.classList.add('hidden');
@@ -1216,7 +1310,7 @@ export async function editCartQtyPrompt(index) {
   if (!item.is_labor) {
     const maxStock = inv ? Number(inv.stock_quantity) : Number(item.stock);
     if (Number.isFinite(maxStock) && qty > maxStock + 1e-6) {
-      showToast(`Only ${maxStock} available in stock`, 'warning');
+      showToast(t('pos.only_n_stock', 'Only {n} available in stock').replace('{n}', maxStock), 'warning');
       return;
     }
     item.qty = Number.isFinite(maxStock) && qty > maxStock ? roundQty(maxStock) : qty;
@@ -1275,8 +1369,11 @@ export function renderOrderLines() {
   }
 
   let svcCents = 0, partCents = 0;
-  for (const l of services) svcCents += Math.round(toCents(unitPriceOf(l.item)) * (Number(l.item.qty) || 0));
-  for (const l of parts) partCents += Math.round(toCents(unitPriceOf(l.item)) * (Number(l.item.qty) || 0));
+  // Sum the already-rounded per-line cents (same product rounding as the line
+  // cells and cartTotals), so the group totals cannot disagree with the charge
+  // by a centavo on sub-centavo prices.
+  for (const l of services) svcCents += toCents(unitPriceOf(l.item) * (Number(l.item.qty) || 0));
+  for (const l of parts) partCents += toCents(unitPriceOf(l.item) * (Number(l.item.qty) || 0));
   const svcTotal = svcCents / 100;
   const partTotal = partCents / 100;
   setCounterText('sum-services-count', `(${services.length})`);
@@ -1402,7 +1499,7 @@ export function restoreCartRecovery() {
     if (cart.length && S.cart.length === 0) {
       S.cart = cart;
       renderCart();
-      showToast(`Recovered ${cart.length} unsaved cart line${cart.length === 1 ? '' : 's'}`, 'info');
+      showToast(t('pos.cart_recovered', 'Recovered {n} unsaved cart line(s)').replace('{n}', cart.length), 'info');
     }
   } catch (_) {}
 }
@@ -1474,7 +1571,7 @@ export async function completeSale() {
   // A zero-peso sale (blank device line alone, or everything discounted away)
   // must not ring up and print a receipt for nothing.
   if (cartTotals().total <= 0) {
-    showToast('Order has nothing to charge: add a billable line or reduce the discount', 'warning');
+    showToast(t('pos.nothing_to_charge', 'Order has nothing to charge: add a billable line or reduce the discount'), 'warning');
     return;
   }
 
@@ -1482,7 +1579,7 @@ export async function completeSale() {
   const customerPhone = (document.getElementById('pos-customer-phone')?.value.trim() || '').replace(/^\+63$/, '');
 
   if (S.currentPaymentMethod === 'credit' && (customerName === 'Walk-in Customer' || !customerName)) {
-    showToast('Customer / Buyer Name is required for Credit (Utang)', 'warning');
+    showToast(t('pos.credit_name_required', 'Customer / Buyer Name is required for Credit (Utang)'), 'warning');
     document.getElementById('pos-customer-name')?.focus();
     return;
   }
@@ -1492,6 +1589,18 @@ export async function completeSale() {
     paymentReference = document.getElementById('pos-gcash-ref')?.value.trim() || '';
   } else if (S.currentPaymentMethod === 'transfer') {
     paymentReference = document.getElementById('pos-transfer-ref')?.value.trim() || '';
+  }
+  // The server refuses these without a reference; refuse here too so the
+  // cashier does not pay a roundtrip after "Processing payment..." showed.
+  if (S.currentPaymentMethod === 'gcash' && !paymentReference) {
+    showToast(t('pos.gcash_ref_required', 'Enter the GCash reference number before completing the sale.'), 'warning');
+    document.getElementById('pos-gcash-ref')?.focus();
+    return;
+  }
+  if (S.currentPaymentMethod === 'transfer' && !paymentReference) {
+    showToast(t('pos.transfer_ref_required', 'Enter the bank transfer reference number before completing the sale.'), 'warning');
+    document.getElementById('pos-transfer-ref')?.focus();
+    return;
   }
 
   const items = S.cart.map(item => item.is_labor
@@ -1509,20 +1618,20 @@ export async function completeSale() {
   if (S.currentPaymentMethod === 'cash') {
     const rawTendered = document.getElementById('pos-tendered')?.value.trim();
     if (rawTendered === '' && totalAmount > 0) {
-      showToast('Enter cash tendered or click exact due', 'warning');
+      showToast(t('pos.tendered_required', 'Enter cash tendered or click exact due'), 'warning');
       document.getElementById('pos-tendered')?.focus();
       return;
     }
     const tendered = rawTendered === '' ? 0 : Number(rawTendered);
     if (isNaN(tendered) || tendered < 0) {
-      showToast('Enter a valid cash tendered amount', 'warning');
+      showToast(t('pos.tendered_invalid', 'Enter a valid cash tendered amount'), 'warning');
       document.getElementById('pos-tendered')?.focus();
       return;
     }
     // Half-cent slack: a cent-quantized due amount compared against a typed
     // tender can differ by float representation alone.
     if (toCents(tendered) < toCents(totalAmount) - 0.5) {
-      showToast(`Tendered ${fmtMoney(tendered)} is less than total due ${fmtMoney(totalAmount)}`, 'warning');
+      showToast(t('pos.tendered_short', 'Tendered {tendered} is less than total due {total}').replace('{tendered}', fmtMoney(tendered)).replace('{total}', fmtMoney(totalAmount)), 'warning');
       document.getElementById('pos-tendered')?.focus();
       return;
     }
@@ -1532,7 +1641,7 @@ export async function completeSale() {
     const rawDownpayment = downpaymentEl?.value.trim() || '0';
     amountPaid = Number(rawDownpayment);
     if (!Number.isFinite(amountPaid) || amountPaid < 0 || toCents(amountPaid) > toCents(totalAmount) + 0.5) {
-      showToast(`Enter a credit downpayment from ${fmtMoney(0)} to ${fmtMoney(totalAmount)}`, 'warning');
+      showToast(t('pos.downpayment_range', 'Enter a credit downpayment from {min} to {max}').replace('{min}', fmtMoney(0)).replace('{max}', fmtMoney(totalAmount)), 'warning');
       downpaymentEl?.focus();
       return;
     }
@@ -1553,28 +1662,46 @@ export async function completeSale() {
   const checkoutOrig = checkoutLabel?.textContent || '';
   if (checkoutBtn) { checkoutBtn.disabled = true; if (checkoutLabel) checkoutLabel.textContent = t('pos.processing_payment', 'Processing payment…'); }
   try {
-    const res = await fetch('/api/sales', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        customer_name: customerName,
-        customer_phone: customerPhone,
-        customer_type: S.currentPriceTier,
-        payment_method: S.currentPaymentMethod,
-        payment_reference: paymentReference,
-        items,
-        discount,
-        amount_paid: amountPaid,
-        op_id: S.saleOpId
-      })
-    });
+    let sale;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetch('/api/sales', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_name: customerName,
+          customer_phone: customerPhone,
+          customer_type: S.currentPriceTier,
+          payment_method: S.currentPaymentMethod,
+          payment_reference: paymentReference,
+          items,
+          discount,
+          amount_paid: amountPaid,
+          op_id: S.saleOpId
+        })
+      });
 
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Sale failed');
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Sale failed');
+      }
+
+      sale = await res.json();
+      // A consumed op_id whose response was lost replays the ORIGINAL sale.
+      // If the restored cart was edited since, completing it must not wipe the
+      // edits: mint a fresh key and submit the real cart (11-15 audit #17).
+      // Identity + quantity only: the server reprices parts from the live
+      // catalog, so a price difference alone is not a replay.
+      const lineKey = it => `${it.inventory_id ?? it.item_name ?? ''}|${Number(it.quantity)}`;
+      const soldKeys = (sale.items || []).map(lineKey).sort();
+      const cartKeys = items.map(lineKey).sort();
+      const sameLines = soldKeys.length === cartKeys.length && soldKeys.every((k, i) => k === cartKeys[i]);
+      if (sameLines) break;
+      if (attempt === 0) {
+        showToast(t('pos.replay_edited', 'A previous sale was already recorded under this session key. Submitting the edited cart as a new sale.'), 'warning');
+        S.saleOpId = `sale-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        try { localStorage.setItem(SALE_OP_KEY, S.saleOpId); } catch (_) {}
+      }
     }
-
-    const sale = await res.json();
 
     // A billed repair upserts its ticket (same reference the hold created) and
     // moves it onto the bench. Read the intake BEFORE the reset clears it.
@@ -1597,7 +1724,7 @@ export async function completeSale() {
         });
         if (!rres.ok) throw new Error('ticket save failed');
       } catch (_) {
-        showToast('Sale recorded, but the repair ticket did not save. Add it in the Repairs tab by reference ' + S.repairRefCode + '.', 'warning');
+        showToast(t('pos.ticket_save_failed', 'Sale recorded, but the repair ticket did not save. Add it in the Repairs tab by reference {ref}.').replace('{ref}', S.repairRefCode), 'warning');
       }
     }
 
@@ -1608,7 +1735,10 @@ export async function completeSale() {
     S.saleInFlight = false;
     resetRepairCounter();
     loadPosCatalog();
-    loadCustomerSuggestions();
+    // Skip re-aggregating the full customer ledger after ordinary Walk-in cash checkouts.
+    if (sale?.payment_method === 'credit' || (customerName && customerName.toLowerCase() !== 'walk-in customer')) {
+      loadCustomerSuggestions();
+    }
 
     // Display Itemized Receipt Modal & Render Thermal
     S.lastSaleForReprint = sale;
@@ -1617,18 +1747,22 @@ export async function completeSale() {
     // The sale is committed, but placeholder identity must not reach paper:
     // skip auto-print and say why. Settings then reprint from the modal.
     if (shopIdentityIsPlaceholder()) {
-      showToast('Sale recorded, but the receipt was not printed: shop identity is still the placeholder. Fix it in Settings, then reprint.', 'warning');
+      showToast(t('pos.placeholder_no_print', 'Sale recorded, but the receipt was not printed: shop identity is still the placeholder. Fix it in Settings, then reprint.'), 'warning');
     } else if (autoPrintEnabled()) {
       // Native ESC/POS: the server lays the slip out and pushes it to the queue
       // named in Settings, so the counter never has to touch a dialog. The
       // fallback re-renders THIS sale first: while the send is open the modal
       // may already show a newer one, and the dialog prints what is on screen.
       autoPrintSlip({ kind: 'sale', sale_id: sale.id }, () => renderReceipt(sale)).then((fellBack) => {
+        if (fellBack === 'locked') {
+          showToast(t('pos.print_locked', 'A print job is still running; use Print Slip on the receipt in a moment.'), 'info');
+          return;
+        }
         if (!fellBack) return;
         // A manual tab cannot print silently; say so once instead of every sale.
         if (sessionStorage.getItem('pos_kiosk') !== '1' && !autoPrintHintShown) {
           autoPrintHintShown = true;
-          showToast('Auto-print fell back to the print dialog: this window was opened manually. Reopen the POS from its desktop icon for one-touch printing.', 'info');
+          showToast(t('pos.manual_tab_hint', 'Auto-print fell back to the print dialog: this window was opened manually. Reopen the POS from its desktop icon for one-touch printing.'), 'info');
         }
       });
     }
@@ -1643,11 +1777,11 @@ export async function completeSale() {
 }
 
 export async function openShiftPrompt() {
-  const v = await inputModal('Opening float', { inputType: 'number', placeholder: '0.00', defaultValue: '0', yes: 'Open drawer' });
+  const v = await inputModal(t('pos.opening_float', 'Opening float'), { inputType: 'number', placeholder: '0.00', defaultValue: '0', yes: t('pos.open_drawer', 'Open drawer') });
   if (v === null) return;
   const floatAmt = String(v).trim() === '' ? 0 : Number(v);
   if (!Number.isFinite(floatAmt) || floatAmt < 0) {
-    const m = 'Opening float must be a non-negative number';
+    const m = t('pos.float_invalid', 'Opening float must be a non-negative number');
     if (typeof showToast !== 'undefined') showToast(m, 'error'); else alert(m);
     return;
   }
@@ -1655,7 +1789,7 @@ export async function openShiftPrompt() {
     const res = await fetch('/api/shifts/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ opening_float: floatAmt }) });
     const data = await res.json().catch(()=>({}));
     if (!res.ok) throw new Error(data.error||'Open failed');
-    const msg = `Drawer #${data.id} opened for this workstation`;
+    const msg = t('pos.drawer_opened', 'Drawer #{id} opened for this workstation').replace('{id}', data.id);
     if (typeof showToast !== 'undefined') showToast(msg,'success'); else alert(msg);
     const shiftEl = document.getElementById('store-card-shift');
     if (shiftEl) shiftEl.textContent = `Drawer #${data.id} OPEN · ${S.sessionActor?.name || 'Counter'}`;
@@ -1670,15 +1804,15 @@ export async function openShiftPrompt() {
 export async function closeShiftPrompt() {
   const shifts = await fetch('/api/shifts').then(r=>r.json()).catch(()=>[]);
   const open = (Array.isArray(shifts)?shifts:[]).find(s=>s.status==='open');
-  if (!open) { const m = 'No open drawer on this workstation'; if (typeof showToast !== 'undefined') showToast(m, 'warning'); else alert(m); return; }
+  if (!open) { const m = t('pos.no_open_drawer', 'No open drawer on this workstation'); if (typeof showToast !== 'undefined') showToast(m, 'warning'); else alert(m); return; }
   // Numbered field, not prompt(): a typed "1,250" through Number() becomes
   // NaN, stringifies to null over JSON, and closed the shift at 0 on the
   // server. Parse here, refuse what is not a non-negative amount.
-  const v = await inputModal('Counted cash', { inputType: 'number', placeholder: '0.00', yes: 'Close drawer' });
+  const v = await inputModal(t('pos.counted_cash', 'Counted cash'), { inputType: 'number', placeholder: '0.00', yes: t('pos.close_drawer', 'Close drawer') });
   if (v === null) return;
   const counted = Number(v);
   if (String(v).trim() === '' || !Number.isFinite(counted) || counted < 0) {
-    const m = 'Counted cash must be a non-negative number';
+    const m = t('pos.counted_invalid', 'Counted cash must be a non-negative number');
     if (typeof showToast !== 'undefined') showToast(m, 'error'); else alert(m);
     return;
   }
@@ -1688,7 +1822,7 @@ export async function closeShiftPrompt() {
     if (!res.ok) {
       if (res.status===403 && data.code==='elevation_required') {
         const { requireManagerPin } = await import('../auth.js');
-        requireManagerPin('Enter manager PIN to close the drawer', () => closeShiftPrompt()); return;
+        requireManagerPin(t('pos.pin_close_drawer', 'Enter manager PIN to close the drawer'), () => closeShiftPrompt()); return;
       }
       throw new Error(data.error||'Close failed');
     }
@@ -1697,7 +1831,7 @@ export async function closeShiftPrompt() {
     const who = Array.isArray(data.by_staff) && data.by_staff.length > 1
       ? ` · ${data.by_staff.map(s => `${s.staff_name} ${fmtMoney(s.cash_collected)}`).join(', ')}`
       : '';
-    const msg = `Drawer closed: expected ${data.expected_cash}, variance ${data.variance}${who}`;
+    const msg = t('pos.drawer_closed', 'Drawer closed: expected {expected}, variance {variance}{who}').replace('{expected}', data.expected_cash).replace('{variance}', data.variance).replace('{who}', who);
     if(typeof showToast!=='undefined') showToast(msg,'success'); else alert(msg);
     const shiftEl = document.getElementById('store-card-shift');
     if (shiftEl) shiftEl.textContent = `Drawer CLOSED · ${S.sessionActor?.name || 'Counter'}`;
@@ -1728,7 +1862,8 @@ export function printClaimStub() {
   const device = deviceLabel() || document.getElementById('repair-device-input')?.value.trim() || '';
   const imei = document.getElementById('repair-imei')?.value.trim() || '';
   const note = document.getElementById('repair-note')?.value.trim() || '';
-  if (!device && !note && S.cart.length === 0) {
+  const { conditions, seal_no } = readIntakeExtras();
+  if (!device && !note && !conditions.length && !seal_no && S.cart.length === 0) {
     showToast(t('stub.nothing', 'Enter a device, job note, or part before printing a claim stub'), 'warning');
     return;
   }
@@ -1746,6 +1881,8 @@ export function printClaimStub() {
     device,
     imei,
     note,
+    conditions,
+    seal_no,
     items,
     subtotal,
     discount,
@@ -1755,6 +1892,10 @@ export function printClaimStub() {
   // fallback, not the primary path. The dialog hint is the sale path's
   // once-per-session message: a manual tab cannot print silently.
   autoPrintSlip({ kind: 'claim_stub', ...job }, () => renderClaimStub(job)).then((fellBack) => {
+    if (fellBack === 'locked') {
+      showToast(t('stub.locked', 'A print job is still running; press ALT+P again in a moment.'), 'info');
+      return;
+    }
     if (!fellBack) return;
     if (sessionStorage.getItem('pos_kiosk') !== '1' && !autoPrintHintShown) {
       autoPrintHintShown = true;

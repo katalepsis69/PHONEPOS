@@ -63,10 +63,6 @@ function compareVersions(left, right) {
   return 0;
 }
 
-function isPriorVersion(candidateVersion, targetVersion) {
-  return compareVersions(candidateVersion, targetVersion) === -1;
-}
-
 function tagExistsInGit(tag, cwd = ROOT_DIR) {
   if (!tag) return false;
   return Boolean(runGit(['rev-parse', '--verify', `${tag}^{commit}`], cwd, { allowFailure: true }).trim());
@@ -769,6 +765,5 @@ module.exports = {
   collectDiffEntries,
   summarizeDiffEntries,
   isVersionOnlyChange,
-  parseVersionParts,
-  isPriorVersion
+  parseVersionParts
 };

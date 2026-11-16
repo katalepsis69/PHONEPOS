@@ -36,7 +36,9 @@ function printMoney(n) {
   if (!isFiniteAmount(n)) throw amountRefusal('Amount');
   // Same digits and grouping as paper's money() (src/printer.js), so a
   // fallback copy reads like the queue slip it replaced.
-  return 'P' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const val = Number(n || 0);
+  const sign = val <= -0.005 ? '-' : '';
+  return sign + 'P' + Math.abs(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // The first amount on the slip that no paper may state, or null when all of them
@@ -323,7 +325,7 @@ export function renderReceipt(sale) {
       <div class="py-2 space-y-0.5 text-[11px]">
         ${billable.map(it => `
           <div class="flex justify-between py-1 border-b border-slate-800 gap-2">
-            <span class="truncate">${it.quantity}x ${it.item_type === 'labor' ? '[LABOR] ' : ''}${escHtml(it.item_name)}</span>
+            <span class="truncate">${Number.isInteger(Number(it.quantity)) ? it.quantity + 'x' : it.quantity} ${it.item_type === 'labor' ? '[LABOR] ' : ''}${escHtml(it.item_name)}</span>
             <span class="text-right text-teal-400 font-bold whitespace-nowrap">${fmtMoney(Number(it.total_price))}</span>
           </div>`).join('')}
       </div>`;
@@ -370,7 +372,7 @@ export function renderReceipt(sale) {
           </div>
           ${sale.returns.map(r => `
             <div class="flex justify-between text-[10px] text-slate-400">
-              <span>${escHtml(r.return_code)} (${r.quantity || 1}x ${escHtml(r.item_name)})</span>
+              <span>${escHtml(r.return_code)} (${Number.isInteger(Number(r.quantity || 1)) ? (r.quantity || 1) + 'x' : (r.quantity || 1)} ${escHtml(r.item_name)})</span>
               <span>${r.refund_amount > 0 ? fmtMoney(Number(r.refund_amount)) : 'Replacement'}</span>
             </div>
           `).join('')}
@@ -418,7 +420,7 @@ export function renderReceipt(sale) {
           <div style="padding: 2px 0;">
             <div style="font-weight: bold;">${it.item_type === 'labor' ? '[LABOR] ' : ''}${escHtml(it.item_name)}</div>
             <div style="display: flex; justify-content: space-between;">
-              <span>${it.quantity} x ${printMoney(it.unit_price)}</span>
+              <span>${Number.isInteger(Number(it.quantity)) ? it.quantity + 'x' : it.quantity} ${printMoney(it.unit_price)}</span>
               <span>${printMoney(it.total_price)}</span>
             </div>
           </div>
@@ -453,7 +455,7 @@ export function renderReceipt(sale) {
       <div style="font-size: 12px;">
         ${billable.map(it => `
           <div style="display: flex; justify-content: space-between; gap: 8px; padding: 2px 0;">
-            <span style="min-width: 0; overflow-wrap: anywhere;">${it.quantity}x ${it.item_type === 'labor' ? '[LABOR] ' : ''}${escHtml(it.item_name)}</span>
+            <span style="min-width: 0; overflow-wrap: anywhere;">${Number.isInteger(Number(it.quantity)) ? it.quantity + 'x' : it.quantity} ${it.item_type === 'labor' ? '[LABOR] ' : ''}${escHtml(it.item_name)}</span>
             <span style="white-space: nowrap;">${printMoney(it.total_price)}</span>
           </div>
         `).join('')}
@@ -500,11 +502,11 @@ export function renderReceipt(sale) {
           <div style="border-top: 1px dashed #000; margin-top: 4px; padding-top: 2px; color: #b91c1c;">
             <div style="display: flex; justify-content: space-between; font-weight: bold;">
               <span>RETURNS / REFUNDS (${sale.returns.length}):</span>
-              <span>-P${Number(sale.refunded_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              ${Number(sale.refunded_amount) > 0 ? `<span>-P${Number(sale.refunded_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>` : ''}
             </div>
             ${sale.returns.map(r => `
               <div style="display: flex; justify-content: space-between; font-size: 11px;">
-                <span>${escHtml(r.return_code)} (${r.quantity || 1}x ${escHtml(r.item_name)})</span>
+                <span>${escHtml(r.return_code)} (${Number.isInteger(Number(r.quantity || 1)) ? (r.quantity || 1) + 'x' : (r.quantity || 1)} ${escHtml(r.item_name)})</span>
                 <span>${Number.isFinite(Number(r.refund_amount)) && Number(r.refund_amount) > 0 ? printMoney(r.refund_amount) : 'Replacement'}</span>
               </div>
             `).join('')}
@@ -678,6 +680,24 @@ export async function printSlip(payload) {
       return true;
     }
   } catch (err) {
+    // The response can be lost AFTER the queue took the job. For the deduped
+    // kinds, re-POST once: the server answers deduplicated if the first send
+    // landed, so the browser does not print a second copy. Claim stubs and
+    // pickup notices have no dedup window, so they fall back directly.
+    if (payload.kind === 'sale' || payload.kind === 'settlement') {
+      try {
+        const retry = await fetch('/api/print', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const rd = await retry.json().catch(() => ({}));
+        if (retry.ok && rd.ok) {
+          if (rd.deduplicated) showToast('Nothing printed: this slip was already sent moments ago (duplicate suppressed)', 'info');
+          return true;
+        }
+      } catch (_) {}
+    }
     showToast(`Printing failed: ${err.message}. Using browser print`, 'warning');
     return false;
   }
@@ -694,14 +714,20 @@ export async function printSlip(payload) {
 // re-renders the fallback slip first: while the send is open the modal can
 // already show a NEWER sale, and window.print() would put that one on paper.
 export async function autoPrintSlip(payload, renderFallback) {
-  if (modalPrintInFlight) return false;
+  // 'locked' is distinct from success: a caller that only branches on truthy
+  // fellBack would otherwise show no paper and no toast (11-15 audit #15).
+  if (modalPrintInFlight) return 'locked';
   modalPrintInFlight = true;
   let fellBack = false;
   try {
     if (!(await printSlip(payload))) {
       fellBack = true;
-      if (renderFallback) renderFallback();
-      window.print();
+      // A fallback that rendered nothing must not window.print() whatever the
+      // printable element still holds (the previous customer's slip).
+      let rendered = true;
+      if (renderFallback) rendered = (await renderFallback()) !== false;
+      if (rendered) window.print();
+      else showToast('The slip could not be prepared for browser printing; nothing was printed.', 'error');
     }
   } finally {
     modalPrintInFlight = false;
@@ -864,7 +890,7 @@ export function renderZReport(stats) {
   const paperClass = S.shopSettings.receipt_paper_width === '58mm' ? 'thermal-58mm' : 'thermal-80mm';
   printable.className = `${paperClass} hidden`;
 
-  const moneyRow = (l, v) => `<div style="display:flex;justify-content:space-between;"><span>${l}:</span><span>P${Number(v || 0).toFixed(2)}</span></div>`;
+  const moneyRow = (l, v) => `<div style="display:flex;justify-content:space-between;"><span>${l}:</span><span>${printMoney(v)}</span></div>`;
   const countRow = (l, v) => `<div style="display:flex;justify-content:space-between;"><span>${l}:</span><span>${Number(v || 0)}</span></div>`;
   const now = new Date();
   printable.innerHTML = `
@@ -924,7 +950,7 @@ export function renderPeriodSummary(s) {
   const paperClass = S.shopSettings.receipt_paper_width === '58mm' ? 'thermal-58mm' : 'thermal-80mm';
   printable.className = `${paperClass} hidden`;
 
-  const moneyRow = (l, v) => `<div style="display:flex;justify-content:space-between;"><span>${l}:</span><span>P${Number(v || 0).toFixed(2)}</span></div>`;
+  const moneyRow = (l, v) => `<div style="display:flex;justify-content:space-between;"><span>${l}:</span><span>${printMoney(v)}</span></div>`;
   const countRow = (l, v) => `<div style="display:flex;justify-content:space-between;"><span>${l}:</span><span>${Number(v || 0)}</span></div>`;
   const fday = d => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   const fdayY = d => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -964,10 +990,10 @@ export function renderPeriodSummary(s) {
       ${moneyRow('Collected total', c.collected_total)}
       ${tops.length ? `<div style="border-top:1px dashed #000;margin:3px 0;"></div>
       <div style="font-weight:bold;">TOP PARTS</div>
-      ${tops.map((p, i) => `<div style="display:flex;justify-content:space-between;"><span>${i + 1}. ${escHtml(String(p.item_name || 'Part').slice(0, 26))}</span><span>${Number(p.units || 0)}u P${Number(p.revenue || 0).toFixed(2)}</span></div>`).join('')}` : ''}
+      ${tops.map((p, i) => `<div style="display:flex;justify-content:space-between;"><span>${i + 1}. ${escHtml(String(p.item_name || 'Part').slice(0, 26))}</span><span>${Number(p.units || 0)}u ${printMoney(p.revenue)}</span></div>`).join('')}` : ''}
       <div style="border-top:1px dashed #000;margin:3px 0;"></div>
       <div style="font-weight:bold;">SHELF &amp; UTANG</div>
-      <div style="display:flex;justify-content:space-between;"><span>Dead stock:</span><span>${dead.length} lines, P${deadCapital.toFixed(2)} tied up</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Dead stock:</span><span>${dead.length} lines, ${printMoney(deadCapital)} tied up</span></div>
       ${moneyRow('Credit outstanding', st.total_credit_outstanding)}
       ${moneyRow('Inventory value', st.total_inventory_retail_value)}
     </div>
@@ -1007,6 +1033,222 @@ export function renderPickupReadyNotice(ticket) {
     </div>`;
 }
 
+// The ticket fetch failed: a minimal local notice from the button's own data,
+// so the browser fallback never prints the previous customer's document.
+export function renderPickupFallbackNotice(refCode) {
+  const printable = document.getElementById('printable-receipt');
+  if (!printable) return;
+  const paperClass = S.shopSettings.receipt_paper_width === '58mm' ? 'thermal-58mm' : 'thermal-80mm';
+  printable.className = `${paperClass} hidden`;
+  printable.innerHTML = `
+    <div style="text-align:center;">
+      ${brandHeaderHtml(true)}
+      <div class="rcp-rule"></div>
+      <div style="font-size:14px;font-weight:bold;">PICKUP NOTICE</div>
+      <div style="font-size:12px;font-weight:bold;">Ref: ${escHtml(refCode || '')}</div>
+      <div style="font-size:11px;">${escHtml(formatDateTime(new Date().toISOString()))}</div>
+    </div>
+    <div class="rcp-rule"></div>
+    <div style="font-size:12px;line-height:1.45;text-align:center;">
+      Ticket details could not be loaded.<br>
+      Please verify the unit and any balance at the counter.
+    </div>`;
+}
+
+// End-of-day / shift Z-Read handover slip: tries raw ESC/POS printer queue first,
+// falling back to browser print dialog if no thermal spooler is configured.
+export function renderZReadBrowser(reconcile) {
+  const printable = document.getElementById('printable-receipt');
+  if (!printable || !reconcile) return false;
+  const paperClass = S.shopSettings.receipt_paper_width === '58mm' ? 'thermal-58mm' : 'thermal-80mm';
+  printable.className = `${paperClass} hidden`;
+  const rowHtml = (l, v, bold = false) => `<div style="display:flex;justify-content:space-between;${bold ? 'font-weight:bold;' : ''}"><span>${escHtml(l)}</span><span>${escHtml(v)}</span></div>`;
+  const methods = Object.entries(reconcile.buckets || {});
+  const shifts = Array.isArray(reconcile.shifts) ? reconcile.shifts : [];
+  const stored = reconcile.stored || null;
+  const variance = stored ? Number(stored.variance || 0) : 0;
+  const varPrefix = variance > 0.004 ? '+' : (variance < -0.004 ? '-' : '');
+  printable.innerHTML = `
+    <div style="text-align:center;">
+      ${brandHeaderHtml(true)}
+      <div class="rcp-rule"></div>
+      <div style="font-size:13px;font-weight:bold;">END OF DAY Z-READ</div>
+      <div style="font-size:12px;">Date: ${escHtml(reconcile.day || '')}</div>
+      <div style="font-size:11px;">Printed ${escHtml(formatDateTime(new Date().toISOString()))}</div>
+      ${stored?.closed_by ? `<div style="font-size:11px;">Closed by: ${escHtml(stored.closed_by)}</div>` : ''}
+    </div>
+    <div class="rcp-rule"></div>
+    <div style="font-size:12px;line-height:1.45;">
+      ${methods.length
+        ? methods.map(([m, b]) => rowHtml(`${String(m).charAt(0).toUpperCase() + String(m).slice(1)} (${Number(b.count || 0)}):`, printMoney(b.collected || 0))).join('')
+        : '<div>No collections recorded.</div>'}
+      ${(() => { const rv = Math.abs(Number(reconcile.refund_total || 0)); return rowHtml('Cash refunds (-):', `${rv >= 0.005 ? '-' : ''}${printMoney(rv)}`); })()}
+      ${rowHtml('Gross sales:', printMoney(reconcile.gross_sales || 0))}
+      ${rowHtml('Voided tickets:', String(reconcile.void_count || 0))}
+      ${Number(reconcile.expenses_total) > 0 ? rowHtml('Expenses (book):', `-${printMoney(Math.abs(Number(reconcile.expenses_total)))}`) : ''}
+      <div class="rcp-rule"></div>
+      ${rowHtml('EXPECTED CASH:', printMoney(reconcile.expected_cash || 0), true)}
+      ${stored ? `
+        ${rowHtml('COUNTED CASH:', printMoney(stored.counted_cash || 0), true)}
+        ${rowHtml('VARIANCE:', `${varPrefix}${printMoney(Math.abs(variance))}`, true)}
+        ${rowHtml('STATUS:', String(stored.status || 'closed').toUpperCase())}
+      ` : rowHtml('STATUS:', 'OPEN / NOT SIGNED')}
+      ${shifts.length ? `
+        <div class="rcp-rule"></div>
+        <div style="font-weight:bold;">SHIFTS (${shifts.length})</div>
+        ${shifts.map(sh => {
+          const who = sh.staff_name || 'Counter';
+          if (sh.status === 'closed') {
+            const v = Number(sh.variance || 0);
+            const pfx = v > 0.004 ? '+' : (v < -0.004 ? '-' : '');
+            return rowHtml(`#${sh.id} ${who}:`, `${printMoney(sh.counted_cash || 0)} (${pfx}${printMoney(Math.abs(v))})`);
+          }
+          return rowHtml(`#${sh.id} ${who} OPEN:`, printMoney(sh.opening_float || 0));
+        }).join('')}
+      ` : ''}
+    </div>
+    <div class="rcp-rule"></div>
+    <div style="margin-top:10px;text-align:center;font-size:11px;">
+      ________________________<br>Cashier / Manager Sign
+    </div>`;
+  applyPrintPageSize();
+  return true;
+}
+
+export async function printZReadSlip(reconcile) {
+  if (!reconcile || !reconcile.day) return;
+  if (shopIdentityIsPlaceholder()) {
+    showToast('Z-Read not printed: shop identity is still the placeholder. Save real shop details in Settings.', 'error');
+    return;
+  }
+  const fellBack = await autoPrintSlip({ kind: 'z_read', date: reconcile.day }, () => renderZReadBrowser(reconcile));
+  if (fellBack === 'locked') showToast('A print job is still running; try Z-Read again in a moment.', 'info');
+}
+
+// Statement of Account (SOA) for a customer with open utang or purchase history.
+export function printCustomerSoa(details) {
+  if (!details) return;
+  if (shopIdentityIsPlaceholder()) {
+    showToast('SOA not printed: shop identity is still the placeholder. Save real shop details in Settings.', 'error');
+    return;
+  }
+  const printable = document.getElementById('printable-receipt');
+  if (!printable) return;
+  const paperClass = S.shopSettings.receipt_paper_width === '58mm' ? 'thermal-58mm' : 'thermal-80mm';
+  printable.className = `${paperClass} hidden`;
+  const unpaid = (details.sales || []).filter(s => !s.voided && Number(s.credit_balance) > 0.001);
+  const balance = Number(details.total_credit_balance || 0);
+  const gcashLine = S.shopSettings.gcash_number ? `GCash: ${S.shopSettings.gcash_name || ''} (${S.shopSettings.gcash_number})` : '';
+  printable.innerHTML = `
+    <div style="text-align:center;">
+      ${brandHeaderHtml(true)}
+      <div class="rcp-rule"></div>
+      <div style="font-size:13px;font-weight:bold;">STATEMENT OF ACCOUNT</div>
+      <div style="font-size:11px;">As of ${escHtml(formatDateTime(new Date().toISOString()))}</div>
+    </div>
+    <div class="rcp-rule"></div>
+    <div style="font-size:12px;line-height:1.45;">
+      <div><strong>Customer:</strong> ${escHtml(details.customer_name || '')}</div>
+      ${details.customer_phone ? `<div><strong>Phone:</strong> ${escHtml(details.customer_phone)}</div>` : ''}
+      ${Number(details.credit_limit) > 0 ? `<div><strong>Credit limit:</strong> ${printMoney(details.credit_limit)}</div>` : ''}
+    </div>
+    <div class="rcp-rule"></div>
+    <div style="font-size:11px;line-height:1.4;">
+      <div style="font-weight:bold;margin-bottom:2px;">OPEN INVOICES (${unpaid.length})</div>
+      ${unpaid.length ? unpaid.map(s => `
+        <div style="padding:2px 0;border-bottom:1px dotted #888;">
+          <div style="display:flex;justify-content:space-between;font-weight:bold;">
+            <span>${escHtml(s.sale_code)}</span>
+            <span>${printMoney(s.credit_balance)}</span>
+          </div>
+          <div>${escHtml(formatDateTime(s.created_at))} (Total ${printMoney(s.total_amount)})</div>
+        </div>`).join('') : '<div>No open unpaid invoices.</div>'}
+    </div>
+    <div class="rcp-rule"></div>
+    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:bold;">
+      <span>BALANCE DUE:</span><span>${printMoney(balance)}</span>
+    </div>
+    ${gcashLine ? `<div class="rcp-rule"></div><div style="font-size:11px;text-align:center;">${escHtml(gcashLine)}</div>` : ''}
+    <div style="font-size:11px;text-align:center;margin-top:4px;">Thank you for your prompt payment.</div>`;
+  applyPrintPageSize();
+  window.print();
+}
+
+// Pure ISO/IEC 15417 Code128 Subset B SVG bar generator (zero runtime deps).
+const CODE128_PATTERNS = [
+  '212222','222122','222221','121223','121322','131222','122213','122312','132212','221213',
+  '221312','231212','112232','122132','122231','113222','123122','123221','223211','221132',
+  '221231','213212','223112','312131','311222','321122','321221','312212','322112','322211',
+  '212123','212321','232121','111323','131123','131321','112313','132113','132311','211313',
+  '231113','231311','112133','112331','132131','113123','113321','133121','313121','211331',
+  '231131','213113','213311','213131','311123','311321','331121','312113','312311','332111',
+  '314111','221411','431111','111224','111422','121124','121421','141122','141221','112214',
+  '112412','122114','122411','142112','142211','241211','221114','413111','241112','134111',
+  '111242','121142','121241','114212','124112','124211','411212','421112','421211','212141',
+  '214121','412121','111143','111341','131141','114113','114311','411113','411311','113141',
+  '114131','311141','411131','211412','211214','211232','2331112'
+];
+
+export function encodeCode128Svg(rawText) {
+  const clean = String(rawText || '').replace(/[^\x20-\x7e]/g, '').slice(0, 32) || 'SKU-0';
+  const codes = [104]; // Start Code B
+  let weightedSum = 104;
+  for (let i = 0; i < clean.length; i++) {
+    const val = clean.charCodeAt(i) - 32;
+    codes.push(val);
+    weightedSum += val * (i + 1);
+  }
+  codes.push(weightedSum % 103);
+  codes.push(106); // Stop
+  // ISO/IEC 15417 specifies >= 10X quiet zone for handheld scanners.
+  const quiet = 10;
+  let x = quiet;
+  const rects = [];
+  for (const c of codes) {
+    const pat = CODE128_PATTERNS[c];
+    for (let j = 0; j < pat.length; j++) {
+      const w = Number(pat[j]);
+      if (j % 2 === 0) rects.push(`<rect x="${x}" y="0" width="${w}" height="32" fill="#000"/>`);
+      x += w;
+    }
+  }
+  const totalW = x + quiet;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} 32" width="100%" height="34" shape-rendering="crispEdges" role="img" aria-label="Barcode ${escHtml(clean)}" style="display:block;background:#fff;">${rects.join('')}</svg>`;
+}
+
+export function printSkuLabels(items) {
+  const list = (Array.isArray(items) ? items : []).filter(Boolean);
+  if (!list.length) {
+    showToast('Select one or more items first', 'warning');
+    return;
+  }
+  const printable = document.getElementById('printable-receipt');
+  if (!printable) return;
+  const missingSkuCount = list.filter(it => !String(it.sku_barcode || '').trim()).length;
+  const paperClass = S.shopSettings.receipt_paper_width === '58mm' ? 'thermal-58mm' : 'thermal-80mm';
+  printable.className = `${paperClass} hidden`;
+  printable.innerHTML = list.map(it => {
+    const code = String(it.sku_barcode || '').trim() || `SKU-${it.id}`;
+    const title = it.item_name || [it.brand, it.model_name].filter(Boolean).join(' ') || 'Item';
+    const sub = it.item_name ? (it.category || it.part_type || '') : (it.part_type || '');
+    return `
+      <div style="padding:3mm 1mm;border-bottom:1px dashed #666;text-align:center;page-break-inside:avoid;">
+        <div style="font-size:11px;font-weight:bold;line-height:1.2;">${escHtml(title)}</div>
+        ${sub ? `<div style="font-size:10px;line-height:1.2;">${escHtml(sub)}</div>` : ''}
+        <div style="margin:2px auto;max-width:95%;">${encodeCode128Svg(code)}</div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:11px;font-weight:bold;font-family:monospace;">
+          <span>${escHtml(code)}</span>
+          <span>${printMoney(it.price_retail || 0)}</span>
+        </div>
+      </div>`;
+  }).join('');
+  applyPrintPageSize();
+  window.print();
+  if (missingSkuCount > 0) {
+    showToast(`${missingSkuCount} item(s) have no saved SKU; temporary codes will not scan at POS until SKU is saved.`, 'info');
+  }
+}
+
 export function renderClaimStub(job) {
   const printable = document.getElementById('printable-receipt');
   if (!printable) return;
@@ -1022,9 +1264,10 @@ export function renderClaimStub(job) {
     const [coef, exp = '0'] = String(Math.abs(product)).split('e');
     const total = Math.sign(product) * Math.round(Number(`${coef}e${Number(exp) + 2}`)) / 100;
     // Stub rows go through printMoney like every other slip: same grouping,
-    // and a broken total refuses to print instead of rendering P0.00.
+    // and a broken total refuses to print instead of rendering P0.00. The unit
+    // price prints too, matching the paper stub's qty / unit / line layout.
     return `<div style="display:flex;justify-content:space-between;padding:1px 0;">
-      <span>${qty}x ${escHtml(it.name || `${it.brand || ''} ${it.model_name || ''} ${it.part_type || ''}`.trim())}</span>
+      <span>${Number.isInteger(qty) ? qty + 'x' : qty} ${escHtml(it.name || `${it.brand || ''} ${it.model_name || ''} ${it.part_type || ''}`.trim())} @ ${printMoney(unit)}</span>
       <span>${printMoney(total)}</span>
     </div>`;
   }).join('');
@@ -1044,6 +1287,8 @@ export function renderClaimStub(job) {
       ${job.device ? `<div><strong>Device:</strong> ${escHtml(job.device)}</div>` : ''}
       ${job.imei ? `<div><strong>IMEI/SN:</strong> ${escHtml(job.imei)}</div>` : ''}
       ${job.note ? `<div><strong>Job Note:</strong> ${escHtml(job.note)}</div>` : ''}
+      ${Array.isArray(job.conditions) && job.conditions.length ? `<div><strong>Condition:</strong> ${escHtml(job.conditions.join(', '))}</div>` : ''}
+      ${job.seal_no ? `<div><strong>Seal #:</strong> ${escHtml(job.seal_no)}</div>` : ''}
     </div>
     ${lines.length ? `
       <div class="rcp-rule"></div>

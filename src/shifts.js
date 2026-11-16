@@ -1,4 +1,4 @@
-const { txn, audit } = require('./audit');
+const { txn, audit, nowIso } = require('./audit');
 const { money } = require('./money');
 const { getExpectedCash } = require('./analytics');
 const { enqueueRow } = require('./sync');
@@ -11,7 +11,7 @@ function openShift(db, actor, openingFloat = 0) {
   return txn(db, () => {
     const existing = db.prepare("SELECT id FROM shifts WHERE status='open' LIMIT 1").get();
     if (existing) { const e = new Error('Shift already open'); e.statusCode = 409; throw e; }
-    const now = new Date().toISOString();
+    const now = nowIso();
     const r = db.prepare('INSERT INTO shifts (staff_id, staff_name, opened_at, opening_float, status) VALUES (?, ?, ?, ?, ?)').run(actor?.id ?? null, actor?.name || '', now, amt, 'open');
     const id = Number(r.lastInsertRowid);
     enqueueRow(db, 'shifts', id);
@@ -36,7 +36,7 @@ function closeShift(db, shiftId, countedCash, ctx = {}) {
     if (ctx.actor && ctx.actor.type === 'staff' && shift.staff_id !== ctx.actor.id) {
       if (!ctx.elevated) { const e = new Error('Manager authorization required'); e.statusCode = 403; e.code = 'elevation_required'; throw e; }
     }
-    const now = new Date().toISOString();
+    const now = nowIso();
     const expected = money((shift.opening_float || 0) + getExpectedCash(db, shift.opened_at, now));
     const variance = money(counted - expected);
     db.prepare('UPDATE shifts SET closed_at = ?, counted_cash = ?, expected_cash = ?, variance = ?, status = ? WHERE id = ?').run(now, counted, expected, variance, 'closed', shiftId);

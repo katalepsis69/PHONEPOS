@@ -459,6 +459,12 @@ if ($DryRun) {
 # 3. Test suite & build, BEFORE any git mutation. The old order committed
 # first, so a failed build still left a "Release vX" commit on main.
 Write-Host "[1/4] Running test suite & building TechPartsPOS.exe..." -ForegroundColor Yellow
+# A DryRun promises to mutate NOTHING, but build:exe regenerates the tracked
+# tailwind.build.css through build:css. Snapshot it and restore after the
+# build so the promise holds (11-15 audit #44).
+$cssPath = Join-Path $rootDir "public\tailwind.build.css"
+$cssSnapshot = $null
+if ($DryRun -and (Test-Path $cssPath)) { $cssSnapshot = [System.IO.File]::ReadAllBytes($cssPath) }
 & npm test
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Test suite failed. No changelog, commit, tag, or GitHub release was written. The selected version remains in the working tree for retry."
@@ -467,6 +473,9 @@ if ($LASTEXITCODE -ne 0) {
 & npm run build:exe
 if ($LASTEXITCODE -ne 0) {
     Write-Error "build:exe failed. No changelog, commit, tag, or GitHub release was written. The selected version remains in the working tree for retry."
+}
+if ($DryRun -and $null -ne $cssSnapshot) {
+    [System.IO.File]::WriteAllBytes($cssPath, $cssSnapshot)
 }
 
 $exePath = Join-Path $rootDir "release\customer\TechPartsPOS.exe"
@@ -505,12 +514,20 @@ if ($DryRun) {
 # installer build pass. CHANGELOG.md was synced before the test gate: the
 # suite pins its newest heading to package.json (tests/changelog.test.js).
 if ($releaseNotes -notmatch 'Spreadsheet Import') {
-    # Operator-edited notes dropped the cashier guide: regenerate RELEASE_NOTES.md
-    # from the generator so the how-to sections still reach customers.
-    & node (Join-Path $rootDir "scripts\generate-changelog.js") "--version" $tag | Out-Null
+    # Operator-edited notes dropped the cashier guide: keep the operator's text
+    # and append the regenerated guide below it, then publish the SAME combined
+    # text, so the repo file and the GitHub body cannot disagree (11-15 #45).
+    $generated = & node (Join-Path $rootDir "scripts\generate-changelog.js") "--version" $tag "--stdout"
     if ($LASTEXITCODE -ne 0) {
         throw "Writing RELEASE_NOTES.md failed (exit code $LASTEXITCODE). Release was not published."
     }
+    $guide = ($generated -join "`n")
+    $guideMarker = '### 1. Simple Spreadsheet Import'
+    $guideIdx = $guide.IndexOf($guideMarker)
+    if ($guideIdx -ge 0) { $guide = $guide.Substring($guideIdx) }
+    $releaseNotes = $releaseNotes.TrimEnd() + "`r`n`r`n---`r`n`r`n" + $guide
+    $normalizedNotes = $releaseNotes -replace "(?<!`r)`n", "`r`n"
+    [System.IO.File]::WriteAllText($releaseNotesPath, $normalizedNotes, [System.Text.Encoding]::UTF8)
 } else {
     $normalizedNotes = $releaseNotes -replace "(?<!`r)`n", "`r`n"
     [System.IO.File]::WriteAllText($releaseNotesPath, $normalizedNotes, [System.Text.Encoding]::UTF8)

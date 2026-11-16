@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test tests/*.test.js",
-    "build:css": "tailwindcss -i public/tailwind.css -o public/tailwind.build.css --minify",
+    "build:css": "tailwindcss -i public/tailwind.css -o public/tailwind.build.css --minify && node scripts/compat-css.js",
     "seed": "node src/seed.js",
     "license": "node scripts/generate-license.js",
     "build:exe": "npm run build:css && npm run build:exe:artifacts && npm run verify:exe && npm run release:customer",

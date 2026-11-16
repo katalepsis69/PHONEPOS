@@ -2,6 +2,8 @@
 // The pickup-ready notice: the repairs queue's no-SMS way to bring the
 // customer back. Money-free on purpose; the ticket row comes from the server.
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test').test;
 const { renderPickupReadySlip, colsFor } = require('../src/printer');
 
@@ -41,4 +43,14 @@ test('a pickup-ready slip keeps every line inside the roll, 58mm and 80mm', () =
       assert.ok(line.text.length <= budget, `${width} over ${budget}: ${JSON.stringify(line.text)}`);
     }
   }
+});
+
+test('the pickup print button reports a held print lock instead of silently dropping the slip', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'views', 'repairs.js'), 'utf8');
+  const hit = src.indexOf(`closest('[data-action="print-pickup"]')`);
+  assert.ok(hit >= 0, 'pickup print handler exists');
+  const block = src.slice(hit, hit + 1800);
+  assert.match(block, /const printState = await autoPrintSlip\(/);
+  assert.match(block, /printState === 'locked'/);
+  assert.match(block, /showToast\(/);
 });

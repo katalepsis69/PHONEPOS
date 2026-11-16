@@ -158,22 +158,10 @@ const ROOT = path.join(__dirname, '..');
 const CLOUD_SERVER = path.join(ROOT, 'cloud', 'server.js');
 const TOKEN_A = 'a'.repeat(64);
 
-function waitForServer(child) {
-  return new Promise((resolve, reject) => {
-    let output = '';
-    const timer = setTimeout(() => reject(new Error(`cloud server timeout: ${output}`)), 8000);
-    const onData = chunk => {
-      output += chunk;
-      // PORT=0: the kernel picks the port and the boot line reports it, so no
-      // reserve-then-release race against parallel test files.
-      const m = output.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/);
-      if (output.includes('Cloud sync service listening') && m) { clearTimeout(timer); resolve(`http://127.0.0.1:${m[1]}`); }
-    };
-    child.stdout.on('data', onData);
-    child.stderr.on('data', onData);
-    child.once('exit', code => { clearTimeout(timer); reject(new Error(`cloud server exited ${code}: ${output}`)); });
-  });
-}
+// The harness waitForServer proves readiness with a real request after the
+// boot line (a Windows connection-reset case measured on a loaded release
+// run); the local copy this replaces trusted the line alone (11-15 #49).
+const { waitForServer } = require('./cloud-hardening-harness');
 async function startCloud(dataDir, extraEnv = {}) {
   const child = spawn(process.execPath, [CLOUD_SERVER], {
     cwd: ROOT,

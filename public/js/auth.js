@@ -1,6 +1,6 @@
 import { S } from './state.js';
 import { closeModal, confirmModal, describeLoadFailure, escHtml, fmtMoney, formatDateTime, inputModal, openModal, showGate, showToast, showSkeleton, syncAppInert } from './ui.js';
-import { loadInventoryTable, renderInvBrandFilter, renderPartTypeOptions, renderInventoryTable, setAddItemTemplate } from './views/inventory.js';
+import { loadInventoryTable, refreshInventoryBadge, renderInvBrandFilter, renderPartTypeOptions, renderInventoryTable, setAddItemTemplate } from './views/inventory.js';
 import { syncAppearanceModal } from './theme.js';
 import { loadPosCatalog, renderBrandChips, renderCategoryOptions, renderPartsTable } from './views/pos.js';
 import { applyLanguage, setBusinessProfile } from './i18n.js';
@@ -567,6 +567,18 @@ export function updateShopBrandUi() {
   const railName = document.getElementById('rail-shop-name') || document.querySelector('.rail-word');
   if (railName) railName.textContent = brandName;
 
+  const profileLabels = {
+    phone: 'Phone Repair & POS',
+    pc: 'PC & Electronics POS',
+    grocery: 'Grocery & Market POS',
+    retail: 'General Retail POS',
+    hybrid: 'Sales & Service POS'
+  };
+  const railSub = document.querySelector('.rail-sub');
+  if (railSub) {
+    railSub.textContent = profileLabels[S.shopSettings.business_type || 'hybrid'] || 'Sales & Service POS';
+  }
+
   document.title = S.shopSettings.gcash_name ? `${S.shopSettings.gcash_name} — POS` : 'TechParts POS — repair counter';
 
   const loginGateShop = document.getElementById('login-gate-shop-name');
@@ -622,7 +634,36 @@ export function updateShopBrandUi() {
   if (serCb) serCb.checked = S.shopSettings.enable_serial_tracking === '1';
 
   syncQrStatusUi(S.shopSettings.gcash_qr_url);
+  updateStorePresetSummary(S.shopSettings.business_type || 'hybrid');
+  updateStoreMarkupPreview();
   syncCloudUi();
+}
+
+export function updateStoreMarkupPreview() {
+  const el = document.getElementById('settings-markup-preview');
+  if (!el) return;
+  const rPct = Number(document.getElementById('settings-default-retail-markup')?.value ?? S.shopSettings.default_retail_markup_pct ?? 50);
+  const wPct = Number(document.getElementById('settings-default-wholesale-markup')?.value ?? S.shopSettings.default_wholesale_markup_pct ?? 20);
+  const safeR = Number.isFinite(rPct) && rPct >= 0 ? rPct : 50;
+  const safeW = Number.isFinite(wPct) && wPct >= 0 ? wPct : 20;
+  const retailEx = 1000 * (1 + safeR / 100);
+  const wholeEx = 1000 * (1 + safeW / 100);
+  el.textContent = `Example ${fmtMoney(1000)} capital -> ${fmtMoney(retailEx)} retail (+${safeR}%) / ${fmtMoney(wholeEx)} wholesale (+${safeW}%)`;
+}
+
+function updateStorePresetSummary(preset) {
+  const el = document.getElementById('settings-profile-summary');
+  if (!el) return;
+  const map = {
+    phone: ['Phone parts catalog', 'Repair bench & claim stub', 'Integer stock'],
+    pc: ['PC & electronics catalog', 'Repair bench & claim stub', 'Serial tracking'],
+    grocery: ['Grocery & dry goods', 'Fractional weights / qty', 'Direct counter checkout'],
+    retail: ['General retail catalog', 'Direct counter checkout', 'Barcode labels'],
+    hybrid: ['All categories', 'Repair bench', 'Fractional qty', 'Serial tracking']
+  };
+  const chips = map[preset] || map.hybrid;
+  el.innerHTML = '<span class="font-semibold text-[var(--txt-2)] mr-1">Enabled workflow:</span>' +
+    chips.map(c => `<span class="tag">${escHtml(c)}</span>`).join('');
 }
 
 export function applyBusinessPreset(preset) {
@@ -652,6 +693,7 @@ export function applyBusinessPreset(preset) {
     fracCb.checked = true;
     serCb.checked = true;
   }
+  if (typeof updateStorePresetSummary === 'function') updateStorePresetSummary(preset);
 }
 
 export function applyBusinessModeUi() {
@@ -691,6 +733,9 @@ export function applyBusinessModeUi() {
   if (typeof renderInventoryTable === 'function' && S.inventoryItems) {
     renderInventoryTable(S.inventoryRowsCache || S.inventoryItems);
   }
+  if (typeof refreshInventoryBadge === 'function' && S.inventoryItems) {
+    refreshInventoryBadge(S.inventoryItems);
+  }
 }
 
 export const DEFAULT_CLOUD_URL = 'https://repairsync.bot-keep.xyz';
@@ -708,6 +753,18 @@ export function syncCloudUi(providedStatus) {
     btnLabel.textContent = isConnected ? 'Manage' : 'Pair Phone';
   }
 
+  const setLocalReportUrl = (lanUrl) => {
+    const localUrlEl = document.getElementById('local-report-url');
+    if (!localUrlEl) return;
+    if (lanUrl) {
+      localUrlEl.textContent = lanUrl.replace(/^https?:\/\//, '');
+      localUrlEl.title = lanUrl;
+    } else if (typeof window !== 'undefined' && window.location?.host && localUrlEl.textContent === 'localhost:3000/report.html') {
+      localUrlEl.textContent = `${window.location.host}/report.html`;
+    }
+  };
+  setLocalReportUrl(providedStatus?.lan_report_url);
+
   if (!isConnected) {
     if (badge) {
       badge.textContent = 'Not connected';
@@ -720,16 +777,30 @@ export function syncCloudUi(providedStatus) {
     if (bannerText) {
       bannerText.innerHTML = 'View live store sales and cash drawer from your phone anytime at <a href="https://repairsync.bot-keep.xyz/" target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 font-mono text-[var(--txt)]">repairsync.bot-keep.xyz</a>.';
     }
+    const lastEl = document.getElementById('settings-sync-last');
+    const qEl = document.getElementById('settings-sync-queue');
+    const errEl = document.getElementById('settings-sync-err');
+    if (lastEl) lastEl.textContent = '-';
+    if (qEl) qEl.textContent = '0 pending';
+    if (errEl) errEl.textContent = 'Pair a device below';
     return;
   }
 
+  const setSyncTelemetry = (lastVal, qVal, errVal) => {
+    const lastEl = document.getElementById('settings-sync-last');
+    const qEl = document.getElementById('settings-sync-queue');
+    const errEl = document.getElementById('settings-sync-err');
+    if (lastEl) lastEl.textContent = lastVal;
+    if (qEl) qEl.textContent = qVal;
+    if (errEl) {
+      errEl.textContent = errVal;
+      errEl.title = errVal;
+    }
+  };
+
   const applyStatus = (d) => {
     if (!d) return;
-    const localUrlEl = document.getElementById('local-report-url');
-    if (localUrlEl && d.lan_report_url) {
-      localUrlEl.textContent = d.lan_report_url.replace(/^https?:\/\//, '');
-      localUrlEl.title = d.lan_report_url;
-    }
+    setLocalReportUrl(d.lan_report_url);
 
     if (d.offline) {
       if (badge) {
@@ -743,6 +814,7 @@ export function syncCloudUi(providedStatus) {
       if (bannerText) {
         bannerText.innerHTML = 'Unable to reach sync service. Counter transactions held safely locally.';
       }
+      setSyncTelemetry(d.last_synced_at ? formatDateTime(d.last_synced_at) : '-', `${d.pending || 0} pending`, 'Server unreachable');
       return;
     }
 
@@ -792,6 +864,12 @@ export function syncCloudUi(providedStatus) {
     if (bannerText) {
       bannerText.innerHTML = bannerMsg;
     }
+    const lastStr = d.last_synced_at ? formatDateTime(d.last_synced_at) : 'Never yet';
+    const queueStr = `${n} pending (${d.synced || 0} sent)`;
+    const connStr = d.last_error
+      ? String(d.last_error)
+      : (d.stale ? 'Quiet >2m' : (d.in_flight || d.state === 'syncing' ? 'Syncing now' : 'Healthy'));
+    setSyncTelemetry(lastStr, queueStr, connStr);
   };
 
   if (providedStatus) {
@@ -830,7 +908,7 @@ export function updateGcashUiDisplays() {
 }
 
 export function generateFallbackQrSvg() {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"><rect width="200" height="200" fill="#1e293b" rx="16"/><text x="100" y="94" fill="#94a3b8" font-size="15" font-weight="bold" font-family="sans-serif" text-anchor="middle">No GCash QR</text><text x="100" y="116" fill="#64748b" font-size="12" font-family="sans-serif" text-anchor="middle">Upload one in Settings</text></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120"><rect x="3" y="3" width="114" height="114" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="4" stroke-dasharray="8 6"/><rect x="18" y="18" width="26" height="26" rx="4" fill="none" stroke="#94a3b8" stroke-width="4"/><rect x="26" y="26" width="10" height="10" rx="2" fill="#94a3b8"/><rect x="76" y="18" width="26" height="26" rx="4" fill="none" stroke="#94a3b8" stroke-width="4"/><rect x="84" y="26" width="10" height="10" rx="2" fill="#94a3b8"/><rect x="18" y="76" width="26" height="26" rx="4" fill="none" stroke="#94a3b8" stroke-width="4"/><rect x="26" y="84" width="10" height="10" rx="2" fill="#94a3b8"/><text x="88" y="93" fill="#64748b" font-size="14" font-weight="700" font-family="ui-monospace,monospace" text-anchor="middle">QR</text></svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
@@ -842,8 +920,7 @@ export function openQrModal() {
 }
 
 // -------------------------------------------------------------
-// SETTINGS MODAL — one modal, five tabs (Store · Printing ·
-// Appearance · Security · Data), gated by the manager PIN.
+// SETTINGS MODAL — six tabs (Store · Staff & Security · Printing · Appearance · Cloud Sync · Data), gated by manager PIN.
 // -------------------------------------------------------------
 export function switchSettingsTab(tab) {
   document.querySelectorAll('.settings-tab').forEach(b => {
@@ -853,8 +930,28 @@ export function switchSettingsTab(tab) {
   });
   document.querySelectorAll('[data-settings-pane]').forEach(p =>
     p.classList.toggle('hidden', p.dataset.settingsPane !== tab));
-  if (tab === 'data') renderLicenseCard();
+  if (tab === 'data') { renderLicenseCard(); loadDataDiagnostics(); }
   if (tab === 'staff') renderStaffPanel();
+  if (tab === 'cloud') syncCloudUi();
+}
+
+export async function loadDataDiagnostics() {
+  const el = document.getElementById('data-backup-summary');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/backup/list');
+    if (!res.ok) throw new Error('Unavailable');
+    const { backups = [] } = await res.json();
+    if (!backups.length) {
+      el.textContent = '0 snapshots yet';
+      return;
+    }
+    const latest = backups[0];
+    const kb = latest.size ? ` · ${Math.max(1, Math.round(latest.size / 1024))} KB` : '';
+    el.textContent = `${backups.length} saved${kb}`;
+  } catch (_) {
+    el.textContent = 'Local backups folder';
+  }
 }
 
 // Interactive license card in the Data tab (plus full dialog option).
@@ -965,6 +1062,10 @@ export async function loadReceiptPreview() {
     item_rows: document.getElementById('settings-item-rows')?.value || 'auto',
     paper_width: document.getElementById('settings-paper-width')?.value || '80mm',
   };
+  const widthBadge = document.getElementById('printing-width-badge');
+  if (widthBadge) {
+    widthBadge.textContent = body.paper_width === '58mm' ? '58mm · 32 col' : '80mm · 48 col';
+  }
   try {
     const res = await fetch('/api/receipt/preview', {
       method: 'POST',
@@ -1309,11 +1410,22 @@ export function syncRecoveryStatusUi() {
   if (statusEl) {
     if (S.recoveryConfigured) {
       statusEl.textContent = 'Configured';
-      statusEl.className = 'text-xs font-semibold text-emerald-400';
+      statusEl.className = 'text-xs font-semibold text-emerald-500';
     } else {
       statusEl.textContent = 'Not set';
-      statusEl.className = 'text-xs font-semibold text-amber-400';
+      statusEl.className = 'text-xs font-semibold text-amber-500';
     }
+  }
+  const pinChip = document.getElementById('staff-pin-status-chip');
+  if (pinChip) {
+    const isFactory = Boolean(S.shopSettings?.pin_change_required);
+    pinChip.textContent = isFactory ? 'Factory PIN 1234' : 'Custom Manager PIN';
+    pinChip.className = isFactory ? 'tag tag--warn font-mono text-xs' : 'tag tag--pos font-mono text-xs';
+  }
+  const recChip = document.getElementById('staff-recovery-chip');
+  if (recChip) {
+    recChip.textContent = S.recoveryConfigured ? 'Recovery: Configured' : 'Recovery: Not set';
+    recChip.className = S.recoveryConfigured ? 'tag tag--pos font-mono text-xs' : 'tag tag--warn font-mono text-xs';
   }
 }
 
@@ -2060,14 +2172,26 @@ export async function renderStaffPanel() {
       </div>`;
     return;
   }
+  const countChip = document.getElementById('staff-count-chip');
+  if (countChip) {
+    countChip.textContent = `${staff.length} cashier account${staff.length === 1 ? '' : 's'}`;
+    countChip.className = 'tag font-mono text-xs';
+  }
   list.innerHTML = staff.length === 0
     ? '<p class="foot-note">No staff yet. Add one so sales and returns are logged under their name.</p>'
-    : staff.map(s => `
-      <div class="flex items-center gap-2" style="padding:4px 0;border-bottom:1px solid var(--line-soft, rgba(148,163,184,.15));">
-        <span class="flex-1 text-xs font-bold">${escHtml(s.name)}</span>
+    : staff.map(s => {
+        const init = escHtml((s.name || '?').trim().slice(0, 2).toUpperCase());
+        return `
+      <div class="staff-row flex items-center gap-2.5">
+        <span class="staff-row__avatar font-mono" aria-hidden="true">${init}</span>
+        <div class="flex-1 min-w-0">
+          <span class="text-xs font-bold text-[var(--txt)] truncate block">${escHtml(s.name)}</span>
+          <span class="foot-note">Cashier PIN active</span>
+        </div>
         <button type="button" class="btn-mini" data-staff-act="reset" data-staff-id="${s.id}" data-staff-name="${escHtml(s.name)}">Reset PIN</button>
         <button type="button" class="btn-mini btn-mini--danger" data-staff-act="deactivate" data-staff-id="${s.id}" data-staff-name="${escHtml(s.name)}">Deactivate</button>
-      </div>`).join('');
+      </div>`;
+      }).join('');
 }
 
 export async function submitNewStaff() {
@@ -2132,6 +2256,7 @@ export async function deactivateStaffPrompt(id, name) {
 // -------------------------------------------------------------
 const AUDIT_PAGE = 100;
 let auditOffset = 0;     // paging cursor for "Load more"
+let auditGen = 0;        // generation token: a stale filter fetch must not win the DOM
 let auditCategory = '';  // active category chip ('' = All)
 let auditShown = 0;      // rows on screen for the current filter
 let auditInited = false; // one-time filter listener wiring
@@ -2332,7 +2457,7 @@ function auditSentence(r, d) {
     return { html: `${d.return_code ? ref(d.return_code) : 'Warranty return'} on sale ${d.sale_code ? ref(d.sale_code) : ''}: ${what}`, tone: '' };
   }
   if (cat === 'inventory' && (act === 'adjust_stock' || act === 'adjust')) {
-    const part = d.part || (d.id ? `Part #${d.id}` : 'Inventory item');
+    const part = d.part || (d.id ? `Part #${txt(d.id)}` : 'Inventory item');
     const delta = Number(d.delta) || 0;
     const before = d.before !== undefined ? d.before : '?';
     const after = d.after !== undefined ? d.after : '?';
@@ -2347,10 +2472,10 @@ function auditSentence(r, d) {
     return { html: bits.join(', '), tone: '' };
   }
   if (cat === 'inventory' && (act === 'archive' || act === 'unarchive')) {
-    return { html: `${d.part ? ref(d.part) : `Part #${d.id}`} ${act === 'archive' ? 'archived from' : 'restored to'} the catalog`, tone: '' };
+    return { html: `${d.part ? ref(d.part) : `Part #${txt(d.id)}`} ${act === 'archive' ? 'archived from' : 'restored to'} the catalog`, tone: '' };
   }
   if (cat === 'inventory' && act === 'delete') {
-    return { html: `${d.part ? ref(d.part) : `Part #${d.id}`} deleted`, tone: 'neg' };
+    return { html: `${d.part ? ref(d.part) : `Part #${txt(d.id)}`} deleted`, tone: 'neg' };
   }
   if (cat === 'inventory' && act === 'import') {
     return { html: `CSV import: ${txt(d.created || 0)} created, ${txt(d.updated || 0)} stock updated`, tone: '' };
@@ -2455,6 +2580,7 @@ export async function loadAuditLog({ append = false } = {}) {
   }
   if (!auditInited) initAuditFilters();
   if (!append) tbody.innerHTML = '<li class="audit-loading">Loading audit entries...</li>';
+  const gen = ++auditGen;
   try {
     const actor = document.getElementById('audit-filter-actor')?.value.trim() || '';
     const category = auditCategory;
@@ -2473,6 +2599,7 @@ export async function loadAuditLog({ append = false } = {}) {
     }
     if (!res.ok) throw new Error('Could not load the audit log');
     const { rows, total } = await res.json();
+    if (gen !== auditGen) return; // a newer filter already owns the feed
     auditOffset = offset + rows.length;
     auditShown = append ? auditShown + rows.length : rows.length;
 

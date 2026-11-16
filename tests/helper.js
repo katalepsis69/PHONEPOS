@@ -39,9 +39,13 @@ printer.sendRaw = async (printerName, bytes) => {
 };
 
 // Fresh databases have no printer_name row at all, so the seed is written
-// here rather than in db.js: production never sees it.
+// here rather than in db.js: production never sees it. The shop identity is
+// seeded non-placeholder for the same reason: /api/print refuses demo-shop
+// paper, and a test that prints is a shop that saved its identity.
 function seedSentinelPrinter(db) {
   db.prepare('INSERT OR REPLACE INTO shop_settings (key, value) VALUES (?, ?)').run('printer_name', SENTINEL_PRINTER_NAME);
+  db.prepare('INSERT OR REPLACE INTO shop_settings (key, value) VALUES (?, ?)').run('gcash_name', 'Test Shop');
+  db.prepare('INSERT OR REPLACE INTO shop_settings (key, value) VALUES (?, ?)').run('gcash_number', '0917-000-0000');
 }
 
 // WAL mode leaves -shm/-wal siblings behind, and a killed run can leave a
@@ -155,7 +159,7 @@ function serverTest(name, fn) {
       }
     } catch (_) {}
     try {
-      await fn(baseUrl, db, auth);
+      await fn(baseUrl, db, auth, getDb);
     } finally {
       server.close();
       // A restore test swaps the server's live handle for a fresh one, so the
@@ -190,4 +194,4 @@ async function ensurePinChanged(baseUrl, auth) {
   return { ...auth, Authorization: `Bearer ${data.token}`, 'X-Elevation': data.elevationToken };
 }
 
-module.exports = { dbTest, serverTest, SENTINEL_PRINTER_NAME, ensurePinChanged };
+module.exports = { dbTest, serverTest, SENTINEL_PRINTER_NAME, seedSentinelPrinter, ensurePinChanged };

@@ -14,7 +14,10 @@ if "%PIN_ARG%"=="" (
 )
 
 echo.
-node "%~dp0scripts\deploy-cloud.js" "%PIN_ARG%"
+rem The PIN rides stdin, not the command line: argv is visible in the Windows
+rem process list while the deploy runs. echo is a cmd builtin, so the value
+rem never reaches a child process command line.
+echo %PIN_ARG%| node "%~dp0scripts\deploy-cloud.js"
 if errorlevel 1 (
     echo.
     echo [ERROR] Cloud deploy failed. Check message above.

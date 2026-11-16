@@ -26,6 +26,7 @@ function ensureSyncTables(db) {
       synced_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_outbox_unsynced ON sync_outbox(synced_at) WHERE synced_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_outbox_synced ON sync_outbox(id) WHERE synced_at IS NOT NULL;
   `);
   const shopId = db.prepare("SELECT value FROM shop_settings WHERE key = ?").get(SHOP_ID_KEY);
   if (!shopId) {
@@ -156,7 +157,7 @@ function applyCloudCommands(db, commands) {
         // every row's stock instead of replaying.
         importInventory(db, Array.isArray(p.rows) ? p.rows : [], {
           actor: { type: 'manager', id: null, name: 'Cloud Manager' },
-        }, { op_id: opId });
+        }, { op_id: opId, auto_price: p.auto_price === true });
         ackedIds.push(cmd.id);
       } else {
         // A kind this workstation does not know is version skew, not a
@@ -237,6 +238,10 @@ function backfillMirror(db) {
   add('shifts', `SELECT id FROM shifts WHERE datetime(opened_at) >= ${recent}`);
   add('day_reconciliations', `SELECT id FROM day_reconciliations WHERE datetime(created_at) >= ${recent}`);
   add('cash_adjustments', `SELECT id FROM cash_adjustments WHERE datetime(created_at) >= ${recent}`);
+  // Both joined the sync whitelist on 2026-11-13; without them a first pair
+  // (or re-pair) misses every pre-pair expense and repair ticket (11-15 #63).
+  add('expenses', `SELECT id FROM expenses WHERE datetime(created_at) >= ${recent}`);
+  add('repairs', `SELECT id FROM repairs WHERE datetime(created_at) >= ${recent}`);
   for (const r of db.prepare('SELECT customer_name FROM customer_profiles').all()) {
     enqueueCustomerProfile(db, r.customer_name);
     queued++;
@@ -370,6 +375,9 @@ async function drainOutbox(db, { batch = 50 } = {}) {
 
 function getSyncStatus(db) {
   const url = getSyncUrl(db);
+  if (!url) {
+    return { state: 'local', pending: 0, synced: 0, total: 0, url_configured: false, last_synced_at: null, pending_rows: [] };
+  }
   const pending = db.prepare('SELECT COUNT(*) AS c FROM sync_outbox WHERE synced_at IS NULL').get().c;
   const total = db.prepare('SELECT COUNT(*) AS c FROM sync_outbox').get().c;
   const lastRow = db.prepare('SELECT synced_at FROM sync_outbox WHERE synced_at IS NOT NULL ORDER BY id DESC LIMIT 1').get();

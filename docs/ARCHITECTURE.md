@@ -99,7 +99,6 @@ sequenceDiagram
     Server->>DB: initDb(DEFAULT_DB_PATH)
     DB->>DB: PRAGMA foreign_keys=ON, journal_mode=WAL
     DB->>DB: Run pending migrations
-    Server->>Server: seedInitialParts() (if table is empty)
     Server->>Server: runDailyBackup() (auto daily snapshot)
     Server->>Server: Bind HTTP listener to 127.0.0.1:3000
     alt Port in use (EADDRINUSE)

@@ -1,7 +1,7 @@
 // phone-repair-pos/src/analytics.js
 const { money } = require('./money');
 const { partLabel } = require('./inventory');
-const { verifyChain } = require('./audit');
+const { verifyChainIncremental } = require('./audit');
 const { bucketsFor, closedPeriodAt } = require('./reconcile');
 const { getShiftVarianceThreshold } = require('./settings');
 const { foldSql } = require('./names');
@@ -14,23 +14,33 @@ function getExpectedCash(db, fromIso, toIso) {
   return bucketsFor(db, 'datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?)', [from, to]).expected_cash;
 }
 
+// Actionable low-stock rule shared across standing KPIs, reorder, and inventory filters:
+// zero-quantity catalog entries that have never been stocked or sold are price-list rows,
+// not active shortages; once stocked or sold down to zero, they alert like any shortage.
+const EVER_STOCKED_SQL = alias => `(EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.inventory_id = ${alias}.id) OR EXISTS (SELECT 1 FROM sale_items si WHERE si.inventory_id = ${alias}.id))`;
+const BELOW_MIN_SQL = alias => `(${alias}.stock_quantity <= ${alias}.min_stock_alert AND (${alias}.stock_quantity > 0 OR ${EVER_STOCKED_SQL(alias)}))`;
+
 // Standing (non-period) context: inventory footprint + utang book. Shared by
 // the today report and the period dashboard so both surfaces always agree.
 function getStandingStats(db) {
+  // Archived parts keep stock and history but leave the catalog: value and
+  // low-stock exclude them (the cloud mirror does the same), while the item
+  // and unit counts still include them, matching the cloud's types/parts_stock.
   const invStats = db.prepare(`
     SELECT
       COUNT(*) as total_items,
       COALESCE(SUM(stock_quantity), 0) as total_stock,
-      COALESCE(SUM(stock_quantity * cost_price), 0.0) as total_inventory_cost_value,
-      COALESCE(SUM(stock_quantity * price_retail), 0.0) as total_inventory_retail_value,
-      COALESCE(SUM(CASE WHEN stock_quantity <= min_stock_alert THEN 1 ELSE 0 END), 0) as low_stock_count
+      COALESCE(SUM(CASE WHEN archived = 0 THEN stock_quantity * cost_price ELSE 0 END), 0.0) as total_inventory_cost_value,
+      COALESCE(SUM(CASE WHEN archived = 0 THEN stock_quantity * price_retail ELSE 0 END), 0.0) as total_inventory_retail_value,
+      COALESCE(SUM(CASE WHEN archived = 0 AND ${BELOW_MIN_SQL('inventory')} THEN 1 ELSE 0 END), 0) as low_stock_count,
+      COALESCE(SUM(CASE WHEN archived = 0 AND stock_quantity <= 0 AND NOT ${EVER_STOCKED_SQL('inventory')} THEN 1 ELSE 0 END), 0) as unstocked_catalog_count
     FROM inventory
   `).get();
   const creditStats = db.prepare(`
     SELECT
       COALESCE(SUM(credit_balance), 0.0) as total_outstanding_credit,
       COUNT(DISTINCT CASE WHEN credit_balance > 0.001 THEN ${foldSql(db, 'customer_name')} END) as total_debtors_count
-    FROM sales WHERE voided = 0
+    FROM sales WHERE voided = 0 AND credit_balance > 0
   `).get();
   return {
     total_inventory_types: invStats.total_items,
@@ -38,6 +48,7 @@ function getStandingStats(db) {
     total_inventory_cost_value: money(invStats.total_inventory_cost_value),
     total_inventory_retail_value: money(invStats.total_inventory_retail_value),
     low_stock_count: invStats.low_stock_count,
+    unstocked_catalog_count: invStats.unstocked_catalog_count,
     total_credit_outstanding: money(creditStats.total_outstanding_credit),
     total_debtors_count: creditStats.total_debtors_count
   };
@@ -337,28 +348,9 @@ function windowKpis(db, w) {
   };
 }
 
-function getPeriodStats(db, period = 'day', refDate = null, fromDate = null) {
-  const p = PERIOD_DAYS[period] ? period : (fromDate ? 'custom' : 'day');
-  const { days, current, previous } = periodWindows(db, p, refDate, fromDate);
-  const cur = windowKpis(db, current);
-  const prev = windowKpis(db, previous);
-  const deltas = {};
-  for (const k of Object.keys(cur)) {
-    // prev === 0 → "no prior": a 0→X jump has no meaningful percentage, and
-    // Infinity would render as "+Infinity%".
-    deltas[k] = typeof cur[k] === 'number' && prev[k] !== 0
-      ? Math.round(((cur[k] - prev[k]) / Math.abs(prev[k])) * 1000) / 10
-      : null;
-  }
-  // Yearly views bucket per month, everything else per calendar day.
+function buildTrendSeries(db, current, bucketExpr, bucketExprS, bucketExprWR) {
   const W = windowAnd('created_at', current.from, current.to);
   const WI = windowAnd('s.created_at', current.from, current.to);
-  const bucketExpr = days >= 365
-    ? `strftime('%Y-%m', created_at, 'localtime')`
-    : `date(created_at, 'localtime')`;
-  const bucketExprS = days >= 365
-    ? `strftime('%Y-%m', s.created_at, 'localtime')`
-    : `date(s.created_at, 'localtime')`;
   const trendRows = db.prepare(`
     SELECT ${bucketExpr} AS bucket, COUNT(*) AS count, COALESCE(SUM(total_amount), 0.0) AS revenue
     FROM sales
@@ -377,9 +369,6 @@ function getPeriodStats(db, period = 'day', refDate = null, fromDate = null) {
   // Refunds land on the day they happened, not the sale's day — the truthful
   // cash story. Every type subtracts, matching net_profit in the KPIs above.
   const WR = windowAnd('wr.created_at', current.from, current.to);
-  const bucketExprWR = days >= 365
-    ? `strftime('%Y-%m', wr.created_at, 'localtime')`
-    : `date(wr.created_at, 'localtime')`;
   const refunds = new Map(db.prepare(`
     SELECT ${bucketExprWR} AS bucket,
       COALESCE(SUM(wr.refund_amount + CASE WHEN wr.return_type = 'replacement' AND COALESCE((SELECT voided FROM sales WHERE id = wr.sale_id), 0) = 0 THEN wr.quantity * COALESCE(i.cost_price, 0.0) ELSE 0.0 END), 0.0) AS refunded
@@ -396,7 +385,7 @@ function getPeriodStats(db, period = 'day', refDate = null, fromDate = null) {
     GROUP BY bucket ORDER BY bucket
   `).all(...W.params).map(r => [r.bucket, r.total]));
   const trendMap = new Map(trendRows.map(t => [t.bucket, t]));
-  const trend = [...new Set([...trendMap.keys(), ...costs.keys(), ...refunds.keys(), ...expByBucket.keys()])].sort().map(b => {
+  return [...new Set([...trendMap.keys(), ...costs.keys(), ...refunds.keys(), ...expByBucket.keys()])].sort().map(b => {
     const t = trendMap.get(b) || { count: 0, revenue: 0.0 };
     const ref = refunds.get(b) || 0.0;
     const cst = costs.get(b) || 0.0;
@@ -411,8 +400,55 @@ function getPeriodStats(db, period = 'day', refDate = null, fromDate = null) {
       profit: money(t.revenue - cst - ref - exp)
     };
   });
+}
 
-  return { period: p, days, range: current, previous_range: previous, current: cur, previous: prev, deltas, trend };
+function getPeriodStats(db, period = 'day', refDate = null, fromDate = null) {
+  const p = PERIOD_DAYS[period] ? period : (fromDate ? 'custom' : 'day');
+  const { days, current, previous } = periodWindows(db, p, refDate, fromDate);
+  const cur = windowKpis(db, current);
+  const prev = windowKpis(db, previous);
+  const deltas = {};
+  for (const k of Object.keys(cur)) {
+    // prev === 0 → "no prior": a 0→X jump has no meaningful percentage, and
+    // Infinity would render as "+Infinity%".
+    deltas[k] = typeof cur[k] === 'number' && prev[k] !== 0
+      ? Math.round(((cur[k] - prev[k]) / Math.abs(prev[k])) * 1000) / 10
+      : null;
+  }
+  // Yearly views bucket per month, everything else per calendar day.
+  const bucketExpr = days >= 365
+    ? `strftime('%Y-%m', created_at, 'localtime')`
+    : `date(created_at, 'localtime')`;
+  const bucketExprS = days >= 365
+    ? `strftime('%Y-%m', s.created_at, 'localtime')`
+    : `date(s.created_at, 'localtime')`;
+  const bucketExprWR = days >= 365
+    ? `strftime('%Y-%m', wr.created_at, 'localtime')`
+    : `date(wr.created_at, 'localtime')`;
+  const trend = buildTrendSeries(db, current, bucketExpr, bucketExprS, bucketExprWR);
+  // Single-day view also exposes hourly buckets so the UI renders an intraday
+  // timeline instead of a lone bar centered in empty grid space.
+  const hourly_trend = days === 1
+    ? buildTrendSeries(
+        db,
+        current,
+        `strftime('%H', created_at, 'localtime')`,
+        `strftime('%H', s.created_at, 'localtime')`,
+        `strftime('%H', wr.created_at, 'localtime')`
+      )
+    : undefined;
+
+  return {
+    period: p,
+    days,
+    range: current,
+    previous_range: previous,
+    current: cur,
+    previous: prev,
+    deltas,
+    trend,
+    ...(hourly_trend ? { hourly_trend } : {})
+  };
 }
 
 // Top/bottom products by the window's sales. item_name is the snapshot taken
@@ -473,28 +509,36 @@ function getDeadStock(db, period = '30d', refDate = null, fromDate = null) {
   const days = PERIOD_DAYS[period] || PERIOD_DAYS['30d'];
   const today = reportEndDate(db, refDate);
   const W = windowAnd('s.created_at', fromDate || addLocalDays(db, today, -(days - 1)), today);
-  const lastSold = new Map(db.prepare(`
-    SELECT si.inventory_id AS id, MAX(date(s.created_at, 'localtime')) AS d
-    FROM sale_items si
-    JOIN sales s ON s.id = si.sale_id
-    WHERE s.voided = 0 AND si.item_type = 'part' AND si.inventory_id IS NOT NULL
-      AND date(s.created_at, 'localtime') <= ?
-    GROUP BY si.inventory_id
-  `).all(today).map(r => [r.id, r.d]));
   const rows = db.prepare(`
     SELECT i.id, i.brand, i.model_name, i.part_type, i.stock_quantity,
            (i.stock_quantity * i.cost_price) AS tied_up_capital,
            date(i.created_at, 'localtime') AS stocked_since
     FROM inventory i
     WHERE i.archived = 0 AND i.stock_quantity > 0
-      AND i.id NOT IN (
-        SELECT si.inventory_id FROM sale_items si
+      AND NOT EXISTS (
+        SELECT 1 FROM sale_items si
         JOIN sales s ON s.id = si.sale_id
-        WHERE s.voided = 0 AND si.item_type = 'part' AND si.inventory_id IS NOT NULL AND ${W.sql}
+        WHERE si.inventory_id = i.id AND s.voided = 0 AND si.item_type = 'part' AND ${W.sql}
       )
     ORDER BY tied_up_capital DESC
     LIMIT 20
   `).all(...W.params);
+  // Fetch historical last-sale dates only for the 20 returned SKUs instead of scanning all sales.
+  const lastSold = new Map();
+  if (rows.length) {
+    const ids = rows.map(r => r.id);
+    const ph = ids.map(() => '?').join(',');
+    for (const r of db.prepare(`
+      SELECT si.inventory_id AS id, MAX(date(s.created_at, 'localtime')) AS d
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      WHERE si.inventory_id IN (${ph}) AND s.voided = 0 AND si.item_type = 'part'
+        AND date(s.created_at, 'localtime') <= ?
+      GROUP BY si.inventory_id
+    `).all(...ids, today)) {
+      lastSold.set(r.id, r.d);
+    }
+  }
   return rows.map(r => {
     const last = lastSold.get(r.id) || r.stocked_since;
     const daysNoSale = Math.max(0, Math.round((Date.parse(today) - Date.parse(last)) / 86400000));
@@ -518,9 +562,10 @@ function getReorderList(db, period = '30d', refDate = null, fromDate = null) {
   const today = reportEndDate(db, refDate);
   const W = windowAnd('s.created_at', fromDate || addLocalDays(db, today, -(days - 1)), today);
   const rows = db.prepare(`
-    SELECT i.id, i.brand, i.model_name, i.part_type,
-           i.stock_quantity, i.min_stock_alert,
-           COALESCE(v.units, 0) AS units_sold
+    SELECT i.id, i.brand, i.model_name, i.part_type, i.item_name, i.category, i.allow_fractional,
+           i.cost_price, i.stock_quantity, i.min_stock_alert,
+           COALESCE(v.units, 0) AS units_sold,
+           ${EVER_STOCKED_SQL('i')} AS ever_stocked
     FROM inventory i
     LEFT JOIN (
       SELECT si.inventory_id AS id, SUM(si.quantity) AS units
@@ -530,18 +575,38 @@ function getReorderList(db, period = '30d', refDate = null, fromDate = null) {
       GROUP BY si.inventory_id
     ) v ON v.id = i.id
     WHERE i.archived = 0
-      AND (i.stock_quantity <= i.min_stock_alert OR v.units > 0)
+      AND (${BELOW_MIN_SQL('i')} OR v.units > 0)
   `).all(...W.params);
   return rows
-    .map(r => ({
-      id: r.id,
-      name: partLabel(r),
-      stock_quantity: r.stock_quantity,
-      min_stock_alert: r.min_stock_alert,
-      units_sold: r.units_sold,
-      cover_days: r.units_sold > 0 ? Math.round((r.stock_quantity * days / r.units_sold) * 10) / 10 : null,
-      below_min: r.stock_quantity <= r.min_stock_alert
-    }))
+    .map(r => {
+      const belowMin = Boolean(r.stock_quantity <= r.min_stock_alert && (r.stock_quantity > 0 || r.ever_stocked));
+      const coverDays = r.units_sold > 0 ? Math.round((r.stock_quantity * days / r.units_sold) * 10) / 10 : null;
+      const needsReorder = belowMin || (coverDays !== null && coverDays < 14);
+      let suggestedQty = 0;
+      if (needsReorder) {
+        const minNeed = belowMin ? Math.max(1, (r.min_stock_alert - r.stock_quantity) + 1) : 1;
+        const velNeed = r.units_sold > r.stock_quantity ? (r.units_sold - r.stock_quantity) : 0;
+        const raw = Math.max(minNeed, velNeed);
+        suggestedQty = r.allow_fractional ? Math.round(raw * 1000) / 1000 : Math.ceil(raw);
+      }
+      return {
+        id: r.id,
+        brand: r.brand || '',
+        model_name: r.model_name || '',
+        part_type: r.part_type || '',
+        item_name: r.item_name || null,
+        category: r.category || '',
+        allow_fractional: Boolean(r.allow_fractional),
+        cost_price: money(r.cost_price || 0),
+        name: partLabel(r),
+        stock_quantity: r.stock_quantity,
+        min_stock_alert: r.min_stock_alert,
+        units_sold: r.units_sold,
+        cover_days: coverDays,
+        below_min: belowMin,
+        suggested_qty: suggestedQty
+      };
+    })
     .filter(r => r.below_min || (r.cover_days !== null && r.cover_days < 14))
     .sort((a, b) => (b.below_min - a.below_min) || (a.stock_quantity - b.stock_quantity));
 }
@@ -577,23 +642,47 @@ function getExceptions(db, days = 7, refDate = null) {
   // Neither stored number is rewritten, so the movement and the signed period
   // it undoes both have to appear or the drawer looks right twice.
   const afterClose = [];
-  const saleDay = id => db.prepare('SELECT created_at, sale_code, payment_method, amount_paid, change_amount FROM sales WHERE id = ?').get(id);
+  const voidAdjMap = new Map();
+  for (let i = 0; i < voided.length; i += 500) {
+    const ids = voided.slice(i, i + 500).map(v => v.id);
+    const ph = ids.map(() => '?').join(',');
+    for (const row of db.prepare(`SELECT source_id, amount FROM cash_adjustments WHERE source_kind = 'sale_void' AND source_id IN (${ph}) ORDER BY id ASC`).all(...ids)) {
+      voidAdjMap.set(row.source_id, row.amount);
+    }
+  }
+  const returnSaleIds = [...new Set(returns.map(r => r.sale_id).filter(Boolean))];
+  const saleDayMap = new Map();
+  for (let i = 0; i < returnSaleIds.length; i += 500) {
+    const ids = returnSaleIds.slice(i, i + 500);
+    const ph = ids.map(() => '?').join(',');
+    for (const row of db.prepare(`SELECT id, created_at FROM sales WHERE id IN (${ph})`).all(...ids)) {
+      saleDayMap.set(row.id, row);
+    }
+  }
+  const closedCache = new Map();
+  const closedAtCached = (ts) => {
+    if (!ts) return null;
+    if (closedCache.has(ts)) return closedCache.get(ts);
+    const val = closedPeriodAt(db, ts);
+    closedCache.set(ts, val);
+    return val;
+  };
   for (const v of voided) {
-    const closed = closedPeriodAt(db, v.created_at);
+    const closed = closedAtCached(v.created_at);
     if (!closed) continue;
     // A void that predates the sign-off needed no adjustment at the time and
     // got none; listing it as a signed-period exception is pure noise.
     if (v.voided_at && closed.signed_at && v.voided_at <= closed.signed_at) continue;
-    const adj = db.prepare("SELECT amount FROM cash_adjustments WHERE source_kind = 'sale_void' AND source_id = ? ORDER BY id DESC").get(v.id);
+    const adjAmt = voidAdjMap.get(v.id);
     afterClose.push({
       kind: 'void', ref: v.sale_code, when: v.voided_at || v.created_at,
       signed_period: closed.label, signed_kind: closed.kind, signed_by: closed.closed_by,
-      cash_out: adj ? money(Math.abs(adj.amount)) : 0
+      cash_out: adjAmt !== undefined ? money(Math.abs(adjAmt)) : 0
     });
   }
   for (const r of returns) {
-    const src = r.sale_id ? saleDay(r.sale_id) : null;
-    const closed = src && closedPeriodAt(db, src.created_at);
+    const src = r.sale_id ? saleDayMap.get(r.sale_id) : null;
+    const closed = src && closedAtCached(src.created_at);
     if (!closed) continue;
     afterClose.push({
       kind: r.return_type, ref: r.return_code, when: r.created_at,
@@ -604,7 +693,7 @@ function getExceptions(db, days = 7, refDate = null) {
   // Never fail open: if verification itself throws, "unknown" must reach the
   // client so it does not render as a clean chain.
   let auditChain = { ok: 'unknown', first_bad_id: null };
-  try { auditChain = verifyChain(db); } catch (_) {}
+  try { auditChain = verifyChainIncremental(db); } catch (_) {}
   // Keep the old response field for existing consumers.
   return { range, voided, returns, cashRefunds: returns.filter(r => r.return_type === 'cash_refund'), discounts, shifts, afterClose, auditChain };
 }

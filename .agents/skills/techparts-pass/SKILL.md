@@ -1,11 +1,11 @@
 ---
 name: techparts-pass
-description: "Single entry point for the six standing quality passes. Routes one word to its prompt in docs/: audit, remediation (fix findings), refactoring, cleaning (dead code/debris), test hardening, feature batch, or the full pipeline in the standing order. Use when the user asks to audit, fix findings, clean, refactor, add tests, run a batch, or run everything."
+description: "Single entry point for the seven standing quality passes. Routes one word to its prompt in docs/: audit, remediation (fix findings), refactoring, cleaning (dead code/debris), test hardening, perf/compat optimization, feature batch, or the full pipeline in the standing order. Use when the user asks to audit, fix findings, clean, refactor, add tests, optimize perf/compat, run a batch, or run everything."
 ---
 
 # techparts-pass
 
-Router for the six standing passes. This skill holds NO rules of its own: each
+Router for the seven standing passes. This skill holds NO rules of its own: each
 pass is governed by its prompt file in `docs/`, and that file is read and
 followed EXACTLY as written. Never run a pass from memory of its prompt; read
 the file at dispatch time. Any qualifiers in the invocation (finding numbers,
@@ -20,17 +20,20 @@ item lists, file scopes) pass through to the pass verbatim.
 | refactor, restructure, split files, extract | Refactoring | `docs/refactoring-prompt.md` |
 | clean, delete dead code, remove debris, scrub | Cleaning | `docs/code-cleaning-prompt.md` |
 | add tests, harden, close coverage gaps | Test hardening | `docs/test-hardening-prompt.md` |
+| perf, optimize, low-end, compat, speed, legacy browser | Perf & compat | `docs/perf-optimization-prompt.md` |
 | batch, implement these items (+ item list) | Feature batch | `docs/feature-batch-prompt.md` |
-| full, pipeline, everything, the whole order | Standing order below | five passes; six with items |
+| full, pipeline, everything, the whole order | Standing order below | five passes (plus batch/perf if asked) |
 
 Ambiguous words get ONE question with the two candidate passes before
-anything starts ("clean up the code" could be cleaning or refactoring).
+anything starts ("clean up the code" could be cleaning or refactoring;
+"optimize the code" could be perf/compat or refactoring).
 
 ## Standing order (full pipeline)
 
 Run the project-instruction pass order: audit -> remediation -> refactoring ->
 cleaning -> test hardening. A feature batch joins only at the front, and only
-when the user supplies items to build. Hard boundaries between passes:
+when the user supplies items to build; Perf & compat joins after refactoring
+(or runs standalone) when optimizing hardware speed or legacy-browser support. Hard boundaries between passes:
 - The audit pass STOPS at its report. Nothing is fixed until the user approves
   specific numbered findings. (This project's audit prompt records a standing
   blanket-approval workflow; the audit prompt itself governs, not this line.)
@@ -56,6 +59,7 @@ when the user supplies items to build. Hard boundaries between passes:
 - Zero em dashes in any report.
 - If a prompt's tree-state block is stale (HEAD, counts, dirty files), update
   the block to today's observed state before running, and say so in one line.
-  Prompts that carry measured-gate sections instead of the compact block
-  (docs/code-audit-prompt.md, docs/refactoring-prompt.md) get their numbers
-  re-measured against the same rule at run time.
+- Prompts that carry measured-gate sections instead of the compact block
+  (`docs/code-audit-prompt.md`, `docs/refactoring-prompt.md`,
+  `docs/perf-optimization-prompt.md`) get their numbers re-measured against
+  the same rule at run time.

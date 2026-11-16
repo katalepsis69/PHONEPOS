@@ -337,6 +337,32 @@ test('Cloud Reorder parity, Stock CSV Import, and Two-Way Stock Sync end-to-end'
     const localA54 = db.prepare("SELECT * FROM inventory WHERE sku_barcode = 'SAM-A54-BAT'").get();
     assert.ok(localA54, 'new part created in local shop DB');
     assert.strictEqual(localA54.stock_quantity, 10);
+
+    // 4. A sheet whose SKU case differs must UPDATE, not mint a phantom mirror
+    // row (the register matches NOCASE). A missing wholesale column must ride
+    // as blank + auto_price so the register applies its own markup, not retail.
+    const impRes2 = await fetch(`${running.base}/api/inventory/import`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        rows: [
+          { brand: 'Apple', model_name: 'iPhone 13', part_type: 'LCD', sku_barcode: 'ip13-lcd', cost_price: 1100, stock_quantity: 0 },
+        ],
+      }),
+    });
+    assert.strictEqual(impRes2.status, 200);
+    const impBody2 = await impRes2.json();
+    assert.strictEqual(impBody2.created, 0, 'case-differing SKU matches the existing part');
+    assert.strictEqual(impBody2.updated, 1);
+    const cloudCatalog2 = await (await fetch(`${running.base}/api/rows?table=inventory&limit=5000`, { headers: { Cookie: cookie } })).json();
+    assert.strictEqual(cloudCatalog2.filter(i => String(i.sku_barcode || '').toLowerCase() === 'ip13-lcd').length, 1, 'no phantom mirror row');
+    const hb4 = await drainOutbox(db);
+    assert.strictEqual(hb4.commands_applied, 1);
+    const repriced = getInventoryItem(db, partA.id);
+    assert.strictEqual(repriced.cost_price, 1100);
+    assert.strictEqual(repriced.price_technician, 1320, 'missing wholesale auto-prices from the shop markup (20%), not retail');
+    assert.strictEqual(repriced.price_retail, 1650, 'missing retail auto-prices from the shop markup (50%)');
+    assert.strictEqual(repriced.stock_quantity, 12, 'zero quantity leaves stock alone');
   } finally {
     if (child) await stopCloud(child);
     try { db.close(); } catch (_) {}
@@ -407,6 +433,22 @@ dbTest('receiveInventory replays the same op_id instead of adding stock twice', 
   assert.equal(second[0].replayed, true);
   assert.equal(getInventoryItem(db, a.id).stock_quantity, 12, 'replay adds nothing');
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM stock_movements WHERE reason = 'receive' AND note = 'Supplier receive'").get().n, 1);
+});
+
+dbTest('receiveInventory reprices cost even when the line carries an op_id', (db) => {
+  // The real UI path always sends a per-line op_id. The reprice call must not
+  // share it with adjustStock: the dedup would see the key adjustStock just
+  // wrote and skip the cost update while the toast still reports the new cost.
+  const a = createInventoryItem(db, { brand: 'Samsung', model_name: 'S22', part_type: 'OLED', cost_price: 100, price_retail: 200, price_technician: 150, stock_quantity: 7, supplier: 'ABC Parts' });
+  const op = 'receive-reprice-op-1';
+  const first = receiveInventory(db, [{ id: a.id, quantity: 5, unit_cost: 95, op_id: op }], ctxMgr);
+  assert.equal(first[0].unit_cost, 95);
+  assert.equal(getInventoryItem(db, a.id).cost_price, 95, 'the reprice lands on the op_id path');
+  assert.equal(getInventoryItem(db, a.id).stock_quantity, 12);
+  const second = receiveInventory(db, [{ id: a.id, quantity: 5, unit_cost: 80, op_id: op }], ctxMgr);
+  assert.equal(second[0].replayed, true);
+  assert.equal(getInventoryItem(db, a.id).stock_quantity, 12, 'replay adds nothing');
+  assert.equal(getInventoryItem(db, a.id).cost_price, 95, 'replay does not reprice again');
 });
 
 serverTest('/api/inventory/receive is elevation-gated and receives stock', async (base, db, auth) => {

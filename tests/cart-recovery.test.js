@@ -29,6 +29,7 @@ async function harness(raw, cart = []) {
     ...recovery,
     S: { cart, currentPriceTier: 'retail', currentPaymentMethod: 'cash' },
     document: { getElementById, querySelector: () => null },
+    t: (k, fb) => fb || k,
     localStorage: {
       getItem: key => storage.get(key) ?? null,
       setItem: (key, value) => { storage.set(key, value); writes.push(JSON.parse(value)); }
@@ -40,7 +41,7 @@ async function harness(raw, cart = []) {
     calculateChange() {}, calculateCreditBalance() {},
     fetch: async () => ({ ok: true, json: async () => [] }),
     console,
-    populateDeviceDatalist() {}, renderBrandOptions() {}, renderPartTypeOptions() {},
+    populateDeviceDatalist() {}, renderBrandChips() {}, renderPartTypeOptions() {},
     renderInvBrandFilter() {}, renderCategoryOptions() {}, renderRepairRef() {},
     renderSummaryDevice() {}, renderPartsTable() {},
     loadShopSettings: async () => {}, loadCustomerSuggestions: async () => {}, refreshDraftChip() {}, refreshSyncChip() {}
@@ -92,4 +93,15 @@ test('empty or invalid recovery does not replace the current cart or persist dat
   assert.equal(h.context.S.cart, active);
   assert.equal(h.writes.length, 0);
   assert.equal(h.messages.length, 0);
+});
+
+test('deserializeCartForRecovery drops shape-invalid lines', async () => {
+  const { deserializeCartForRecovery } = await import('../public/js/cart-recovery.js');
+  const raw = JSON.stringify([{ qty: 2, name: 'ok' }, { qty: 'abc' }, { qty: -1 }, { qty: 0 }, null, 'x', { qty: 1.5, name: 'frac' }]);
+  const cart = deserializeCartForRecovery(raw);
+  assert.equal(cart.length, 2, 'garbage qty never reaches the display strings');
+  assert.equal(cart[0].name, 'ok');
+  assert.equal(cart[1].name, 'frac');
+  assert.deepEqual(deserializeCartForRecovery('not json'), []);
+  assert.deepEqual(deserializeCartForRecovery('{"a":1}'), []);
 });

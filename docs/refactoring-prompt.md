@@ -1,15 +1,13 @@
-# Refactoring Pass Prompt (v4)
+# Refactoring Pass Prompt (v5)
 
-[v4, 2026-11-12, supersedes v3 of 2026-11-09 (which superseded v2 of 2026-10-14). v4 exists
-because the Universal POS, Inno Setup 7 SYSTEM service, Manager PIN Recovery, and USB
-backup batches merged onto main at 533f07a, lifting the suite from 568 to 610 tests across
-49 tracked files and updating the server, updater, auth, and db boundaries. Companion:
-docs/code-audit-prompt.md (now v9) governs find-and-report audits and carries the
-verified-behavior list; this prompt carries structure only. Refactoring is dispatched
-by the techparts-pass skill (.agents/skills/techparts-pass/SKILL.md) alongside
-remediation, cleaning, test hardening and feature batch. Never fold audit findings
-into this pass, and never fix anything inside this pass. Refactoring and auditing stay
-separate passes.]
+[v5, 2026-11-16, supersedes v4 of 2026-11-12/14 (which superseded v3 and v2). v5 refreshes
+the baseline to v1.4 (772 tests across 59 test files) and protects the low-end performance
+optimizations, Edge 92 compatibility shims, and 5 Must-Have features. Companion:
+docs/code-audit-prompt.md (v10) governs find-and-report audits and
+docs/perf-optimization-prompt.md (v1) governs low-end hardware and Edge 92 optimization passes.
+Refactoring is dispatched by the techparts-pass skill (.agents/skills/techparts-pass/SKILL.md)
+alongside audit, remediation, cleaning, test hardening, perf/compat optimization, and feature batch.
+Never fold audit findings into this pass, and never fix anything inside this pass.]
 
 MISSION
 Improve internal code quality with ZERO behavior change. In scope:
@@ -44,27 +42,19 @@ pass.
 
 BASELINE RITUAL (first, no exceptions)
 1. The gates are fixed for this project; do not re-detect them:
-   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-14 at bbab7d4 with the
-     uncommitted Stage Build rewrite graft batch in the tree: 682 tests,
-     681 pass + 1 skipped (the env-gated sync soak, skips by design without SYNC_SOAK=1),
-     0 fail, about 28 seconds across 57 tracked test files
-     (670/670 at 3d8dc46 earlier the same
-     day, 661/661 at c91f354 on
-     2026-11-13, 640/640 at ab5de08 and 638/638 at cf06069 that same
-     night,
-     610/610 on 2026-11-12,
-     568/568 on 2026-11-11,
-     560/560 on 2026-11-10, 536/536 on 2026-11-09, 505/505 on 2026-11-05, 423/423 on
-     2026-10-14). There is no JS compile step in dev; npm run build:css rebuilds
-     public/tailwind.build.css after Tailwind changes, and the suite is the main automated
-     gate. node --check on touched files is a fair extra, nothing more. npm run verify:exe
-     and npm run test:verifier check the packaged EXEs; tests/packaging-workflows.test.js
-     covers publish-release.ps1, batch entry points, and installer/TechPartsPOS.iss.
+   - Suite: npm test (node --test tests/*.test.js). Measured 2026-11-16 at 81a31fe with the
+     uncommitted Low-End Optimization, Edge 92 Compatibility, Table Density/Chart,
+     Must-Have Bundle, 11-15 remediation, and 2026-11-16 audit fixes in the tree:
+     772 tests, 771 pass + 1 skipped (the env-gated sync soak, skips by design without
+     SYNC_SOAK=1), 0 fail, about 22 seconds across 59 test files. There is no JS compile step in dev; npm run build:css rebuilds
+     public/tailwind.build.css (via @tailwindcss/cli plus scripts/compat-css.js for
+     Edge 92) after style changes, and the suite is the main automated gate. node --check
+     on touched files is a fair extra, nothing more. npm run verify:exe and npm run
+     test:verifier check packaged EXEs; tests/packaging-workflows.test.js covers
+     publish-release.ps1, batch entry points, and installer/TechPartsPOS.iss.
 2. Run the gate. Record the exact result INCLUDING failures. IDENTICAL before and
    after means the same set of pass and fail, not all-green. Pre-existing reds:
-   none known (682 tests, 681 pass + 1 gated skip, 0 fail on 2026-11-14 at bbab7d4; 670/670 at
-     3d8dc46 earlier the same day; 661/661 at c91f354 and 640/640 at ab5de08 and 638/638 at cf06069
-     the day before; 610/610 on 2026-11-12). A new red is a
+   none known (772 tests, 771 pass + 1 gated skip, 0 fail on 2026-11-16 at 81a31fe). A new red is a
    stop condition, not a baseline entry. A hung run is a rerun, not a regression.
    always take helper.js's serverTest, because the default dbPath resolves to the real
    data/shop.db (src/server.js:278) and sendRaw is only patched by the harness. If you find a
@@ -142,7 +132,12 @@ RULES OF ENGAGEMENT
   node:vm (splitting it, renaming the banner, or moving a function out of the slice breaks
   the test, not the feature); the same extract-and-execute pattern in ui-fixes (note
   source() normalizes CRLF), frontend-regressions, cart-recovery, audit-regressions,
-  reports-behavior and template-chooser; the pure check versus staged apply split in
+  reports-behavior, perf-optimizations, old-browser-compat, and template-chooser;
+  the incremental audit-chain verification (verifyChainIncremental plus chainCache in
+  src/audit.js), buildReconcileSummary (src/server.js) + renderZReadSlip (src/printer.js),
+  and the scripts/compat-css.js post-processor alongside plain CSS/JS Edge 92 fallbacks
+  (never strip plain fallback lines above color-mix() or dvh, [inert] sync, or the
+  crypto.randomUUID() polyfill); the pure check versus staged apply split in
   src/updater.js (parseVersionParts, isRemoteNewer, isTrustedReleaseUrl and
   isTrustedPageUrl are pure, checkForUpdates is fetch only, applyUpdate owns the
   staging, the size compare and the cmd handoff: do not collapse them, that split is what

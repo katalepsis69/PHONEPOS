@@ -135,4 +135,6 @@ export function syncAppearanceModal(app = readAppearance()) {
     b.classList.toggle('is-active', b.dataset.accent === accent));
   document.querySelectorAll('[data-action="set-font-scale"]').forEach(b =>
     b.classList.toggle('is-active', String(b.dataset.scale) === scale));
+  const pill = document.getElementById('appreview-density-pill');
+  if (pill) pill.textContent = density.charAt(0).toUpperCase() + density.slice(1);
 }

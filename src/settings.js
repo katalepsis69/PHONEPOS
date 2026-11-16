@@ -6,7 +6,8 @@ const PRIVATE_SETTINGS = new Set([
   'manager_pin_hash', 'license_key', 'pin_failed_attempts', 'pin_lockout_until',
   'report_pin_failed_attempts', 'report_pin_lockout_until',
   'recovery_password_hash', 'recovery_failed_attempts', 'recovery_lockout_until',
-  'report_token', 'report_token_expires_at', 'counter_session_secret', 'sync_token'
+  'report_token', 'report_token_expires_at', 'counter_session_secret', 'sync_token',
+  'trial_seal_secret'
 ]);
 
 function getShopSettings(db) {
@@ -28,8 +29,7 @@ const EDITABLE_SETTINGS = new Set([
   'warranty_days', 'warranty_policy_text', 'shop_footer_note',
   'owner_name', 'shop_address', 'settle_elevation_threshold', 'shift_variance_threshold',
   'default_retail_markup_pct', 'default_wholesale_markup_pct',
-  'business_type', 'enable_service_bench', 'enable_fractional_qty', 'enable_serial_tracking',
-  'wholesale_tier_label'
+  'business_type', 'enable_service_bench', 'enable_fractional_qty', 'enable_serial_tracking'
 ]);
 
 function getDefaultRetailMarkup(db) {

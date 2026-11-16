@@ -10,6 +10,7 @@ const path = require('node:path');
 process.env.POS_BACKUP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'bk-restore-'));
 
 const assert = require('node:assert/strict');
+const { test } = require('node:test');
 const { dbTest, serverTest, ensurePinChanged } = require('./helper');
 const { createInventoryItem } = require('../src/inventory');
 const { createSale } = require('../src/sales');
@@ -102,6 +103,50 @@ serverTest('restore refuses traversal, strangers, and corrupt files', async (bas
   const files = (await (await fetch(`${baseUrl}/api/backup/list`, { headers: authed(auth) })).json()).backups.map(b => b.file);
   assert.ok(files.includes('shop_backup_junk.db'), 'shop-family files are offered');
   assert.ok(!files.includes('unrelated.db'), 'stranger files are filtered out');
+});
+
+serverTest('after a restore the backup tick follows the live handle', async (baseUrl, db, auth, getDb) => {
+  auth = await ensurePinChanged(baseUrl, auth);
+  const dir = process.env.POS_BACKUP_DIR;
+  createInventoryItem(db, {
+    brand: 'Tick', model_name: 'T1', part_type: 'LCD',
+    cost_price: 1.0, price_retail: 2.0, stock_quantity: 1
+  });
+  const bRes = await fetch(`${baseUrl}/api/backup`, { method: 'POST', headers: authed(auth) });
+  assert.equal(bRes.status, 200);
+  const { backup_file: file } = await bRes.json();
+  const rRes = await postJson(baseUrl, auth, '/api/backup/restore', { file });
+  assert.equal(rRes.status, 200);
+
+  // Force one tick through the same getter startServer wires: clear the
+  // per-date idempotency key, then the tick must snapshot the RESTORED file.
+  // A tick holding the pre-restore handle throws "database is not open" and
+  // only logs a warning, leaving no snapshot.
+  getDb().prepare("DELETE FROM shop_settings WHERE key = 'last_backup_date'").run();
+  const today = getDb().prepare("SELECT date('now','localtime') AS d").get().d;
+  const target = path.join(dir, `shop-${today}.db`);
+  try { fs.unlinkSync(target); } catch (_) {}
+  const { runBackupTick } = require('../src/server');
+  runBackupTick(getDb, getDb().shopDbPath);
+  assert.ok(fs.existsSync(target), 'the tick snapshotted the restored database');
+  const { DatabaseSync } = require('node:sqlite');
+  const snap = new DatabaseSync(target, { readOnly: true });
+  try {
+    const rows = snap.prepare('SELECT model_name FROM inventory').all();
+    assert.deepEqual(rows.map(r => r.model_name), ['T1'], 'the snapshot holds the restored data');
+  } finally { snap.close(); }
+});
+
+test('startServer wires the backup tick to the live-handle getter, not a snapshot', () => {
+  // startServer's listen callback never runs under test (it binds ports and
+  // launches browsers), so pin the wiring at source; the behavioral sibling
+  // above proves the getter mechanism across a restore.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  const region = src.slice(src.indexOf('function startServer'), src.indexOf('module.exports'));
+  assert.match(region, /const \{ server, db, getDb \} = createServer\(\);/, 'startServer must destructure the live-handle getter');
+  const calls = region.match(/runBackupTick\(getDb, RUNTIME_DB_PATH\)/g) || [];
+  assert.equal(calls.length, 2, 'both the boot tick and the hourly interval use getDb');
+  assert.doesNotMatch(region, /runBackupTick\(\(\) => db/, 'a captured db binding snapshots a closed handle after restore');
 });
 
 dbTest('custom range spans the picked start and end dates', (db) => {
