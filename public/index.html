@@ -164,6 +164,19 @@
         </div>
 
         <div class="topbar__tools">
+          <span class="topbar-profile" data-manager-only>
+            <label for="topbar-profile-switcher" class="sr-only">Active shop profile</label>
+            <i class="ph ph-storefront w-3.5 h-3.5 text-[var(--txt-3)]" aria-hidden="true"></i>
+            <select id="topbar-profile-switcher" class="select-sm topbar-profile__select"
+              title="Switch active shop profile" aria-label="Active shop profile">
+              <option value="hybrid">Hybrid (All Active)</option>
+              <option value="pc">PC &amp; Electronics</option>
+              <option value="phone">Phone Repair</option>
+              <option value="grocery">Grocery &amp; Market</option>
+              <option value="retail">General Retail</option>
+              <option value="service">Service / Labor</option>
+            </select>
+          </span>
           <button type="button" id="draft-chip" class="draft-chip hidden" data-action="resume-draft"
             title="Resume the held repair job">
             <span>Resume held job</span>
@@ -642,11 +655,17 @@
               </label>
               <span id="inv-reorder-summary" class="reorder-summary"></span>
               <span class="flex-1"></span>
+              <button type="button" class="btn-mini" data-action="reorder-match-sold" title="Set order quantities to replace all units sold in this window">
+                <i class="ph ph-arrows-clockwise w-3.5 h-3.5"></i> <span>Match sold</span>
+              </button>
               <button type="button" class="btn-mini" data-action="export-reorder-csv" data-manager-only title="Export reorder items to CSV matching import template">
                 <i class="ph ph-download-simple w-3.5 h-3.5"></i> <span data-i18n="inv.reorder_export">Export CSV</span>
               </button>
               <button type="button" class="btn-mini" data-reorder-copy="*">
                 <i class="ph ph-clipboard-text w-3.5 h-3.5"></i> <span data-i18n="inv.reorder_copy">Copy order</span>
+              </button>
+              <button type="button" class="btn-primary btn-mini" data-action="receive-reorder" data-manager-only title="Receive the ordered quantities above into inventory stock">
+                <i class="ph ph-package w-3.5 h-3.5"></i> <span>Receive stock</span>
               </button>
             </div>
             <div id="inv-reorder-content" class="overflow-y-auto max-h-96"></div>
@@ -663,6 +682,9 @@
               <div class="flex items-center gap-2">
                 <button type="button" id="inv-bulk-labels-btn" data-action="bulk-print-labels" class="btn-quiet text-xs py-1 px-3" title="Print Code128 SKU barcode stickers">
                   <i class="ph ph-barcode w-3.5 h-3.5"></i> <span data-i18n="inv.bulk_labels">Print Labels</span>
+                </button>
+                <button type="button" id="inv-bulk-delete-btn" data-action="bulk-delete" class="btn-mini btn-mini--danger text-xs py-1 px-3" title="Delete selected items permanently">
+                  <i class="ph ph-trash w-3.5 h-3.5"></i> <span data-i18n="inv.bulk_delete">Delete</span>
                 </button>
                 <button type="button" id="inv-bulk-edit-btn" data-action="bulk-edit" class="btn-primary text-xs py-1 px-3">
                   <i class="ph ph-pencil-simple w-3.5 h-3.5"></i> <span data-i18n="inv.bulk_edit">Bulk Edit</span>
@@ -682,8 +704,8 @@
                     <th class="is-num" data-i18n="inv.th_cost">Capital (₱)</th>
                     <th class="is-num" data-i18n="inv.th_retail">Retail (₱)</th>
                     <th class="is-num" data-i18n="inv.th_wholesale">Wholesale (₱)</th>
-                    <th class="is-mid" data-i18n="inv.th_stock">Stock Qty</th>
-                    <th class="is-mid" data-i18n="inv.th_min_alert" title="Low-stock alert threshold">Min Stock Alert</th>
+                    <th class="is-mid" data-i18n="inv.th_stock">Stock Count</th>
+                    <th class="is-mid" data-i18n="inv.th_min_alert" title="Low-stock alert threshold">Low Stock Alert</th>
                     <th class="is-mid" data-i18n="inv.th_actions">Actions</th>
                   </tr>
                 </thead>
@@ -1111,9 +1133,12 @@
       <!-- Item Type Template Selector (Hybrid mode only) -->
       <div class="px-5 pt-3 pb-0 hidden" id="item-template-bar">
         <div class="text-[11px] font-semibold text-[var(--txt-3)] mb-1.5 uppercase tracking-wide">Item Type Template</div>
-        <div class="grid grid-cols-4 gap-1 p-1 bg-[var(--surface-2)] rounded-lg border border-[var(--line-soft)]" role="tablist">
+        <div class="grid grid-cols-5 gap-1 p-1 bg-[var(--surface-2)] rounded-lg border border-[var(--line-soft)]" role="tablist">
           <button type="button" class="btn-mini text-center text-xs py-1 px-1 rounded font-medium transition-colors is-active" data-action="set-add-template" data-template="retail" id="tpl-btn-retail">
-            Grocery / Retail
+            General Retail
+          </button>
+          <button type="button" class="btn-mini text-center text-xs py-1 px-1 rounded font-medium transition-colors" data-action="set-add-template" data-template="grocery" id="tpl-btn-grocery">
+            Grocery
           </button>
           <button type="button" class="btn-mini text-center text-xs py-1 px-1 rounded font-medium transition-colors" data-action="set-add-template" data-template="pc" id="tpl-btn-pc">
             PC Component
@@ -1162,10 +1187,10 @@
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <div class="field">
-            <label class="field__label" for="part-sku" data-i18n="part.sku">SKU / Barcode</label>
+            <label class="field__label" for="part-sku" data-i18n="part.sku">Barcode</label>
             <input type="text" id="part-sku" placeholder="e.g. AP-LCD-11" autocomplete="off"
               class="w-full px-3 py-1.5 text-xs font-mono">
-            <p id="part-sku-warn" class="foot-note hidden" style="color:#f59e0b;margin:4px 0 0;">This SKU is already assigned to another part.</p>
+            <p id="part-sku-warn" class="foot-note hidden" style="color:#f59e0b;margin:4px 0 0;">This barcode is already assigned to another item.</p>
           </div>
           <div class="field">
             <label class="field__label" for="part-supplier" data-i18n="part.supplier">Supplier</label>
@@ -1173,14 +1198,14 @@
               class="w-full px-3 py-1.5 text-xs">
           </div>
           <div class="field">
-            <label class="field__label" for="part-location" data-i18n="part.location">Location</label>
+            <label class="field__label" for="part-location" data-i18n="part.location">Shelf / Bin</label>
             <input type="text" id="part-location" placeholder="e.g. Shelf A1" autocomplete="off"
               class="w-full px-3 py-1.5 text-xs">
           </div>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-3 items-end gap-2 p-2 rounded-lg bg-[var(--surface-2)] border border-[var(--line-soft)] text-xs" id="field-wrap-item-attrs">
           <div class="field">
-            <label class="field__label" for="part-uom">Unit of Measure</label>
+            <label class="field__label" for="part-uom">Unit</label>
             <select id="part-uom" class="w-full px-2 py-1 text-xs">
               <option value="pcs" selected>pcs</option>
               <option value="kg">kg (weight)</option>
@@ -1194,13 +1219,13 @@
           <div class="field">
             <label class="check cursor-pointer flex items-center gap-1.5 px-2 py-1 border border-transparent text-xs leading-4">
               <input type="checkbox" id="part-allow-fractional">
-              <span>Allow decimals</span>
+              <span>Sell by weight or decimal</span>
             </label>
           </div>
           <div class="field">
             <label class="check cursor-pointer flex items-center gap-1.5 px-2 py-1 border border-transparent text-xs leading-4">
               <input type="checkbox" id="part-track-serial">
-              <span>Track serial #</span>
+              <span>Requires serial number</span>
             </label>
           </div>
         </div>
@@ -1223,12 +1248,12 @@
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div class="field">
-            <label class="field__label" for="part-stock" data-i18n="part.stock">Stock Qty *</label>
+            <label class="field__label" for="part-stock" data-i18n="part.stock">Stock Count *</label>
             <input type="number" id="part-stock" required min="0" step="any" value="5"
               class="w-full px-3 py-1.5 text-xs font-mono">
           </div>
           <div class="field">
-            <label class="field__label" for="part-min-alert" data-i18n="part.min_alert">Min Stock Alert</label>
+            <label class="field__label" for="part-min-alert" data-i18n="part.min_alert">Low Stock Alert</label>
             <input type="number" id="part-min-alert" min="0" step="any" value="2" class="w-full px-3 py-1.5 text-xs font-mono">
           </div>
         </div>
@@ -1503,6 +1528,7 @@
                       <option value="phone">Phone Repair</option>
                       <option value="grocery">Grocery &amp; Market</option>
                       <option value="retail">General Retail</option>
+                      <option value="service">Service / Labor</option>
                     </select>
                   </div>
                 </div>
@@ -2312,26 +2338,26 @@
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <div class="field">
             <label class="field__label flex items-center justify-between gap-2" for="edit-part-sku">
-              <span data-i18n="part.sku">SKU / Barcode</span>
+              <span data-i18n="part.sku">Barcode</span>
               <button type="button" data-action="print-edit-label" class="btn-mini py-0.5 px-2 text-xs" title="Print Code128 barcode sticker">
                 <i class="ph ph-barcode w-3 h-3"></i> Label
               </button>
             </label>
             <input type="text" id="edit-part-sku" autocomplete="off" class="w-full px-2.5 py-1.5 text-xs font-mono">
-            <p id="edit-part-sku-warn" class="foot-note hidden" style="color:#f59e0b;margin:4px 0 0;">This SKU is already assigned to another part.</p>
+            <p id="edit-part-sku-warn" class="foot-note hidden" style="color:#f59e0b;margin:4px 0 0;">This barcode is already assigned to another item.</p>
           </div>
           <div class="field">
             <label class="field__label" for="edit-part-supplier" data-i18n="part.supplier">Supplier</label>
             <input type="text" id="edit-part-supplier" autocomplete="off" class="w-full px-2.5 py-1.5 text-xs">
           </div>
           <div class="field">
-            <label class="field__label" for="edit-part-location" data-i18n="part.location">Location</label>
+            <label class="field__label" for="edit-part-location" data-i18n="part.location">Shelf / Bin</label>
             <input type="text" id="edit-part-location" placeholder="e.g. Shelf A1" autocomplete="off" class="w-full px-2.5 py-1.5 text-xs">
           </div>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-3 items-end gap-2 p-2 rounded-lg bg-[var(--surface-2)] border border-[var(--line-soft)] text-xs" id="field-wrap-edit-attrs">
           <div class="field">
-            <label class="field__label" for="edit-part-uom">Unit of Measure</label>
+            <label class="field__label" for="edit-part-uom">Unit</label>
             <select id="edit-part-uom" class="w-full px-2 py-1 text-xs">
               <option value="pcs">pcs</option>
               <option value="kg">kg (weight)</option>
@@ -2345,13 +2371,13 @@
           <div class="field">
             <label class="check cursor-pointer flex items-center gap-1.5 px-2 py-1 border border-transparent text-xs leading-4">
               <input type="checkbox" id="edit-part-allow-fractional">
-              <span>Allow decimals</span>
+              <span>Sell by weight or decimal</span>
             </label>
           </div>
           <div class="field">
             <label class="check cursor-pointer flex items-center gap-1.5 px-2 py-1 border border-transparent text-xs leading-4">
               <input type="checkbox" id="edit-part-track-serial">
-              <span>Track serial #</span>
+              <span>Requires serial number</span>
             </label>
           </div>
         </div>
@@ -2375,9 +2401,22 @@
             <input type="number" id="edit-part-stock" required min="0" step="any" class="w-full px-3 py-1.5 text-xs font-mono">
           </div>
           <div class="field">
-            <label class="field__label" for="edit-part-min-alert" data-i18n="part.min_alert">Min Stock Alert</label>
+            <label class="field__label" for="edit-part-min-alert" data-i18n="part.min_alert">Low Stock Alert</label>
             <input type="number" id="edit-part-min-alert" min="0" step="any" class="w-full px-3 py-1.5 text-xs font-mono">
           </div>
+        </div>
+        <div class="field">
+          <label class="field__label" for="edit-part-profile">Shop Type</label>
+          <select id="edit-part-profile" class="w-full px-2.5 py-1.5 text-xs">
+            <option value="">Auto-detect (legacy untagged)</option>
+            <option value="shared">Shared (visible in all profiles)</option>
+            <option value="phone">Phone Repair</option>
+            <option value="pc">PC &amp; Electronics</option>
+            <option value="grocery">Grocery &amp; Market</option>
+            <option value="retail">General Retail</option>
+            <option value="service">Service / Labor</option>
+          </select>
+          <p class="foot-note">This item's stock lane. Hybrid shows every lane; other profiles show only their own.</p>
         </div>
         <div class="modal-card__foot">
           <button type="button" data-action="close-modal" data-modal="modal-edit-part" class="btn-quiet" data-i18n="common.cancel">Cancel</button>
@@ -2404,6 +2443,7 @@
             <option value="update_fields" data-i18n="bulk.opt_update_fields">Update details (supplier, location, min alert)</option>
             <option value="archive" data-i18n="bulk.opt_archive">Archive selected parts</option>
             <option value="unarchive" data-i18n="bulk.opt_unarchive">Restore / unarchive selected parts</option>
+            <option value="delete" data-i18n="bulk.opt_delete">Delete selected parts permanently</option>
           </select>
         </div>
 
@@ -2458,18 +2498,36 @@
             <input type="text" id="bulk-supplier" placeholder="Leave blank to keep unchanged" data-i18n-ph="bulk.unchanged_ph" class="w-full px-2.5 py-1.5 text-xs">
           </div>
           <div class="field">
-            <label class="field__label" for="bulk-location" data-i18n="bulk.location">Storage location / Shelf</label>
+            <label class="field__label" for="bulk-location" data-i18n="bulk.location">Shelf / Bin</label>
             <input type="text" id="bulk-location" placeholder="Leave blank to keep unchanged" data-i18n-ph="bulk.unchanged_ph" class="w-full px-2.5 py-1.5 text-xs">
           </div>
           <div class="field">
-            <label class="field__label" for="bulk-min-alert" data-i18n="bulk.min_alert">Min stock alert</label>
+            <label class="field__label" for="bulk-min-alert" data-i18n="bulk.min_alert">Low stock alert</label>
             <input type="number" id="bulk-min-alert" min="0" placeholder="Leave blank to keep unchanged" data-i18n-ph="bulk.unchanged_ph" class="w-full px-2.5 py-1.5 text-xs font-mono">
+          </div>
+          <div class="field">
+            <label class="field__label" for="bulk-profile">Shop Type (stock lane)</label>
+            <select id="bulk-profile" class="w-full px-2.5 py-1.5 text-xs">
+              <option value="keep">Keep unchanged</option>
+              <option value="shared">Shared (visible in all profiles)</option>
+              <option value="phone">Phone Repair</option>
+              <option value="pc">PC &amp; Electronics</option>
+              <option value="grocery">Grocery &amp; Market</option>
+              <option value="retail">General Retail</option>
+              <option value="service">Service / Labor</option>
+            </select>
+            <p class="foot-note">Move selected items into one profile's lane. Hybrid shows every lane.</p>
           </div>
         </div>
 
         <!-- 4. Archive/unarchive panel -->
         <div id="bulk-panel-archive" class="space-y-2 hidden">
           <p id="bulk-archive-info" class="foot-note" data-i18n="bulk.archive_info">Selected parts will be hidden from the active catalog and POS. Stock quantity and ledger history will be preserved.</p>
+        </div>
+
+        <!-- 5. Delete panel -->
+        <div id="bulk-panel-delete" class="space-y-2 hidden">
+          <p class="foot-note" data-i18n="bulk.delete_info">Permanently removes the selected parts and their stock ledgers. Parts that appear in sold receipts are skipped; archive those instead to keep sales history accurate.</p>
         </div>
 
         <div class="modal-card__foot">

@@ -17,15 +17,24 @@ export function clearInventorySelection() {
   if (allCb) { allCb.checked = false; allCb.indeterminate = false; }
 }
 
+function getVisibleSelectedIds() {
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const visibleSet = new Set((S.inventoryRowsCache || [])
+    .filter(i => itemVisibleInProfile(i, mode))
+    .map(i => Number(i.id)));
+  return [...selectedPartIds].filter(id => visibleSet.has(Number(id)));
+}
+
 export function printBulkSkuLabels() {
-  if (selectedPartIds.size === 0) {
+  const ids = getVisibleSelectedIds();
+  if (ids.length === 0) {
     showToast(t('bulk.none_selected', 'Select one or more parts first'), 'error');
     return;
   }
   const byId = new Map();
   for (const it of (S.inventoryItems || [])) byId.set(Number(it.id), it);
   for (const it of (S.inventoryRowsCache || [])) byId.set(Number(it.id), it);
-  const items = [...selectedPartIds].map(id => byId.get(Number(id))).filter(Boolean);
+  const items = ids.map(id => byId.get(Number(id))).filter(Boolean);
   printSkuLabels(items);
 }
 
@@ -45,19 +54,21 @@ export function updateBulkBar() {
   const hint = document.getElementById('inv-bulk-hint');
   const countEl = document.getElementById('inv-bulk-count');
   const allCb = document.getElementById('inv-select-all');
-  const size = selectedPartIds.size;
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const visibleIds = (S.inventoryRowsCache || [])
+    .filter(i => itemVisibleInProfile(i, mode))
+    .map(i => i.id);
+  const visibleSelected = getVisibleSelectedIds().length;
   if (bar) {
-    bar.classList.toggle('hidden', size === 0);
+    bar.classList.toggle('hidden', visibleSelected === 0);
   }
   if (hint) {
-    hint.classList.toggle('hidden', size > 0);
+    hint.classList.toggle('hidden', visibleSelected > 0);
   }
   if (countEl) {
-    countEl.textContent = `${size} ${t('common.selected', 'selected')}`;
+    countEl.textContent = `${visibleSelected} ${t('common.selected', 'selected')}`;
   }
   if (allCb) {
-    const visibleIds = (S.inventoryRowsCache || []).map(i => i.id);
-    const visibleSelected = visibleIds.filter(id => selectedPartIds.has(id)).length;
     allCb.checked = visibleIds.length > 0 && visibleSelected === visibleIds.length;
     allCb.indeterminate = visibleSelected > 0 && visibleSelected < visibleIds.length;
   }
@@ -91,7 +102,7 @@ export function setupInventoryEnhancements() {
         <span id="inv-metric-low" class="stat__value">0</span>
         <span class="stat__meta" data-i18n="inv.stat_reorder">${t('inv.stat_reorder', 'at or below reorder point')}</span>
       </div>
-      <div id="inv-metric-out-card" class="stat stat--danger">
+      <div id="inv-metric-out-card" class="stat">
         <span class="stat__label" data-i18n="inv.stat_out_stock">${t('inv.stat_out_stock', 'Out of stock')}</span>
         <span id="inv-metric-out" class="stat__value">0</span>
         <span id="inv-metric-out-meta" class="stat__meta" data-i18n="inv.stat_restock">${t('inv.stat_restock', 'needs restock')}</span>
@@ -115,7 +126,10 @@ export function setupInventoryEnhancements() {
   if (allCb && !allCb.dataset.bound) {
     allCb.dataset.bound = '1';
     allCb.addEventListener('change', () => {
-      const visibleIds = (S.inventoryRowsCache || []).map(i => i.id);
+      const mode = S.shopSettings?.business_type || 'hybrid';
+      const visibleIds = (S.inventoryRowsCache || [])
+        .filter(i => itemVisibleInProfile(i, mode))
+        .map(i => i.id);
       if (allCb.checked) {
         visibleIds.forEach(id => selectedPartIds.add(id));
       } else {
@@ -235,6 +249,18 @@ export function setupInventoryEnhancements() {
     reorderContent.addEventListener('input', e => {
       if (e.target.matches('input[data-qty-id]')) updateReorderMoney(e.target);
     });
+    reorderContent.addEventListener('click', e => {
+      const stepBtn = e.target.closest('[data-reorder-step]');
+      if (!stepBtn) return;
+      const id = stepBtn.dataset.targetId;
+      const input = reorderContent.querySelector(`input[data-qty-id="${id}"]`);
+      if (!input) return;
+      const delta = Number(stepBtn.dataset.reorderStep) || 0;
+      const cur = Math.max(0, Number(input.value) || 0);
+      const next = Math.max(0, roundQty(cur + delta));
+      input.value = String(next);
+      updateReorderMoney(input);
+    });
   }
 }
 
@@ -299,15 +325,15 @@ export async function loadInventoryTable() {
 
 export function renderInventoryMetrics(items) {
   const mode = S.shopSettings?.business_type || 'hybrid';
-  const visible = (mode !== 'hybrid')
-    ? items.filter(item => itemMatchesProfile(item, mode))
-    : items;
+  const visible = items.filter(item => itemVisibleInProfile(item, mode));
   let inStock = 0, low = 0, out = 0, units = 0;
   visible.forEach(i => {
     const q = Number(i.stock_quantity) || 0;
+    const min = Number(i.min_stock_alert) || 0;
     units += q;
+    if (i.archived) return;
     if (q <= 0) out++;
-    else if (q <= (Number(i.min_stock_alert) || 0)) low++;
+    else if (q <= min) low++;
     else inStock++;
   });
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
@@ -315,23 +341,17 @@ export function renderInventoryMetrics(items) {
   const unitsLabel = units === 1 ? t('inv.stat_unit_single', 'unit on hand') : t('inv.stat_units', 'units on hand');
   set('inv-metric-stock', `${units.toLocaleString()} ${unitsLabel}`);
   set('inv-metric-in', inStock);
-  // The subtitle is static "healthy levels", which read as a lie under a 0 —
-  // if all on-hand units are at/below reorder point, clarify it's below alert level
-  // rather than claiming "nothing on hand" when units actually exist.
   const inMeta = inStock > 0
     ? t('inv.stat_healthy', 'healthy levels')
     : (units > 0 ? t('inv.stat_low_only', 'below alert level') : t('inv.stat_none', 'nothing on hand'));
   set('inv-metric-in-meta', inMeta);
   set('inv-metric-low', low);
   set('inv-metric-out', out);
-  // The OUT card reads as a standing alarm in a catalog-only shop (hundreds of
-  // items intentionally at zero). Red means "you stock things and these are
-  // missing"; while nothing at all is on hand, the count is a catalog fact.
   const outCard = document.getElementById('inv-metric-out-card');
-  if (outCard) outCard.classList.toggle('stat--danger', units > 0 && out > 0);
+  if (outCard) outCard.classList.toggle('stat--danger', out > 0);
   set('inv-metric-out-meta', out === 0
     ? t('inv.stat_out_ok', 'all stocked')
-    : (units > 0 ? t('inv.stat_restock', 'needs restock') : t('inv.stat_out_catalog', 'catalog entries, not stocked')));
+    : t('inv.stat_restock', 'needs restock'));
 }
 
 // -------------------------------------------------------------
@@ -421,6 +441,10 @@ function updateReorderSummary() {
       }
     }
   }
+  if (parts === 0) {
+    sumEl.textContent = `${rows.length} sold ${rows.length === 1 ? 'item' : 'items'} · 0 to order`;
+    return;
+  }
   const cleanUnits = roundQty(units);
   const base = `${parts} ${parts === 1 ? 'part' : 'parts'} · ${cleanUnits} ${cleanUnits === 1 ? 'unit' : 'units'}`;
   sumEl.textContent = hasCost ? `${base} · ${fmtMoney(round2(cost))}` : base;
@@ -495,25 +519,45 @@ export function exportReorderCsv() {
     requireManagerPin('Enter manager PIN to export reorder sheet', () => exportReorderCsv());
     return;
   }
-  const headers = ['Brand', 'Model Name', 'Part Type', 'SKU / Barcode', 'Capital',
-    'Retail Price', 'Wholesale Price', 'Sold', 'In Stock', 'Stock Qty', 'Min Stock Alert', 'Supplier', 'Location'];
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const slug = PROFILE_TEMPLATE_SLUGS[mode] || 'phone-repair';
+  const itemFirst = mode === 'grocery' || mode === 'retail' || mode === 'service' || mode === 'hybrid';
+  const headers = itemFirst
+    ? ['Item Name', 'Brand', 'Category / Type', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Sold', 'Current Stock', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin']
+    : ['Brand', 'Device / Model', 'Part Type', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Sold', 'Current Stock', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'];
   const rows = [];
   for (const r of reorderReport.rows) {
-    rows.push([
-      r.brand ?? '',
-      r.model_name ?? '',
-      r.part_type ?? '',
-      r.sku_barcode ?? '',
-      r.cost_price ?? '',
-      r.price_retail ?? '',
-      r.price_technician ?? '',
-      r.qty_sold ?? 0,
-      r.stock_quantity ?? 0,
-      '',
-      r.min_stock_alert ?? '',
-      r.supplier ?? '',
-      r.location ?? ''
-    ]);
+    rows.push(itemFirst
+      ? [
+          r.item_name || r.model_name || '',
+          r.brand ?? '',
+          r.category || r.part_type || '',
+          r.sku_barcode ?? '',
+          r.cost_price ?? '',
+          r.price_retail ?? '',
+          r.price_technician ?? '',
+          r.qty_sold ?? 0,
+          r.stock_quantity ?? 0,
+          '',
+          r.min_stock_alert ?? '',
+          r.supplier ?? '',
+          r.location ?? ''
+        ]
+      : [
+          r.brand ?? '',
+          r.model_name ?? '',
+          r.part_type ?? '',
+          r.sku_barcode ?? '',
+          r.cost_price ?? '',
+          r.price_retail ?? '',
+          r.price_technician ?? '',
+          r.qty_sold ?? 0,
+          r.stock_quantity ?? 0,
+          '',
+          r.min_stock_alert ?? '',
+          r.supplier ?? '',
+          r.location ?? ''
+        ]);
   }
   const csvEsc = v => {
     let s = String(v ?? '');
@@ -523,18 +567,86 @@ export function exportReorderCsv() {
   const csv = '\uFEFF' + [headers, ...rows].map(row => row.map(csvEsc).join(',')).join('\r\n') + '\r\n';
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-  a.download = `reorder-${reorderReport.days}days-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `${slug}-reorder-${reorderReport.days}days-${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
   showToast(t('inv.reorder_export_success', 'Reorder sheet exported.'), 'success');
 }
 
+export function matchReorderToSold() {
+  if (!reorderReport || !(reorderReport.rows || []).length) {
+    showToast(t('inv.reorder_empty', 'No parts sold in this window.'), 'info');
+    return;
+  }
+  for (const r of reorderReport.rows) {
+    const input = document.querySelector(`input[data-qty-id="${r.id}"]`);
+    if (!input) continue;
+    const target = Math.max(Number(r.suggested_qty) || 0, Number(r.qty_sold) || 0);
+    input.value = String(r.allow_fractional ? roundQty(target) : Math.floor(target));
+    updateReorderMoney(input);
+  }
+  updateReorderSummary();
+}
+
+export async function receiveReorderPrompt() {
+  if (!reorderReport || !(reorderReport.rows || []).length) {
+    showToast(t('inv.reorder_empty', 'No parts sold in this window.'), 'info');
+    return;
+  }
+  if (!hasElevation()) {
+    requireManagerPin('Enter manager PIN to receive reorder stock', () => receiveReorderPrompt());
+    return;
+  }
+  const lines = reorderReport.rows
+    .map(r => ({ r, qty: domQty(r.id, r.suggested_qty) }))
+    .filter(x => x.qty > 0);
+  if (!lines.length) {
+    showToast('Set an order quantity above 0 first (use + or Match sold).', 'info');
+    return;
+  }
+  const totalUnits = roundQty(lines.reduce((s, x) => s + x.qty, 0));
+  const totalCost = round2(lines.reduce((s, x) => s + x.qty * (Number(x.r.cost_price) || 0), 0));
+  const ok = await confirmModal(
+    `Receive ${totalUnits} unit(s) across ${lines.length} item(s) (${fmtMoney(totalCost)} est. capital) into inventory stock?`,
+    { title: 'Receive reorder stock?', yes: 'Receive stock' }
+  );
+  if (!ok) return;
+  const batchId = crypto.randomUUID();
+  try {
+    const res = await fetch('/api/inventory/receive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        items: lines.map((x, idx) => ({
+          id: x.r.id,
+          quantity: x.qty,
+          ...(x.r.cost_price != null ? { unit_cost: Number(x.r.cost_price) } : {}),
+          op_id: `${batchId}-${idx}`
+        }))
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not receive stock');
+    loadInventoryTable();
+    loadPosCatalog();
+    loadReorderPanel();
+    showToast(`Received ${totalUnits} unit(s) across ${lines.length} item(s).`, 'success');
+  } catch (err) {
+    showToast(`Receive failed: ${err.message}`, 'error');
+  }
+}
+
 function renderReorderPanel(report) {
   const content = document.getElementById('inv-reorder-content');
   if (!content) return;
-  reorderReport = report;
-  const groups = reorderGroups(report);
+  const mode = S.shopSettings?.business_type || 'hybrid';
+  const filteredReport = {
+    ...report,
+    rows: (report?.rows || []).filter(r => itemVisibleInProfile(r, mode))
+  };
+  reorderReport = filteredReport;
+  const groups = reorderGroups(filteredReport);
   if (groups.length === 0) {
     content.innerHTML = `<p class="foot-note p-3">${escHtml(t('inv.reorder_empty', 'No parts sold in this window.'))}</p>`;
     updateReorderSummary();
@@ -542,7 +654,7 @@ function renderReorderPanel(report) {
   }
   // Staff sessions get est_cost nulled server-side; hide the whole money column
   // instead of showing dashes that say nothing to a cashier.
-  const showCost = (report.rows || []).some(r => r.est_cost != null);
+  const showCost = (filteredReport.rows || []).some(r => r.est_cost != null);
   content.innerHTML = groups.map(g => `
     <div class="reorder-group" data-reorder-group="${escHtml(g.supplier)}">
       <h3 class="reorder-group__head">
@@ -552,29 +664,47 @@ function renderReorderPanel(report) {
       <table class="ptable reorder-table">
         <thead><tr>
           <th data-i18n="inv.reorder_col_item">${t('inv.reorder_col_item', 'Item')}</th>
-          <th class="is-mid" data-i18n="inv.reorder_col_sku">${t('inv.reorder_col_sku', 'SKU')}</th>
+          <th class="is-mid" data-i18n="inv.reorder_col_sku">${t('inv.reorder_col_sku', 'Barcode')}</th>
           <th class="is-num" data-i18n="inv.reorder_col_sold">${t('inv.reorder_col_sold', 'Sold')}</th>
-          <th class="is-num" data-i18n="inv.reorder_col_on_hand">${t('inv.reorder_col_on_hand', 'On hand')}</th>
+          <th class="is-num" data-i18n="inv.reorder_col_on_hand">${t('inv.reorder_col_on_hand', 'Current Stock')}</th>
+          <th class="is-num" data-i18n="inv.th_min_alert" title="Low-stock alert threshold">${t('inv.th_min_alert', 'Low Stock Alert')}</th>
           <th class="is-num" data-i18n="inv.reorder_col_order">${t('inv.reorder_col_order', 'Order')}</th>
           ${showCost ? `<th class="is-num" data-i18n="inv.reorder_col_cost">${t('inv.reorder_col_cost', 'Est. cost (₱)')}</th>` : ''}
         </tr></thead>
         <tbody>
-          ${g.rows.map(r => `
+          ${g.rows.map(r => {
+            const qty = Number(r.stock_quantity) || 0;
+            const minA = Number(r.min_stock_alert || 0);
+            const stCls = qty <= 0 ? ' stock--out' : (qty <= minA ? ' stock--low' : '');
+            return `
           <tr>
-            <td class="font-medium">${escHtml(reorderItemName(r))}</td>
+            <td class="font-medium">
+              <span class="block pname__t">${escHtml(r.item_name || r.model_name || reorderItemName(r))}</span>
+              <span class="inline-flex flex-wrap items-center gap-1.5 mt-0.5">
+                ${r.brand ? `<span class="foot-note uppercase">${escHtml(r.brand)}</span>` : ''}
+                ${r.part_type ? `<span class="tag tag--subtle text-xs">${escHtml(r.part_type)}</span>` : ''}
+                ${r.location ? `<span class="foot-note">${escHtml(r.location)}</span>` : ''}
+              </span>
+            </td>
             <td class="is-mid font-mono text-xs">${r.sku_barcode ? escHtml(r.sku_barcode) : '<span class="foot-note">—</span>'}</td>
             <td class="is-num font-mono tabular-nums">${r.qty_sold}</td>
-            <td class="is-num font-mono tabular-nums">${r.stock_quantity}</td>
+            <td class="is-num"><span class="stock${stCls}">${r.stock_quantity}</span></td>
+            <td class="is-num font-mono" style="color: var(--txt-2);">${r.min_stock_alert ?? 0}</td>
             <td class="is-num">
-              <input type="number" inputmode="${r.allow_fractional ? 'decimal' : 'numeric'}" min="0" step="${r.allow_fractional ? 'any' : '1'}" value="${r.suggested_qty}" data-qty-id="${r.id}"
-                class="reorder-qty"
-                aria-label="${escHtml(t('inv.reorder_col_order', 'Order quantity'))} - ${escHtml(reorderItemName(r))}">
+              <div class="reorder-stepper">
+                <button type="button" class="reorder-step-btn" data-reorder-step="-1" data-target-id="${r.id}" aria-label="Decrease order quantity for ${escHtml(reorderItemName(r))}">-</button>
+                <input type="number" inputmode="${r.allow_fractional ? 'decimal' : 'numeric'}" min="0" step="${r.allow_fractional ? 'any' : '1'}" value="${r.suggested_qty}" data-qty-id="${r.id}"
+                  class="reorder-qty"
+                  aria-label="${escHtml(t('inv.reorder_col_order', 'Order quantity'))} - ${escHtml(reorderItemName(r))}">
+                <button type="button" class="reorder-step-btn" data-reorder-step="1" data-target-id="${r.id}" aria-label="Increase order quantity for ${escHtml(reorderItemName(r))}">+</button>
+              </div>
             </td>
             ${showCost ? `<td class="is-num font-mono tabular-nums" data-est-id="${r.id}">${estCellHtml(r, r.suggested_qty)}</td>` : ''}
-          </tr>`).join('')}
+          </tr>`;
+          }).join('')}
         </tbody>
         ${showCost ? `<tfoot><tr>
-            <td colspan="5" class="text-right font-bold">${escHtml(t('inv.reorder_group_total', 'Est. cost'))}</td>
+            <td colspan="6" class="text-right font-bold">${escHtml(t('inv.reorder_group_total', 'Est. cost'))}</td>
             <td class="is-num font-mono tabular-nums font-bold" data-reorder-subtotal>${fmtMoney(round2(g.rows.reduce((s, r) => s + (r.est_cost || 0), 0)))}</td>
           </tr></tfoot>` : ''}
       </table>
@@ -587,9 +717,7 @@ export function refreshInventoryBadge(items = S.inventoryItems) {
   if (!badge) return;
   const mode = S.shopSettings?.business_type || 'hybrid';
   const list = Array.isArray(items) ? items : [];
-  const profileItems = (mode !== 'hybrid')
-    ? list.filter(i => itemMatchesProfile(i, mode))
-    : list;
+  const profileItems = list.filter(i => itemVisibleInProfile(i, mode));
   const lowCount = profileItems.filter(isActionableLowStock).length;
   badge.textContent = String(lowCount);
   badge.title = lowCount ? `${lowCount} low or out-of-stock item${lowCount === 1 ? '' : 's'} in current store profile` : '';
@@ -600,11 +728,7 @@ export function isActionableLowStock(item) {
   if (!item || item.archived) return false;
   const q = Number(item.stock_quantity) || 0;
   const min = Number(item.min_stock_alert) || 0;
-  if (q > 0) return q <= min;
-  // Catalog entries imported or seeded at 0 stock with no movements or sales
-  // are price-list rows, not shortages; omit-field unit fixtures keep <= min.
-  if (item.ever_stocked !== undefined) return Boolean(item.ever_stocked);
-  return q <= min;
+  return q <= 0 || q <= min;
 }
 
 export const TEMPLATE_CATEGORIES = {
@@ -620,9 +744,7 @@ export function renderPartTypeOptions() {
   if (!sel) return;
   const current = sel.value;
   const mode = S.shopSettings?.business_type || 'hybrid';
-  const profileItems = (mode !== 'hybrid')
-    ? S.inventoryItems.filter(i => itemMatchesProfile(i, mode))
-    : S.inventoryItems;
+  const profileItems = S.inventoryItems.filter(i => itemVisibleInProfile(i, mode));
 
   const catalogTypes = [...new Set(profileItems.map(i => (i.part_type || i.category || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const templateTypes = (TEMPLATE_CATEGORIES[mode] || TEMPLATE_CATEGORIES.retail || []).filter(c => c !== 'Other');
@@ -642,9 +764,7 @@ export function renderInvBrandFilter() {
   if (!sel) return;
   const current = sel.value;
   const mode = S.shopSettings?.business_type || 'hybrid';
-  const profileItems = (mode !== 'hybrid')
-    ? S.inventoryItems.filter(i => itemMatchesProfile(i, mode))
-    : S.inventoryItems;
+  const profileItems = S.inventoryItems.filter(i => itemVisibleInProfile(i, mode));
 
   const catalogBrands = [...new Set(profileItems.map(i => (i.brand || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const templateBrands = (TEMPLATE_BRANDS[mode] || TEMPLATE_BRANDS.retail || []).filter(b => b !== 'Other');
@@ -669,7 +789,7 @@ export function attachPartCombos({ brandId, modelId, typeId }) {
         const brand = document.getElementById(brandId)?.value || '';
         const ql = q.toLowerCase();
         const mode = S.shopSettings?.business_type || 'hybrid';
-        const profileItems = mode === 'hybrid' ? S.inventoryItems : S.inventoryItems.filter(i => itemMatchesProfile(i, mode));
+        const profileItems = S.inventoryItems.filter(i => itemVisibleInProfile(i, mode));
         return [...new Set(profileItems.filter(i => !brand || i.brand === brand).map(i => i.model_name || i.item_name).filter(Boolean))]
           .sort()
           .filter(m => m.toLowerCase().includes(ql));
@@ -684,7 +804,7 @@ export function attachPartCombos({ brandId, modelId, typeId }) {
       getOptions: q => {
         const ql = q.toLowerCase();
         const mode = S.shopSettings?.business_type || 'hybrid';
-        const profileItems = mode === 'hybrid' ? S.inventoryItems : S.inventoryItems.filter(i => itemMatchesProfile(i, mode));
+        const profileItems = S.inventoryItems.filter(i => itemVisibleInProfile(i, mode));
         const catalogTypes = profileItems.map(i => (i.part_type || i.category || '').trim()).filter(Boolean);
         const templateTypes = TEMPLATE_CATEGORIES[mode] || TEMPLATE_CATEGORIES.retail || [];
         return [...new Set([...catalogTypes, ...templateTypes])]
@@ -756,6 +876,15 @@ export function itemMatchesProfile(item, profile) {
   return true;
 }
 
+// Lane rule: hybrid sees everything; 'shared' spans every lane; a tagged item
+// belongs to exactly one lane; untagged legacy rows fall back to keyword guess.
+export function itemVisibleInProfile(item, profile) {
+  if (!profile || profile === 'hybrid') return true;
+  if (item.profile === 'shared') return true;
+  if (item.profile) return item.profile === profile;
+  return itemMatchesProfile(item, profile);
+}
+
 // The catalog renders one page at a time: a 2000-row innerHTML rebuild per
 // debounced keystroke stalled the field PC (11-15 audit #20). Metrics and
 // bulk selection still run over the full cached array.
@@ -784,9 +913,7 @@ export function renderInventoryTable(items) {
   if (!tbody) return;
 
   const mode = S.shopSettings?.business_type || 'hybrid';
-  const visibleItems = (mode !== 'hybrid')
-    ? items.filter(item => itemMatchesProfile(item, mode))
-    : items;
+  const visibleItems = items.filter(item => itemVisibleInProfile(item, mode));
 
   if (visibleItems.length === 0) {
     const hint = escHtml(t('inv.empty_catalog_hint', 'Adjust the filter, or add a new item to the catalog.'));
@@ -827,7 +954,7 @@ export function renderInventoryTable(items) {
             ${isChecked ? 'checked' : ''}>
         </td>
         <td>
-          <span class="block pname__t">${escHtml(item.model_name)}</span>
+          <span class="block pname__t">${escHtml(item.item_name || item.model_name)}</span>
           <span class="block foot-note uppercase">${escHtml(item.brand)}</span>
         </td>
         <td>
@@ -839,10 +966,10 @@ export function renderInventoryTable(items) {
         </td>
         <td class="is-num money font-mono">${fmtMoney(Number(item.price_retail))}</td>
         <td class="is-num font-mono font-bold">${fmtMoney(Number(item.price_technician))}</td>
-        <td class="is-mid"><span class="stock${isOut ? ' stock--out' : (isLow ? ' stock--low' : '')}">${item.stock_quantity}</span></td>
+        <td class="is-mid"><span class="stock${isOut ? ' stock--out' : (isLow ? ' stock--low' : '')}">${item.stock_quantity}${item.uom && item.uom !== 'pcs' ? ' ' + escHtml(item.uom) : ''}</span></td>
         <td class="is-mid font-mono" style="color: var(--txt-2);">${item.min_stock_alert ?? 0}</td>
         <td class="is-mid">
-          <span class="inline-flex items-center gap-1">
+          <span class="inv-actions-row">
             ${canEditParts ? `<button data-action="edit-part" data-part-id="${item.id}" class="btn-mini btn-inv-action" title="Edit part / set stock" aria-label="Edit part / set stock">
               <i class="ph ph-pencil-simple w-3.5 h-3.5"></i>
             </button>` : ''}
@@ -855,6 +982,7 @@ export function renderInventoryTable(items) {
             ${canEditParts ? (item.archived
               ? `<button data-action="unarchive-part" data-part-id="${item.id}" class="btn-mini btn-inv-action" title="Restore this part to the active catalog" aria-label="Unarchive part"><i class="ph ph-arrow-u-up-left w-3.5 h-3.5"></i> Unarch</button>`
               : `<button data-action="archive-part" data-part-id="${item.id}" class="btn-mini btn-mini--danger btn-inv-action" title="Archive: hide from catalog and POS, keep stock and history" aria-label="Archive part"><i class="ph ph-archive w-3.5 h-3.5"></i> Arch</button>`) : ''}
+            ${canEditParts ? `<button data-action="delete-part" data-part-id="${item.id}" class="btn-mini btn-mini--danger btn-inv-action" title="Delete permanently (parts in sold receipts must be archived instead)" aria-label="Delete part"><i class="ph ph-trash w-3.5 h-3.5"></i> Del</button>` : ''}
           </span>
         </td>
       </tr>
@@ -905,7 +1033,7 @@ function syncItemAttrVisibility(prefix, { showUom, showSerial, resetHidden = fal
 export function setAddItemTemplate(tpl) {
   currentAddTemplate = tpl || 'retail';
 
-  ['retail', 'pc', 'phone', 'service'].forEach(k => {
+  ['retail', 'grocery', 'pc', 'phone', 'service'].forEach(k => {
     const btn = document.getElementById(`tpl-btn-${k}`);
     if (btn) btn.classList.toggle('is-active', k === currentAddTemplate);
   });
@@ -1057,7 +1185,7 @@ export function openAddPartModal() {
   }
 
   let initialTemplate = 'retail';
-  if (mode === 'phone' || mode === 'pc' || mode === 'grocery' || mode === 'retail') initialTemplate = mode;
+  if (mode === 'phone' || mode === 'pc' || mode === 'grocery' || mode === 'retail' || mode === 'service') initialTemplate = mode;
   else if (mode === 'hybrid') initialTemplate = currentAddTemplate || 'retail';
   setAddItemTemplate(initialTemplate);
 
@@ -1138,7 +1266,8 @@ export async function submitAddPart(e) {
         allow_fractional,
         track_serial,
         brand, model_name, part_type, sku_barcode, supplier, location,
-        cost_price, price_retail, price_technician, stock_quantity, min_stock_alert
+        cost_price, price_retail, price_technician, stock_quantity, min_stock_alert,
+        profile: currentAddTemplate
       })
     });
 
@@ -1278,6 +1407,65 @@ export async function archiveInventoryItemPrompt(id, isArchived) {
   }
 }
 
+// ---- Hard delete (sold parts are refused server-side; archive keeps history) ----
+export async function deleteInventoryItemPrompt(id) {
+  if (!hasElevation()) {
+    requireManagerPin('Enter manager PIN to delete parts', () => deleteInventoryItemPrompt(id));
+    return;
+  }
+  const item = S.inventoryRowsCache.find(i => i.id === id);
+  const label = item ? (item.item_name || `${item.brand} ${item.model_name} - ${item.part_type}`) : 'This item';
+  const ok = await confirmModal(
+    `${label} will be permanently deleted, including its stock ledger. Items that appear in sold receipts cannot be deleted; archive those instead.`,
+    { title: 'Delete item permanently?', yes: 'Delete', danger: true });
+  if (!ok) return;
+  try {
+    const res = await fetch(`/api/inventory/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Delete failed');
+    }
+    selectedPartIds.delete(id);
+    loadInventoryTable();
+    loadPosCatalog();
+    showToast('Item deleted', 'success');
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+export async function bulkDeleteSelectedPrompt() {
+  if (!hasElevation()) {
+    requireManagerPin('Enter manager PIN to delete selected items', () => bulkDeleteSelectedPrompt());
+    return;
+  }
+  const ids = getVisibleSelectedIds();
+  if (ids.length === 0) {
+    showToast(t('bulk.none_selected', 'Select one or more items first'), 'error');
+    return;
+  }
+  const ok = await confirmModal(
+    `${ids.length} item(s) will be permanently deleted, including their stock ledgers. Items that appear in sold receipts are skipped; archive those instead.`,
+    { title: 'Delete selected items?', yes: 'Delete', danger: true });
+  if (!ok) return;
+  try {
+    const res = await fetch('/api/inventory/bulk-edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, action: 'delete', op_id: crypto.randomUUID() })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || t('bulk.failed', 'Bulk edit failed'));
+    clearInventorySelection();
+    loadInventoryTable();
+    loadPosCatalog();
+    const skippedNote = data.skipped ? ` ${data.skipped} skipped (in sold receipts; archive instead).` : '';
+    showToast(`Deleted ${data.updated} item(s).${skippedNote}`, data.skipped ? 'warning' : 'success');
+  } catch (err) {
+    showToast(`${t('bulk.failed', 'Bulk edit failed')}: ${err.message}`, 'error');
+  }
+}
+
 // ---- CSV import (client parse; the server applies every good row and
 // reports each refused one by number and reason) ----
 // Quoted-CSV state machine: handles quotes, embedded commas/quotes/newlines.
@@ -1325,17 +1513,17 @@ function importRowKey(obj) {
   const sku = String(obj.sku_barcode || '').trim().toLowerCase();
   if (sku) return `sku:${sku}`;
   const b = String(obj.brand || '').trim().toLowerCase();
-  const m = String(obj.model_name || '').trim().toLowerCase();
-  const t = String(obj.part_type || '').trim().toLowerCase();
+  const m = String(obj.model_name || obj.item_name || '').trim().toLowerCase();
+  const t = String(obj.part_type || obj.category || '').trim().toLowerCase();
   return (b || m || t) ? `triple:${b}|${m}|${t}` : null;
 }
 function importKeysFromRaw(rawRows, auto) {
   const keys = [];
   for (const r of rawRows) {
     const obj = {};
-    for (const col of ['sku_barcode', 'brand', 'model_name', 'part_type']) {
+    for (const col of ['sku_barcode', 'brand', 'model_name', 'part_type', 'item_name', 'category']) {
       const idx = auto[col];
-      if (idx !== undefined && idx !== -1) obj[col] = String(r[idx] ?? '').trim();
+      if (idx !== undefined && idx !== -1 && idx != null) obj[col] = String(r[idx] ?? '').trim();
     }
     const k = importRowKey(obj);
     if (k) keys.push(k);
@@ -1480,20 +1668,26 @@ export function renderImportPreviewTable() {
     return { ...obj, ret, who, retAuto, whoAuto };
   });
 
+  const laneLabels = {
+    phone: 'Phone Repair', pc: 'PC & Electronics', grocery: 'Grocery & Market',
+    retail: 'General Retail', service: 'Service / Labor', hybrid: 'Hybrid (All Profiles)'
+  };
+  const activeMode = (typeof S !== 'undefined' && S.shopSettings?.business_type) || '';
+  const lanePrefix = activeMode && laneLabels[activeMode] ? `[${laneLabels[activeMode]}] ` : '';
   document.getElementById('import-preview-note').textContent =
-    `${dataRows.length} part(s) ready to import. Quantity changes current stock: positive adds, negative removes, 0 leaves it.`;
+    `${lanePrefix}${dataRows.length} item(s) ready to import. Quantity changes current stock: positive adds, negative removes, 0 leaves it.`;
 
   document.getElementById('import-preview-table').innerHTML = `
     <thead>
       <tr class="text-left border-b border-[var(--line-soft)]">
         <th class="px-2 py-1">${escHtml(t('part.brand', 'Brand'))}</th>
-        <th class="px-2 py-1">${escHtml(t('part.model', 'Model'))}</th>
-        <th class="px-2 py-1">${escHtml(t('part.type', 'Type'))}</th>
+        <th class="px-2 py-1">${escHtml(t('part.model', 'Device / Model'))}</th>
+        <th class="px-2 py-1">${escHtml(t('part.type', 'Part Type / Category'))}</th>
         <th class="px-2 py-1">${escHtml(t('part.cost', 'Capital'))}</th>
-        <th class="px-2 py-1">${escHtml(t('part.retail', 'Retail'))}</th>
-        <th class="px-2 py-1">${escHtml(t('part.wholesale', 'Wholesale'))}</th>
-        <th class="px-2 py-1">${escHtml(t('part.stock', 'Stock'))}</th>
-        <th class="px-2 py-1">${escHtml(t('part.min_alert', 'Min Stock Alert'))}</th>
+        <th class="px-2 py-1">${escHtml(t('part.retail', 'Retail Price'))}</th>
+        <th class="px-2 py-1">${escHtml(t('part.wholesale', 'Wholesale Price'))}</th>
+        <th class="px-2 py-1">${escHtml(t('part.stock', 'Stock Count'))}</th>
+        <th class="px-2 py-1">${escHtml(t('part.min_alert', 'Low Stock Alert'))}</th>
       </tr>
     </thead>
     <tbody>
@@ -1502,8 +1696,8 @@ export function renderImportPreviewTable() {
         return `
         <tr class="border-b border-[var(--line-soft)]">
           <td class="px-2 py-1">${escHtml(p.brand || '-')}</td>
-          <td class="px-2 py-1">${escHtml(p.model_name || '-')}</td>
-          <td class="px-2 py-1">${escHtml(p.part_type || '-')}</td>
+          <td class="px-2 py-1">${escHtml(p.model_name || p.item_name || '-')}</td>
+          <td class="px-2 py-1">${escHtml(p.part_type || p.category || '-')}</td>
           <td class="px-2 py-1 font-mono">${p.cost_price ? '₱' + escHtml(p.cost_price) : '-'}</td>
           <td class="px-2 py-1 font-mono">${p.ret ? '₱' + escHtml(p.ret) + (p.retAuto ? ' <span class="tag tag--quiet text-xs">auto</span>' : '') : '-'}</td>
           <td class="px-2 py-1 font-mono">${p.who ? '₱' + escHtml(p.who) + (p.whoAuto ? ' <span class="tag tag--quiet text-xs">auto</span>' : '') : '-'}</td>
@@ -1527,7 +1721,10 @@ export function openImportPreview(rows) {
   const auto = matchHeaders(header);
   importState.auto = auto;
 
-  const missing = IMPORT_REQUIRED.filter(col => auto[col] === -1);
+  const missing = IMPORT_REQUIRED.filter(col => {
+    if (col === 'model_name' && auto.item_name != null && auto.item_name !== -1) return false;
+    return auto[col] === -1;
+  });
   const warnBox = document.getElementById('import-missing-warning');
   const swapBox = document.getElementById('import-swap-warning');
   const tableWrap = document.getElementById('import-table-wrap');
@@ -1538,11 +1735,14 @@ export function openImportPreview(rows) {
   const whoPct = Number(S.shopSettings?.default_wholesale_markup_pct ?? 20);
 
   if (missing.length > 0) {
-    const missingLabels = missing.map(m => m.replace(/_/g, ' ')).join(', ');
+    const activeMode = (typeof S !== 'undefined' && S.shopSettings?.business_type) || 'phone';
+    const tplFilename = `${PROFILE_TEMPLATE_SLUGS[activeMode] || 'phone-repair'}-import-template.csv`;
+    const missingNames = { model_name: 'Item Name or Device / Model', stock_quantity: 'Stock Count' };
+    const missingLabels = missing.map(m => missingNames[m] || m.replace(/_/g, ' ')).join(', ');
     warnBox.innerHTML = `
       <p class="font-semibold">Missing required columns: ${escHtml(missingLabels)}</p>
-      <p class="mt-1">Make sure your headers match the template format.</p>
-      <button type="button" id="import-download-sample-btn" class="btn-mini mt-2">Download template</button>
+      <p class="mt-1">Make sure your headers match the ${escHtml(tplFilename)} format.</p>
+      <button type="button" id="import-download-sample-btn" class="btn-mini mt-2">Download ${escHtml(tplFilename)}</button>
     `;
     warnBox.classList.remove('hidden');
     warnBox.querySelector('#import-download-sample-btn')?.addEventListener('click', downloadImportTemplate);
@@ -1608,6 +1808,7 @@ async function applyImport() {
         if (v === '') continue;
         if (IMPORT_PRICE_COLS.includes(col)) v = parseMoney(v);
         else if (col === 'sku_barcode') v = parseSku(v);
+        else if (col === 'profile') v = v.toLowerCase();
         obj[col] = v;
       }
       return obj;
@@ -1692,16 +1893,41 @@ export function triggerCsvImport() {
   document.getElementById('inv-import-file')?.click();
 }
 
-// Friendly headers with no dummy data rows. The alias matcher maps these
-// names the same as snake_case, so the template reads like a spreadsheet.
-const IMPORT_TEMPLATE_HEADERS = ['Brand', 'Model Name', 'Part Type', 'SKU / Barcode', 'Capital',
-  'Retail Price', 'Wholesale Price', 'Stock Qty', 'Min Stock Alert', 'Supplier', 'Location'];
+// Friendly plain-English headers with no dummy data rows.
+export const PROFILE_TEMPLATE_SLUGS = {
+  phone: 'phone-repair',
+  pc: 'pc-electronics',
+  grocery: 'grocery',
+  retail: 'retail',
+  service: 'service-labor',
+  hybrid: 'hybrid'
+};
 
-export function downloadImportTemplate() {
-  const csv = [IMPORT_TEMPLATE_HEADERS].map(row => row.join(',')).join('\r\n') + '\r\n';
+const IMPORT_TEMPLATE_HEADERS = ['Brand', 'Device / Model', 'Part Type', 'Barcode', 'Capital',
+  'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'];
+
+const PROFILE_IMPORT_TEMPLATES = {
+  phone: IMPORT_TEMPLATE_HEADERS,
+  pc: ['Brand', 'Device / Model', 'Component Type', 'Barcode', 'Capital',
+    'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Requires Serial No.', 'Supplier', 'Shelf / Bin'],
+  grocery: ['Item Name', 'Brand', 'Category', 'Unit', 'Sell by Weight or Decimal', 'Barcode', 'Capital',
+    'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'],
+  retail: ['Item Name', 'Brand', 'Category', 'Unit', 'Sell by Weight or Decimal', 'Barcode', 'Capital',
+    'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'],
+  service: ['Service Name', 'Provider / Brand', 'Category', 'Service Code', 'Capital',
+    'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Bench / Area'],
+  hybrid: ['Shop Type', 'Item Name', 'Brand', 'Device / Model', 'Category / Type', 'Unit', 'Sell by Weight or Decimal',
+    'Requires Serial No.', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin']
+};
+
+export function downloadImportTemplate(profileOverride) {
+  const activeMode = profileOverride || (typeof S !== 'undefined' ? (S.shopSettings?.business_type || 'phone') : 'phone');
+  const slug = PROFILE_TEMPLATE_SLUGS[activeMode] || 'phone-repair';
+  const headers = PROFILE_IMPORT_TEMPLATES[activeMode] || IMPORT_TEMPLATE_HEADERS;
+  const csv = [headers].map(row => row.join(',')).join('\r\n') + '\r\n';
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-  a.download = 'inventory-import-template.csv';
+  a.download = `${slug}-import-template.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -1722,10 +1948,11 @@ export function openEditPartModal(id) {
     || /^(service|labor)$/i.test(String(item.part_type || '').trim())
     || /^(service|labor)$/i.test(String(item.category || '').trim());
   let tpl = 'retail';
-  if (itemMatchesProfile(item, 'phone')) tpl = 'phone';
+  if (item.profile && TEMPLATE_BRANDS[item.profile]) tpl = item.profile;
+  else if (itemMatchesProfile(item, 'phone')) tpl = 'phone';
   else if (itemMatchesProfile(item, 'pc')) tpl = 'pc';
   else if (isServiceItem) tpl = 'service';
-  else tpl = (mode === 'phone' || mode === 'pc' || mode === 'service') ? mode : 'retail';
+  else if (TEMPLATE_BRANDS[mode]) tpl = mode;
 
   const baseBrands = TEMPLATE_BRANDS[tpl] || TEMPLATE_BRANDS.retail;
   const brandSel = document.getElementById('edit-part-brand');
@@ -1736,6 +1963,7 @@ export function openEditPartModal(id) {
   const titleSpan = document.querySelector('#edit-part-title [data-i18n="part.edit_title"]');
   if (titleSpan) {
     const editTitles = {
+      grocery: 'Edit Grocery Item',
       retail: 'Edit Product',
       pc: 'Edit PC Component',
       phone: 'Edit Phone Part',
@@ -1767,6 +1995,8 @@ export function openEditPartModal(id) {
   if (document.getElementById('edit-part-track-serial')) {
     document.getElementById('edit-part-track-serial').checked = Number(item.track_serial) === 1;
   }
+  const profileSel = document.getElementById('edit-part-profile');
+  if (profileSel) profileSel.value = item.profile || '';
 
   const fracEnabled = S.shopSettings?.enable_fractional_qty === '1';
   const serialEnabled = S.shopSettings?.enable_serial_tracking === '1';
@@ -1857,6 +2087,7 @@ export async function submitEditPart(e) {
         price_technician: Number(document.getElementById('edit-part-tech').value),
         stock_quantity: Number(document.getElementById('edit-part-stock').value),
         min_stock_alert: Number(document.getElementById('edit-part-min-alert').value),
+        profile: document.getElementById('edit-part-profile')?.value || '',
         expected_stock: editPartExpectedStock,
         op_id: editPartOpId
       })
@@ -1907,6 +2138,7 @@ function ensureBulkEditModal() {
     document.getElementById('bulk-panel-recalculate').classList.toggle('hidden', act !== 'recalculate_markup');
     document.getElementById('bulk-panel-fields').classList.toggle('hidden', act !== 'update_fields');
     document.getElementById('bulk-panel-archive').classList.toggle('hidden', act !== 'archive' && act !== 'unarchive');
+    document.getElementById('bulk-panel-delete').classList.toggle('hidden', act !== 'delete');
     const infoEl = document.getElementById('bulk-archive-info');
     if (infoEl) {
       if (act === 'archive') {
@@ -1976,6 +2208,7 @@ async function submitBulkEdit(e) {
     const sup = document.getElementById('bulk-supplier').value.trim();
     const loc = document.getElementById('bulk-location').value.trim();
     const minAlert = document.getElementById('bulk-min-alert').value.trim();
+    const profile = document.getElementById('bulk-profile')?.value;
     if (sup) params.supplier = sup;
     if (loc) params.location = loc;
     if (minAlert !== '') {
@@ -1986,10 +2219,23 @@ async function submitBulkEdit(e) {
       }
       params.min_stock_alert = parsedAlert;
     }
+    if (profile != null && profile !== 'keep') params.profile = profile;
     if (Object.keys(params).length === 0) {
       showToast('Please fill in at least one field to update', 'error');
       return;
     }
+  } else if (action === 'delete') {
+    const visibleCount = getVisibleSelectedIds().length;
+    const ok = await confirmModal(
+      `${visibleCount} item(s) will be permanently deleted, including their stock ledgers. Items that appear in sold receipts are skipped; archive those instead.`,
+      { title: 'Delete selected items?', yes: 'Delete', danger: true });
+    if (!ok) return;
+  }
+
+  const ids = getVisibleSelectedIds();
+  if (ids.length === 0) {
+    showToast(t('bulk.none_selected', 'Select one or more parts first'), 'error');
+    return;
   }
 
   const submitBtn = document.getElementById('bulk-edit-submit');
@@ -1999,7 +2245,7 @@ async function submitBulkEdit(e) {
     const res = await fetch('/api/inventory/bulk-edit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: [...selectedPartIds], action, params, op_id: bulkEditOpId })
+      body: JSON.stringify({ ids, action, params, op_id: bulkEditOpId })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || t('bulk.failed', 'Bulk edit failed'));
@@ -2009,6 +2255,9 @@ async function submitBulkEdit(e) {
     loadPosCatalog();
     if (data.replayed) {
       showToast(t('bulk.replayed', 'Bulk edit was already applied (duplicate submit)'), 'success');
+    } else if (action === 'delete') {
+      const skippedNote = data.skipped ? ` ${data.skipped} skipped (in sold receipts; archive instead).` : '';
+      showToast(`Deleted ${data.updated} item(s).${skippedNote}`, data.skipped ? 'warning' : 'success');
     } else if (data.updated === 0 && action === 'recalculate_markup') {
       showToast(t('bulk.no_updated', 'No parts were updated (selected parts may have zero cost price)'), 'warning');
     } else {
@@ -2027,7 +2276,8 @@ export function openBulkEditModal() {
     requireManagerPin('Enter manager PIN to bulk edit inventory', () => openBulkEditModal());
     return;
   }
-  if (selectedPartIds.size === 0) {
+  const ids = getVisibleSelectedIds();
+  if (ids.length === 0) {
     showToast(t('bulk.none_selected', 'Select one or more parts first'), 'error');
     return;
   }
@@ -2036,7 +2286,7 @@ export function openBulkEditModal() {
   // lost-response retry resolves to the same op instead of applying twice.
   bulkEditOpId = crypto.randomUUID();
   const badge = document.getElementById('bulk-edit-badge');
-  if (badge) badge.textContent = `${selectedPartIds.size} ${t('common.selected', 'selected')}`;
+  if (badge) badge.textContent = `${ids.length} ${t('common.selected', 'selected')}`;
 
   const retInput = document.getElementById('bulk-retail-markup');
   const whoInput = document.getElementById('bulk-wholesale-markup');
@@ -2046,6 +2296,8 @@ export function openBulkEditModal() {
   document.getElementById('bulk-action-type').value = 'adjust_price';
   document.getElementById('bulk-action-type').dispatchEvent(new Event('change'));
   document.getElementById('bulk-price-val').value = '';
+  const bulkProfile = document.getElementById('bulk-profile');
+  if (bulkProfile) bulkProfile.value = 'keep';
 
   openModal('modal-bulk-edit');
 }

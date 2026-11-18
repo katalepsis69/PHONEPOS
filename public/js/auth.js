@@ -1,8 +1,8 @@
 import { S } from './state.js';
 import { closeModal, confirmModal, describeLoadFailure, escHtml, fmtMoney, formatDateTime, inputModal, openModal, showGate, showToast, showSkeleton, syncAppInert } from './ui.js';
-import { loadInventoryTable, refreshInventoryBadge, renderInvBrandFilter, renderPartTypeOptions, renderInventoryTable, setAddItemTemplate } from './views/inventory.js';
+import { clearInventorySelection, loadInventoryTable, refreshInventoryBadge, renderInvBrandFilter, renderInventoryMetrics, renderInventoryTable, renderPartTypeOptions, setAddItemTemplate } from './views/inventory.js';
 import { syncAppearanceModal } from './theme.js';
-import { loadPosCatalog, renderBrandChips, renderCategoryOptions, renderPartsTable } from './views/pos.js';
+import { loadPosCatalog, populateDeviceDatalist, renderBrandChips, renderCategoryOptions, renderPartsTable } from './views/pos.js';
 import { applyLanguage, setBusinessProfile } from './i18n.js';
 
 // Session / role state. Token lives in memory + sessionStorage (survives F5,
@@ -572,6 +572,7 @@ export function updateShopBrandUi() {
     pc: 'PC & Electronics POS',
     grocery: 'Grocery & Market POS',
     retail: 'General Retail POS',
+    service: 'Service & Labor POS',
     hybrid: 'Sales & Service POS'
   };
   const railSub = document.querySelector('.rail-sub');
@@ -620,7 +621,8 @@ export function updateShopBrandUi() {
     'settings-shift-variance': S.shopSettings.shift_variance_threshold,
     'settings-default-retail-markup': S.shopSettings.default_retail_markup_pct ?? '50',
     'settings-default-wholesale-markup': S.shopSettings.default_wholesale_markup_pct ?? '20',
-    'settings-business-type': S.shopSettings.business_type || 'hybrid'
+    'settings-business-type': S.shopSettings.business_type || 'hybrid',
+    'topbar-profile-switcher': S.shopSettings.business_type || 'hybrid'
   };
   for (const [id, val] of Object.entries(inputs)) {
     const el = document.getElementById(id);
@@ -659,6 +661,7 @@ function updateStorePresetSummary(preset) {
     pc: ['PC & electronics catalog', 'Repair bench & claim stub', 'Serial tracking'],
     grocery: ['Grocery & dry goods', 'Fractional weights / qty', 'Direct counter checkout'],
     retail: ['General retail catalog', 'Direct counter checkout', 'Barcode labels'],
+    service: ['Service & labor catalog', 'Repair bench & claim stub', 'Fee & labor items'],
     hybrid: ['All categories', 'Repair bench', 'Fractional qty', 'Serial tracking']
   };
   const chips = map[preset] || map.hybrid;
@@ -679,7 +682,7 @@ export function applyBusinessPreset(preset) {
     benchCb.checked = true;
     fracCb.checked = false;
     serCb.checked = true;
-  } else if (preset === 'phone') {
+  } else if (preset === 'phone' || preset === 'service') {
     benchCb.checked = true;
     fracCb.checked = false;
     serCb.checked = false;
@@ -698,6 +701,11 @@ export function applyBusinessPreset(preset) {
 
 export function applyBusinessModeUi() {
   const mode = S.shopSettings?.business_type || 'hybrid';
+  const topSwitcher = document.getElementById('topbar-profile-switcher');
+  if (topSwitcher) topSwitcher.value = mode;
+  const settingsType = document.getElementById('settings-business-type');
+  if (settingsType) settingsType.value = mode;
+  if (typeof updateStorePresetSummary === 'function') updateStorePresetSummary(mode);
   setBusinessProfile(mode);
   applyLanguage();
 
@@ -725,16 +733,95 @@ export function applyBusinessModeUi() {
     if (noteBtn) noteBtn.classList.remove('hidden');
   }
 
+  if (typeof clearInventorySelection === 'function') clearInventorySelection();
   if (typeof renderInvBrandFilter === 'function') renderInvBrandFilter();
   if (typeof renderPartTypeOptions === 'function') renderPartTypeOptions();
   if (typeof renderBrandChips === 'function') renderBrandChips();
   if (typeof renderCategoryOptions === 'function') renderCategoryOptions();
+  if (typeof populateDeviceDatalist === 'function') populateDeviceDatalist();
   if (typeof renderPartsTable === 'function') renderPartsTable();
   if (typeof renderInventoryTable === 'function' && S.inventoryItems) {
     renderInventoryTable(S.inventoryRowsCache || S.inventoryItems);
   }
+  if (typeof renderInventoryMetrics === 'function' && S.inventoryItems) {
+    renderInventoryMetrics(S.inventoryRowsCache || S.inventoryItems);
+  }
   if (typeof refreshInventoryBadge === 'function' && S.inventoryItems) {
     refreshInventoryBadge(S.inventoryItems);
+  }
+}
+
+function refreshProfileViews() {
+  if (typeof loadInventoryTable === 'function') loadInventoryTable();
+  if (typeof loadPosCatalog === 'function') loadPosCatalog();
+  if (S.currentTab === 'dashboard') {
+    import('./views/backoffice.js').then(m => m.loadDashboardData?.()).catch(() => {});
+  }
+}
+
+export async function switchActiveBusinessProfile(nextPreset) {
+  const PRESET_FLAGS = {
+    grocery: { enable_service_bench: '0', enable_fractional_qty: '1', enable_serial_tracking: '0' },
+    pc:      { enable_service_bench: '1', enable_fractional_qty: '0', enable_serial_tracking: '1' },
+    phone:   { enable_service_bench: '1', enable_fractional_qty: '0', enable_serial_tracking: '0' },
+    service: { enable_service_bench: '1', enable_fractional_qty: '0', enable_serial_tracking: '0' },
+    retail:  { enable_service_bench: '0', enable_fractional_qty: '0', enable_serial_tracking: '0' },
+    hybrid:  { enable_service_bench: '1', enable_fractional_qty: '1', enable_serial_tracking: '1' }
+  };
+  const preset = Object.prototype.hasOwnProperty.call(PRESET_FLAGS, nextPreset) ? nextPreset : 'hybrid';
+  const prevMode = S.shopSettings?.business_type || 'hybrid';
+  const topSwitcher = document.getElementById('topbar-profile-switcher');
+  if (preset === prevMode) return;
+
+  if (!hasElevation()) {
+    if (topSwitcher) topSwitcher.value = prevMode;
+    requireManagerPin('Enter manager PIN to switch active store profile', () => {
+      switchActiveBusinessProfile(preset);
+    });
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        business_type: preset,
+        ...PRESET_FLAGS[preset]
+      })
+    });
+    const savedData = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (topSwitcher) topSwitcher.value = prevMode;
+      if (res.status === 403 && (savedData.code === 'elevation_required' || /manager/i.test(savedData.error || ''))) {
+        requireManagerPin('Enter manager PIN to switch active store profile', () => {
+          switchActiveBusinessProfile(preset);
+        });
+        return;
+      }
+      if (res.status === 403 && savedData.code === 'factory_pin_required') {
+        enforcePinSetup();
+      }
+      throw new Error(savedData.error || 'Failed to switch store profile');
+    }
+
+    S.shopSettings = savedData;
+    updateGcashUiDisplays();
+    if (typeof applyBusinessPreset === 'function') applyBusinessPreset(preset);
+    applyBusinessModeUi();
+    refreshProfileViews();
+    const labels = {
+      hybrid: 'Hybrid (All Active)',
+      pc: 'PC & Electronics',
+      phone: 'Phone Repair',
+      grocery: 'Grocery & Market',
+      retail: 'General Retail',
+      service: 'Service / Labor'
+    };
+    showToast(`Active profile: ${labels[preset] || preset}`, 'success');
+  } catch (err) {
+    if (topSwitcher) topSwitcher.value = prevMode;
+    showToast(`Could not switch profile: ${err.message}`, 'error');
   }
 }
 
@@ -1266,11 +1353,15 @@ export async function saveShopSettings(e) {
     }
 
     const savedData = await res.json();
+    const prevMode = S.shopSettings?.business_type || 'hybrid';
     S.shopSettings = savedData;
     S.recoveryConfigured = Boolean(savedData.recovery_password_configured);
     syncRecoveryStatusUi();
     updateGcashUiDisplays();
     applyBusinessModeUi();
+    if ((savedData.business_type || 'hybrid') !== prevMode) {
+      refreshProfileViews();
+    }
     enforcePinSetup();
     closeModal('modal-settings');
     showToast('Settings saved', 'success');

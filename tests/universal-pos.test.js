@@ -479,6 +479,7 @@ dbTest('POS search matches item_name/category and cart quantity helpers handle f
     requirePinOrRun: async (_m, fn) => fn(),
     hasElevation: () => true,
     itemMatchesProfile: () => true,
+    itemVisibleInProfile: () => true,
     setCounterText: () => {},
     calculateChange: () => {},
     calculateCreditBalance: () => {},

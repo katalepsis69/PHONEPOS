@@ -410,6 +410,7 @@ test('renderBrandChips skips out-of-stock brands when posInStockOnly is on and C
     },
     TEMPLATE_BRANDS: { phone: ['Apple', 'Samsung'] },
     itemMatchesProfile: () => true,
+    itemVisibleInProfile: () => true,
     escHtml: s => String(s),
     document: { getElementById: id => (id === 'pos-brand-chips' ? box : null) }
   });
@@ -420,7 +421,7 @@ test('renderBrandChips skips out-of-stock brands when posInStockOnly is on and C
   assert.ok(!box.innerHTML.includes('ZeroBrand'), '0-stock brand must stay hidden while In stock only is checked');
 });
 
-test('openImportPreview displays Min Stock Alert and swaps Brand/Model when clicked', async () => {
+test('openImportPreview displays Low Stock Alert and swaps Brand/Model when clicked', async () => {
   const inv = source('public/js/views/inventory.js');
   const { matchHeaders } = await import('../public/js/importer.js');
 
@@ -461,7 +462,7 @@ test('openImportPreview displays Min Stock Alert and swaps Brand/Model when clic
   const state = vm.runInContext(`${code}\nimportState = { rows, header: rows[0], auto: matchHeaders(rows[0]), op_id: 'op1' }; renderImportPreviewTable(); importState;`, ctx);
 
   assert.equal(els['import-swap-warning'].classList.has('hidden'), false, 'swap warning must show when Brands >> Models');
-  assert.ok(els['import-preview-table'].innerHTML.includes('Min Stock Alert'), 'preview must show Min Stock Alert header');
+  assert.ok(els['import-preview-table'].innerHTML.includes('Low Stock Alert'), 'preview must show Low Stock Alert header');
   assert.ok(els['import-preview-table'].innerHTML.includes('3 <span class="tag tag--quiet text-xs">default</span>'), 'blank alert previews default 3');
   assert.equal(state.auto.brand, 0);
 
@@ -471,10 +472,10 @@ test('openImportPreview displays Min Stock Alert and swaps Brand/Model when clic
   assert.equal(els['import-swap-warning'].classList.has('hidden'), true, 'swap warning clears after swap');
 });
 
-test('inventory table renders an explicit Min Stock Alert column', () => {
+test('inventory table renders an explicit Low Stock Alert column', () => {
   const html = source('public/index.html');
   const inv = source('public/js/views/inventory.js');
-  assert.match(html, /data-i18n="inv\.th_min_alert"[^>]*>Min Stock Alert<\/th>/);
+  assert.match(html, /data-i18n="inv\.th_min_alert"[^>]*>Low Stock Alert<\/th>/);
   // The Status column was removed (the badge lives in the stock cell), so the
   // table has 9 columns and the loading skeleton must render 9 cells too.
   assert.match(inv, /showSkeleton\('inventory-tbody', 9\)/);

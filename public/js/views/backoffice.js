@@ -5,7 +5,7 @@ import { hasElevation, requireManagerPin, syncCloudUi } from '../auth.js';
 import { autoPrintEnabled, formatPhPhone, loadCustomerSuggestions, loadPosCatalog } from '../views/pos.js';
 import { autoPrintSlip, printCustomerSoa, printPeriodSummary, printSlip, printZReadSlip, renderReceipt, renderSettlementReceipt, shopIdentityIsPlaceholder } from '../receipts.js';
 import { renderTrendChart } from '../chart.js';
-import { isActionableLowStock, itemMatchesProfile, loadInventoryTable } from '../views/inventory.js';
+import { isActionableLowStock, itemVisibleInProfile, loadInventoryTable } from '../views/inventory.js';
 
 let returnsRequest = 0;
 let customersRequest = 0;
@@ -1418,22 +1418,16 @@ function renderDashboard(s) {
     : ((typeof S !== 'undefined' && Array.isArray(S.posCatalog)) ? S.posCatalog : null);
   const lowCheck = typeof isActionableLowStock === 'function'
     ? isActionableLowStock
-    : (i => !i.archived && ((Number(i.stock_quantity) || 0) > 0
-      ? (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0)
-      : (i.ever_stocked !== undefined ? Boolean(i.ever_stocked) : (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0))));
+    : (i => !i.archived && ((Number(i.stock_quantity) || 0) <= 0 || (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0)));
   let displayedLow = Number(st.low_stock_count) || 0;
   let lowSubNote = 'at or below minimum, click to review';
-  if (cat && cat.length && activeMode !== 'hybrid' && typeof itemMatchesProfile === 'function') {
-    displayedLow = cat.filter(i => itemMatchesProfile(i, activeMode) && lowCheck(i)).length;
+  if (cat && cat.length && activeMode !== 'hybrid' && typeof itemVisibleInProfile === 'function') {
+    displayedLow = cat.filter(i => itemVisibleInProfile(i, activeMode) && lowCheck(i)).length;
     const otherLow = Math.max(0, (Number(st.low_stock_count) || 0) - displayedLow);
     if (otherLow > 0) {
-      const modeNames = { phone: 'Phone Repair', pc: 'PC / Electronics', grocery: 'Grocery', retail: 'General Retail' };
+      const modeNames = { phone: 'Phone Repair', pc: 'PC / Electronics', grocery: 'Grocery', retail: 'General Retail', service: 'Service / Labor' };
       lowSubNote = `in ${modeNames[activeMode] || 'Active'} profile (${otherLow} in other modules)`;
     }
-  }
-  const unstockedCatalog = Number(st.unstocked_catalog_count) || 0;
-  if (lowSubNote === 'at or below minimum, click to review' && unstockedCatalog > 0) {
-    lowSubNote = `at or below min · ${unstockedCatalog} unstocked catalog`;
   }
 
   $id('dash-standing').innerHTML = `
@@ -1578,15 +1572,13 @@ function renderTrend(s) {
   const c = s.current;
   const st = s.standing || {};
   let trendLowCount = Number(st.low_stock_count) || 0;
-  if (typeof S !== 'undefined' && S?.shopSettings?.business_type && S.shopSettings.business_type !== 'hybrid' && typeof itemMatchesProfile === 'function') {
+  if (typeof S !== 'undefined' && S?.shopSettings?.business_type && S.shopSettings.business_type !== 'hybrid' && typeof itemVisibleInProfile === 'function') {
     const cat = (Array.isArray(S.inventoryItems) && S.inventoryItems.length) ? S.inventoryItems : S.posCatalog;
     if (Array.isArray(cat) && cat.length) {
       const lowCheck = typeof isActionableLowStock === 'function'
         ? isActionableLowStock
-        : (i => !i.archived && ((Number(i.stock_quantity) || 0) > 0
-          ? (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0)
-          : (i.ever_stocked !== undefined ? Boolean(i.ever_stocked) : (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0))));
-      trendLowCount = cat.filter(i => itemMatchesProfile(i, S.shopSettings.business_type) && lowCheck(i)).length;
+        : (i => !i.archived && ((Number(i.stock_quantity) || 0) <= 0 || (Number(i.stock_quantity) || 0) <= (Number(i.min_stock_alert) || 0)));
+      trendLowCount = cat.filter(i => itemVisibleInProfile(i, S.shopSettings.business_type) && lowCheck(i)).length;
     }
   }
   const hasLabor = Boolean(c && (c.labor_revenue || 0) > 0);
@@ -1709,9 +1701,9 @@ function renderReorder(rows) {
   const activeMode = (typeof S !== 'undefined' && S?.shopSettings?.business_type) || 'hybrid';
   const filtered = (Array.isArray(rows) ? rows : []).filter(r =>
     activeMode === 'hybrid' ||
-    typeof itemMatchesProfile !== 'function' ||
+    typeof itemVisibleInProfile !== 'function' ||
     (!r.brand && !r.part_type && !r.model_name) ||
-    itemMatchesProfile(r, activeMode)
+    itemVisibleInProfile(r, activeMode)
   );
   const count = $id('dash-reorder-count');
   if (count) {

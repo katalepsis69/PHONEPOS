@@ -173,10 +173,10 @@ dbTest('Reorder export format round-trips into importInventory() with full fidel
   assert.strictEqual(row.min_stock_alert, 5);
   assert.strictEqual(row.location, 'Bin A1');
 
-  const headers = ['Brand', 'Model Name', 'Part Type', 'SKU / Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Sold', 'In Stock', 'Stock Qty', 'Min Stock Alert', 'Supplier', 'Location'];
+  const headers = ['Brand', 'Device / Model', 'Part Type', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Sold', 'Current Stock', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'];
   const map = importer.matchHeaders(headers);
   for (const col of Object.keys(map)) assert.ok(map[col] !== -1, `${col} must map to a column`);
-  assert.strictEqual(map.stock_quantity, 9, 'Stock Qty column (not Sold or In Stock) maps to stock_quantity');
+  assert.strictEqual(map.stock_quantity, 9, 'Stock Count column (not Sold or Current Stock) maps to stock_quantity');
 
   const uneditedRow = {
     brand: row.brand,
@@ -210,10 +210,15 @@ test('Reorder UI: Export CSV button, custom days input, and actions wired', () =
   assert.match(index, /id="inv-reorder-custom-days"/, 'Custom days input element present');
   assert.match(index, /value="custom"/, 'Custom days option present in dropdown');
   assert.match(index, /id="inv-reorder-summary"/, 'Live reorder summary badge present');
+  assert.match(index, /data-action="reorder-match-sold"/, 'Match sold button present');
+  assert.match(index, /data-action="receive-reorder"/, 'Receive stock button present');
   assert.match(index, /id="inv-bulk-hint" class="inv-bulk-hint"/, 'Bulk hint uses padded subbar class');
 
   const view = fs.readFileSync(path.join(root, 'public', 'js', 'views', 'inventory.js'), 'utf8');
   assert.match(view, /function exportReorderCsv/, 'exportReorderCsv defined in inventory view');
+  assert.match(view, /function matchReorderToSold/, 'matchReorderToSold defined in inventory view');
+  assert.match(view, /function receiveReorderPrompt/, 'receiveReorderPrompt defined in inventory view');
+  assert.match(view, /reorder-stepper/, 'reorder-stepper renders +/- controls');
   assert.match(view, /reorder-custom-days/, 'custom days input listener wired');
   assert.match(view, /function updateReorderSummary/, 'live reorder summary updater defined');
 
@@ -223,6 +228,8 @@ test('Reorder UI: Export CSV button, custom days input, and actions wired', () =
 
   const main = fs.readFileSync(path.join(root, 'public', 'js', 'main.js'), 'utf8');
   assert.match(main, /'export-reorder-csv':/, 'export-reorder-csv registered in main ACTIONS');
+  assert.match(main, /'reorder-match-sold':/, 'reorder-match-sold registered in main ACTIONS');
+  assert.match(main, /'receive-reorder':/, 'receive-reorder registered in main ACTIONS');
 });
 
 test('Cloud Reorder parity, Stock CSV Import, and Two-Way Stock Sync end-to-end', async () => {

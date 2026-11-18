@@ -1299,6 +1299,21 @@ button:disabled {
   margin-left: auto;
 }
 
+.topbar-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.topbar-profile__select {
+  height: 34px;
+  min-height: 34px;
+  padding: 0 24px 0 9px;
+  max-width: 162px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 .search {
   position: relative;
   flex: 1;
@@ -2371,7 +2386,8 @@ html.light .modal-backdrop {
 }
 
 #view-inventory table.ptable:not(.reorder-table) {
-  min-width: 1225px;
+  width: 100%;
+  min-width: 980px;
 }
 
 #view-inventory table.ptable:not(.reorder-table) tbody td:not(.is-num):not(.is-mid),
@@ -2397,14 +2413,15 @@ html.light .modal-backdrop {
   line-height: 1.25;
 }
 
-#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(1) { width: 40px; }
-#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(3) { width: 195px; }
-#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(4) { width: 112px; }
-#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(5) { width: 106px; }
-#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(6) { width: 130px; }
-#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(7) { width: 96px; }
-#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(8) { width: 132px; }
-#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(9) { width: 244px; }
+#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(1) { width: 36px; }
+#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(2) { width: 15%; }
+#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(3) { width: 18%; }
+#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(4) { width: 8.5%; }
+#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(5) { width: 8.5%; }
+#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(6) { width: 9.5%; }
+#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(7) { width: 9.5%; }
+#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(8) { width: 11.5%; }
+#view-inventory table.ptable:not(.reorder-table) thead th:nth-child(9) { width: 248px; }
 
 .shelf-panel table.ptable thead th:nth-child(2) { width: 20%; }
 .shelf-panel table.ptable thead th:nth-child(3) { width: 114px; }
@@ -2433,7 +2450,7 @@ html.light .modal-backdrop {
 /* 44px tall per the touch-target floor: cashiers poke these on the counter
    screen all day. Spinners are gone because nobody steppers a reorder qty. */
 .reorder-qty {
-  width: 72px;
+  width: 58px;
   height: 44px;
   padding: 0 8px;
   text-align: right;
@@ -2525,14 +2542,73 @@ html.light .modal-backdrop {
   border-bottom: 1px solid var(--line-soft);
 }
 
-.reorder-table th:first-child,
-.reorder-table td:first-child {
-  width: 44%;
+.reorder-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 780px;
+}
+
+.reorder-table th:nth-child(1),
+.reorder-table td:nth-child(1) {
+  width: 24%;
 }
 
 .reorder-table th:nth-child(2),
 .reorder-table td:nth-child(2) {
+  width: 13%;
+}
+
+.reorder-table th:nth-child(3),
+.reorder-table td:nth-child(3) {
+  width: 9%;
+}
+
+.reorder-table th:nth-child(4),
+.reorder-table td:nth-child(4) {
+  width: 12%;
+}
+
+.reorder-table th:nth-child(5),
+.reorder-table td:nth-child(5) {
+  width: 12%;
+}
+
+.reorder-table th:nth-child(6),
+.reorder-table td:nth-child(6) {
   width: 16%;
+}
+
+.reorder-table th:nth-child(7),
+.reorder-table td:nth-child(7) {
+  width: 14%;
+}
+
+.reorder-stepper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.reorder-step-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--txt);
+  font-family: var(--font-numeric);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.reorder-step-btn:hover {
+  background: var(--surface-3);
+  border-color: var(--txt-3);
 }
 
 .reorder-table tfoot td {
@@ -3351,6 +3427,10 @@ html.light .modal-backdrop {
 
   .topbar__head {
     min-width: 0;
+  }
+
+  .topbar-profile__select {
+    max-width: 128px;
   }
 
   .search {
@@ -6842,6 +6922,25 @@ a {
 
 #view-inventory .ptable tbody td .btn-mini {
   padding: 4px 6px;
+}
+
+.inv-actions-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+#view-inventory .ptable tbody td .btn-inv-action {
+  padding: 3px 5px;
+  gap: 3px;
+  font-size: 0.71875rem;
+}
+
+html[data-density='roomy'] #view-inventory .ptable tbody td .btn-inv-action {
+  padding: 4px 5px;
+  font-size: 0.75rem;
 }
 
 /* Operating expenses input fields in dashboard */

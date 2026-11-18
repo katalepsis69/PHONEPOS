@@ -5,6 +5,7 @@ import { S } from './state.js';
 import { closeModal, escHtml, fmtMoney, openModal } from './ui.js';
 import { switchTab } from './main.js';
 import { renderPartsTable } from './views/pos.js';
+import { itemVisibleInProfile } from './views/inventory.js';
 import { openCustomerLedger } from './views/backoffice.js';
 
 const PALETTE_GROUPS = [
@@ -20,8 +21,13 @@ const PALETTE_GROUPS = [
   },
   {
     label: 'Parts',
-    match: q => (S.posCatalog || S.inventoryItems).filter(p =>
-      `${p.item_name || ''} ${p.brand} ${p.model_name} ${p.part_type} ${p.category || ''} ${p.sku_barcode || ''}`.toLowerCase().includes(q)).slice(0, 6),
+    match: q => {
+      const mode = S.shopSettings?.business_type || 'hybrid';
+      return (S.posCatalog || S.inventoryItems).filter(p =>
+        itemVisibleInProfile(p, mode) &&
+        `${p.item_name || ''} ${p.brand} ${p.model_name} ${p.part_type} ${p.category || ''} ${p.sku_barcode || ''}`.toLowerCase().includes(q)
+      ).slice(0, 6);
+    },
     pick: p => {
       switchTab('pos');
       const input = document.getElementById('pos-search-input');

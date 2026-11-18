@@ -417,7 +417,7 @@ test('cloud standing and reorder ignore unstocked 0-qty catalog entries just lik
 
     const localStanding = getStandingStats(db);
     const localReorder = getReorderList(db, '30d');
-    assert.strictEqual(localStanding.low_stock_count, 2);
+    assert.strictEqual(localStanding.low_stock_count, 3);
     assert.strictEqual(localStanding.unstocked_catalog_count, 1);
     assert.deepStrictEqual(localReorder.map(r => r.id).sort((a, b) => a - b), [stockedLow.id, depleted.id]);
     assert.ok(!localReorder.some(r => r.id === unstocked.id));
@@ -432,7 +432,7 @@ test('cloud standing and reorder ignore unstocked 0-qty catalog entries just lik
     const { cookie } = await login(running.base);
     const cloudStanding = await (await fetch(`${running.base}/api/standing`, { headers: { cookie } })).json();
     const cloudReorder = await (await fetch(`${running.base}/api/reorder?period=30d`, { headers: { cookie } })).json();
-    assert.strictEqual(cloudStanding.low_stock_count, 2);
+    assert.strictEqual(cloudStanding.low_stock_count, 3);
     assert.deepStrictEqual(cloudReorder.map(r => r.id).sort((a, b) => a - b), [stockedLow.id, depleted.id]);
   } finally {
     if (child) await stopCloud(child);

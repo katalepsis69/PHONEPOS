@@ -77,6 +77,7 @@ db.exec(`
     shop_id TEXT PRIMARY KEY,
     store_id TEXT REFERENCES stores(store_id),
     shop_name TEXT,
+    business_type TEXT NOT NULL DEFAULT 'hybrid',
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL
   );
@@ -107,12 +108,62 @@ db.exec(`
 `);
 try { db.exec('ALTER TABLE shops ADD COLUMN store_id TEXT REFERENCES stores(store_id)'); } catch (_) {}
 try { db.exec('ALTER TABLE shops ADD COLUMN shop_name TEXT'); } catch (_) {}
+try { db.exec("ALTER TABLE shops ADD COLUMN business_type TEXT NOT NULL DEFAULT 'hybrid'"); } catch (_) {}
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_shops_store
     ON shops(store_id);
   CREATE INDEX IF NOT EXISTS idx_stores_name
     ON stores(store_name COLLATE NOCASE);
 `);
+
+const VALID_BUSINESS_TYPES = new Set(['hybrid', 'phone', 'pc', 'grocery', 'retail', 'service']);
+const VALID_ROW_PROFILES = new Set(['phone', 'pc', 'grocery', 'retail', 'service', 'shared']);
+function normalizeBusinessType(v) {
+  const s = String(v || '').trim().toLowerCase();
+  return VALID_BUSINESS_TYPES.has(s) ? s : null;
+}
+
+function itemMatchesProfile(item, profile) {
+  if (!profile || profile === 'hybrid') return true;
+  const b = String(item?.brand || '').trim().toLowerCase();
+  const m = String(item?.model_name || '').trim().toLowerCase();
+  const pt = String(item?.part_type || '').trim().toLowerCase();
+  const cat = String(item?.category || '').trim().toLowerCase();
+  const name = String(item?.item_name || '').trim().toLowerCase();
+  const combined = `${b} ${m} ${pt} ${cat} ${name}`;
+  const isPcPart = (
+    /\b(gpu|cpu|motherboard|mobo|ram|ddr4|ddr5|ddr3|nvme|ssd|hdd|power supply|psu|pc case|cooler|thermal paste|graphics card|processor|geforce|radeon|ryzen|intel core)\b/i.test(combined) ||
+    /^(asus|gigabyte|msi|kingston|corsair|amd|intel|deepcool|fantech|western digital|seagate|nvidia|asrock|zotac|palit)$/i.test(b)
+  );
+  const isPhoneBrand = /^(apple|iphone|samsung|xiaomi|redmi|iredmi|poco|infinix|inifnix|tecno|realme|oppo|vivo|huawei|huawe|honor|itel|pixel|nokia|motorola)$/i.test(b);
+  const isPhonePart = (
+    /\b(lcd|oled|amoled|incell|screen|touchscreen|flex cable|charging flex|charging board|charging port|camera glass|back cam|front cam|air piece|earpiece|ear piece|center case|midframe|middle frame|power swich|power switch|back cover|back glass|housing|soldering tip)\b/i.test(combined) ||
+    ((/\bbatt(?:ery)?\b/i.test(combined)) && (isPhoneBrand || /\b(iphone|iph|galaxy|redmi|iredmi|note|poco|infinix|inifnix|tecno|realme|oppo|vivo|huawei|huawe|samsung|apple|pixel|honor)\b/i.test(combined))) ||
+    (!isPcPart && (isPhoneBrand || /^(gx|jk|ca|orig|wf|swich|power swich|charging flex|charging board|air piece|center case)$/i.test(pt)) && !name && !item?.allow_fractional)
+  );
+  if (profile === 'phone') return isPhonePart;
+  if (profile === 'pc') return isPhonePart ? false : isPcPart;
+  if (profile === 'grocery') {
+    if (isPhonePart) return false;
+    if (isPcPart && !/\b(peripherals|mouse|keyboard|cable|usb)\b/i.test(combined)) return false;
+    return true;
+  }
+  if (profile === 'retail') return !isPhonePart;
+  if (profile === 'service') return !(isPhonePart || isPcPart);
+  return true;
+}
+
+function itemVisibleInProfile(item, profile) {
+  if (!profile || profile === 'hybrid') return true;
+  if (item?.profile === 'shared') return true;
+  if (item?.profile) return item.profile === profile;
+  return itemMatchesProfile(item, profile);
+}
+
+function getStoreShopProfiles(storeId) {
+  const rows = db.prepare(`SELECT shop_id, COALESCE(business_type, 'hybrid') AS business_type FROM shops WHERE store_id = ? OR (? = 'default' AND (store_id IS NULL OR store_id = ''))`).all(storeId, storeId);
+  return new Map(rows.map(r => [r.shop_id, r.business_type || 'hybrid']));
+}
 
 // Debtor names fold the same way the shop folds them (NFC + lowercase), or
 // 'Jose' and 'jose' count as two debtors here while the shop counts one and the
@@ -489,7 +540,8 @@ const server = http.createServer(async (req, res) => {
       // it carries the claimed shop id.
       let auth = authenticateShop(req, null);
       if (!auth && !ALLOW_LEGACY_SYNC_TOKEN) return json(res, 401, { error: 'bad sync credential' });
-      const { shop_id: claimedShopId, events = [], ack_command_ids } = JSON.parse(await readBody(req) || '{}');
+      const { shop_id: claimedShopId, events = [], ack_command_ids, business_type: rawBusinessType } = JSON.parse(await readBody(req) || '{}');
+      const incomingMode = normalizeBusinessType(rawBusinessType);
       if (!auth) auth = authenticateShop(req, claimedShopId);
       if (!auth) return json(res, 401, { error: 'bad sync credential' });
       // Per-event validation: one invalid row must not freeze every newer
@@ -512,9 +564,15 @@ const server = http.createServer(async (req, res) => {
       const defStore = db.prepare("SELECT store_id FROM stores WHERE store_id = 'default'").get()
         || db.prepare("SELECT store_id FROM stores ORDER BY created_at ASC LIMIT 1").get();
       const targetStoreId = defStore ? defStore.store_id : null;
-      const heartbeat = db.prepare(`INSERT INTO shops (shop_id, store_id, first_seen, last_seen)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(shop_id) DO UPDATE SET last_seen = excluded.last_seen, store_id = COALESCE(shops.store_id, excluded.store_id)`);
+      const prevShop = db.prepare('SELECT business_type FROM shops WHERE shop_id = ?').get(shopId);
+      const modeChanged = Boolean(incomingMode && prevShop && (prevShop.business_type || 'hybrid') !== incomingMode);
+      const heartbeat = incomingMode
+        ? db.prepare(`INSERT INTO shops (shop_id, store_id, business_type, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(shop_id) DO UPDATE SET last_seen = excluded.last_seen, store_id = COALESCE(shops.store_id, excluded.store_id), business_type = excluded.business_type`)
+        : db.prepare(`INSERT INTO shops (shop_id, store_id, first_seen, last_seen)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(shop_id) DO UPDATE SET last_seen = excluded.last_seen, store_id = COALESCE(shops.store_id, excluded.store_id)`);
       const upsert = db.prepare(`
         INSERT INTO shop_rows (shop_id, table_name, local_id, row_json, updated_at)
         VALUES (?, ?, ?, ?, ?)
@@ -527,7 +585,8 @@ const server = http.createServer(async (req, res) => {
       let ackedCmdCount = 0;
       db.exec('BEGIN');
       try {
-        heartbeat.run(shopId, targetStoreId, now, now);
+        if (incomingMode) heartbeat.run(shopId, targetStoreId, incomingMode, now, now);
+        else heartbeat.run(shopId, targetStoreId, now, now);
         if (Array.isArray(ack_command_ids)) {
           for (const cid of ack_command_ids) {
             if (positiveId(cid)) {
@@ -565,8 +624,8 @@ const server = http.createServer(async (req, res) => {
       const storeId = shopOwner ? shopOwner.store_id : null;
       // An empty batch is the shop's 60s heartbeat, not news: broadcasting it
       // made every manager phone run a full refetch once a minute per shop.
-      if (validated.length > 0 || ackedCmdCount > 0) {
-        broadcast('change', { shop_id: shopId, count: validated.length || ackedCmdCount, tables: [...new Set(validated.map(e => e.table))] }, storeId);
+      if (validated.length > 0 || ackedCmdCount > 0 || modeChanged) {
+        broadcast('change', { shop_id: shopId, count: validated.length || ackedCmdCount || 1, tables: modeChanged ? ['shops', ...new Set(validated.map(e => e.table))] : [...new Set(validated.map(e => e.table))] }, storeId);
       }
       return json(res, 200, { ok: true, protocol: 2, shop_id: shopId, legacy_credential: auth.legacy, ok_ids: okIds, rejected, commands: pendingCommands });
     }
@@ -847,7 +906,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (p === '/api/overview') {
-        const shops = db.prepare(`SELECT shop_id, COALESCE(shop_name, shop_id) AS shop_name, first_seen, last_seen FROM shops WHERE store_id = ? OR (? = 'default' AND (store_id IS NULL OR store_id = '')) ORDER BY last_seen DESC`).all(session.storeId, session.storeId);
+        const shops = db.prepare(`SELECT shop_id, COALESCE(shop_name, shop_id) AS shop_name, COALESCE(business_type, 'hybrid') AS business_type, first_seen, last_seen FROM shops WHERE store_id = ? OR (? = 'default' AND (store_id IS NULL OR store_id = '')) ORDER BY last_seen DESC`).all(session.storeId, session.storeId);
         const rows = {};
         for (const s of shops) {
           rows[s.shop_id] = db.prepare('SELECT table_name, COUNT(*) n FROM shop_rows WHERE shop_id = ? GROUP BY table_name').all(s.shop_id);
@@ -990,28 +1049,11 @@ const server = http.createServer(async (req, res) => {
           const row = agingRows.find(a => a.bucket === i);
           return { label, amount: Math.round((Number(row && row.amount) || 0) * 100) / 100, count: row ? row.count : 0 };
         });
-        const inventory = db.prepare(`
-          SELECT COALESCE(SUM(CAST(json_extract(r.row_json,'$.price_retail') AS REAL)
-            * CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)), 0) AS retail_value,
-                 COALESCE(SUM(CAST(json_extract(r.row_json,'$.cost_price') AS REAL)
-            * CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)), 0) AS cost_value
-          FROM shop_rows r
-          WHERE r.table_name = 'inventory'${filter.clause}
-            AND COALESCE(CAST(json_extract(r.row_json,'$.archived') AS INTEGER), 0) = 0
-        `).get(...filter.params);
-        // Mirror-wide counts: the low-stock card used to filter the newest-500
-        // /api/rows window client-side, which dropped older breaches once the
-        // catalog outgrew the window (same failure the debtor list fixed).
-        // /api/reorder serves the same population with buy quantities.
+        // Mirror-wide counts scoped to each shop's active business_type unless hybrid.
+        const shopProfiles = getStoreShopProfiles(session.storeId);
         const filterH = getStoreShopFilter(session.storeId, shop, 'h');
-        const invCounts = db.prepare(`
-          SELECT COUNT(*) AS types,
-                 COALESCE(SUM(CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)), 0) AS parts_stock,
-                 COALESCE(SUM(CASE WHEN COALESCE(CAST(json_extract(r.row_json,'$.archived') AS INTEGER), 0) = 0
-                   AND CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL)
-                     <= CAST(json_extract(r.row_json,'$.min_stock_alert') AS REAL)
-                   AND (CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL) > 0 OR es.inv_id IS NOT NULL)
-                   THEN 1 ELSE 0 END), 0) AS low_stock
+        const invRows = db.prepare(`
+          SELECT r.shop_id, r.row_json, (es.inv_id IS NOT NULL) AS ever_stocked
           FROM shop_rows r
           LEFT JOIN (
             SELECT DISTINCT h.shop_id, CAST(json_extract(h.row_json,'$.inventory_id') AS INTEGER) AS inv_id
@@ -1020,7 +1062,22 @@ const server = http.createServer(async (req, res) => {
               AND json_extract(h.row_json,'$.inventory_id') IS NOT NULL
           ) es ON es.shop_id = r.shop_id AND es.inv_id = r.local_id
           WHERE r.table_name = 'inventory'${filter.clause}
-        `).get(...filterH.params, ...filter.params);
+        `).all(...filterH.params, ...filter.params);
+        let retailValue = 0, costValue = 0, invTypes = 0, partsStock = 0, lowStock = 0;
+        for (const r of invRows) {
+          let item;
+          try { item = JSON.parse(r.row_json); } catch (_) { continue; }
+          if (!itemVisibleInProfile(item, shopProfiles.get(r.shop_id) || 'hybrid')) continue;
+          invTypes++;
+          const qty = Number(item.stock_quantity) || 0;
+          partsStock += qty;
+          if (!Number(item.archived)) {
+            retailValue += (Number(item.price_retail) || 0) * qty;
+            costValue += (Number(item.cost_price) || 0) * qty;
+            const minAlert = Number(item.min_stock_alert ?? 0);
+            if (qty <= 0 || qty <= minAlert) lowStock++;
+          }
+        }
         return json(res, 200, {
           outstanding_credit: Math.round(debt.outstanding * 100) / 100,
           debtors: debt.debtors,
@@ -1031,11 +1088,11 @@ const server = http.createServer(async (req, res) => {
             phone: d.phone || ''
           })),
           aging,
-          inventory_retail_value: Math.round(inventory.retail_value * 100) / 100,
-          inventory_cost_value: Math.round(inventory.cost_value * 100) / 100,
-          inventory_types: invCounts.types,
-          total_parts_stock: invCounts.parts_stock,
-          low_stock_count: invCounts.low_stock
+          inventory_retail_value: Math.round(retailValue * 100) / 100,
+          inventory_cost_value: Math.round(costValue * 100) / 100,
+          inventory_types: invTypes,
+          total_parts_stock: Math.round(partsStock * 1000) / 1000,
+          low_stock_count: lowStock
         });
       }
       if (p === '/api/rows') {
@@ -1046,9 +1103,20 @@ const server = http.createServer(async (req, res) => {
           ? Math.max(1, Math.min(5000, Math.trunc(Number(url.searchParams.get('limit')) || 500)))
           : 500;
         const filter = getStoreShopFilter(session.storeId, shop, 'r');
-        const stmt = db.prepare(`SELECT r.shop_id, r.row_json, r.updated_at FROM shop_rows r WHERE r.table_name = ?${filter.clause} ORDER BY r.updated_at DESC LIMIT ?`);
-        const out = stmt.all(table, ...filter.params, limit)
-          .map(r => ({ ...JSON.parse(r.row_json), ...(shop ? {} : { shop_id: r.shop_id }), updated_at: r.updated_at }));
+        const shopProfiles = table === 'inventory' ? getStoreShopProfiles(session.storeId) : null;
+        const useLaneFilter = table === 'inventory'
+          && !url.searchParams.get('include_all_profiles')
+          && (shop ? (shopProfiles.get(shop) || 'hybrid') !== 'hybrid' : [...shopProfiles.values()].some(m => m !== 'hybrid'));
+        const stmt = useLaneFilter
+          ? db.prepare(`SELECT r.shop_id, r.row_json, r.updated_at FROM shop_rows r WHERE r.table_name = ?${filter.clause} ORDER BY r.updated_at DESC`)
+          : db.prepare(`SELECT r.shop_id, r.row_json, r.updated_at FROM shop_rows r WHERE r.table_name = ?${filter.clause} ORDER BY r.updated_at DESC LIMIT ?`);
+        const rawRows = useLaneFilter ? stmt.all(table, ...filter.params) : stmt.all(table, ...filter.params, limit);
+        let out = rawRows
+          .map(r => ({ ...JSON.parse(r.row_json), ...(shop ? {} : { shop_id: r.shop_id }), _row_shop_id: r.shop_id, updated_at: r.updated_at }));
+        if (useLaneFilter) {
+          out = out.filter(row => itemVisibleInProfile(row, shopProfiles.get(row._row_shop_id) || 'hybrid')).slice(0, limit);
+        }
+        for (const row of out) delete row._row_shop_id;
         return json(res, 200, out);
       }
 
@@ -1317,12 +1385,17 @@ const server = http.createServer(async (req, res) => {
           };
         });
 
+        const shopProfiles = getStoreShopProfiles(session.storeId);
         const tops = db.prepare(`
           SELECT i.shop_id,
                  MAX(CAST(json_extract(i.row_json,'$.item_name') AS TEXT)) AS item_name,
                  MAX(json_extract(inv_d.row_json,'$.brand')) AS brand,
                  MAX(json_extract(inv_d.row_json,'$.model_name')) AS model_name,
                  MAX(json_extract(inv_d.row_json,'$.part_type')) AS part_type,
+                 MAX(json_extract(inv_d.row_json,'$.item_name')) AS inv_item_name,
+                 MAX(json_extract(inv_d.row_json,'$.category')) AS category,
+                 MAX(COALESCE(CAST(json_extract(inv_d.row_json,'$.allow_fractional') AS INTEGER), 0)) AS allow_fractional,
+                 MAX(json_extract(inv_d.row_json,'$.profile')) AS profile,
                  -- Per-line parity with src/analytics.js getProductPerformance:
                  -- net units and net revenue clamp at zero per LINE, refunds are
                  -- all-time per sale_item (no window), zero subtotal allocates
@@ -1379,8 +1452,16 @@ const server = http.createServer(async (req, res) => {
             AND ${inWindow('s', from, to)}
           GROUP BY i.shop_id, json_extract(i.row_json,'$.inventory_id')
           ORDER BY revenue DESC
-          LIMIT 10
-        `).all(...filterI.params);
+        `).all(...filterI.params)
+          .filter(p => {
+            const lane = shopProfiles.get(p.shop_id) || 'hybrid';
+            if (lane === 'hybrid') return true;
+            if (p.brand != null || p.profile != null) {
+              return itemVisibleInProfile({ ...p, item_name: p.inv_item_name ?? p.item_name }, lane);
+            }
+            return itemVisibleInProfile({ item_name: p.item_name, part_type: '' }, lane);
+          })
+          .slice(0, 10);
 
         return json(res, 200, {
           generated_at: new Date().toISOString(),
@@ -1421,12 +1502,17 @@ const server = http.createServer(async (req, res) => {
         const shop = url.searchParams.get('shop');
         const filter = getStoreShopFilter(session.storeId, shop, 'i');
         const filterH = getStoreShopFilter(session.storeId, shop, 'h');
+        const shopProfiles = getStoreShopProfiles(session.storeId);
         const rows = db.prepare(`
           SELECT i.shop_id,
                  CAST(json_extract(i.row_json,'$.id') AS INTEGER) AS id,
                  json_extract(i.row_json,'$.brand') AS brand,
                  json_extract(i.row_json,'$.model_name') AS model_name,
                  json_extract(i.row_json,'$.part_type') AS part_type,
+                 json_extract(i.row_json,'$.item_name') AS item_name,
+                 json_extract(i.row_json,'$.category') AS category,
+                 COALESCE(CAST(json_extract(i.row_json,'$.allow_fractional') AS INTEGER), 0) AS allow_fractional,
+                 json_extract(i.row_json,'$.profile') AS profile,
                  json_extract(i.row_json,'$.sku_barcode') AS sku_barcode,
                  CAST(json_extract(i.row_json,'$.stock_quantity') AS REAL) AS stock_quantity,
                  CAST(json_extract(i.row_json,'$.min_stock_alert') AS REAL) AS min_stock_alert,
@@ -1464,6 +1550,7 @@ const server = http.createServer(async (req, res) => {
             )
         `).all(...filterH.params, ...filter.params);
         const list = rows
+          .filter(r => itemVisibleInProfile(r, shopProfiles.get(r.shop_id) || 'hybrid'))
           .map(r => {
             const belowMin = Boolean(r.stock_quantity <= r.min_stock_alert && (r.stock_quantity > 0 || r.ever_stocked));
             const restockQty = Math.max(1, (r.min_stock_alert - r.stock_quantity) + 1);
@@ -1473,13 +1560,17 @@ const server = http.createServer(async (req, res) => {
               brand: r.brand || '',
               model_name: r.model_name || '',
               part_type: r.part_type || '',
+              item_name: r.item_name || null,
+              category: r.category || '',
+              profile: r.profile || '',
+              allow_fractional: Number(r.allow_fractional) ? 1 : 0,
               sku_barcode: r.sku_barcode || '',
               cost_price: Number(r.cost_price) || 0,
               price_retail: Number(r.price_retail) || 0,
               price_technician: Number(r.price_technician) || 0,
               supplier: r.supplier || '',
               location: r.location || '',
-              name: [r.brand, r.model_name, r.part_type].filter(Boolean).join(' '),
+              name: r.item_name || [r.brand, r.model_name, r.part_type].filter(Boolean).join(' '),
               stock_quantity: r.stock_quantity,
               min_stock_alert: r.min_stock_alert,
               units_sold: r.units_sold,
@@ -1500,12 +1591,16 @@ const server = http.createServer(async (req, res) => {
         const sinceIso = new Date(Date.now() - d * 86400 * 1000).toISOString();
         const shop = url.searchParams.get('shop');
         const filter = getStoreShopFilter(session.storeId, shop, 'si');
+        const shopProfiles = getStoreShopProfiles(session.storeId);
         const rows = db.prepare(`
           SELECT i.shop_id,
                  CAST(json_extract(i.row_json,'$.id') AS INTEGER) AS id,
                  json_extract(i.row_json,'$.brand') AS brand,
                  json_extract(i.row_json,'$.model_name') AS model_name,
                  json_extract(i.row_json,'$.part_type') AS part_type,
+                 json_extract(i.row_json,'$.item_name') AS item_name,
+                 json_extract(i.row_json,'$.category') AS category,
+                 json_extract(i.row_json,'$.profile') AS profile,
                  json_extract(i.row_json,'$.sku_barcode') AS sku_barcode,
                  CAST(json_extract(i.row_json,'$.cost_price') AS REAL) AS cost_price,
                  CAST(json_extract(i.row_json,'$.price_retail') AS REAL) AS price_retail,
@@ -1532,20 +1627,25 @@ const server = http.createServer(async (req, res) => {
           GROUP BY i.shop_id, i.local_id
           ORDER BY qty_sold DESC, stock_quantity ASC, brand ASC, model_name ASC
         `).all(...filter.params, sinceIso);
-        const mapped = rows.map(r => {
-          const sold = Number(r.qty_sold) || 0;
-          const stock = Number(r.stock_quantity) || 0;
-          const minAlert = Number(r.min_stock_alert) || 0;
-          // Match the counter's reorder sheet (src/inventory.js
-          // listReorderSuggestions): net replenishment need, not a full
-          // buy-up of everything sold. The two surfaces must agree.
-          const suggested_qty = Math.max(Math.round((sold - stock) * 1000) / 1000, 0);
-          return {
-            id: r.id,
-            shop_id: r.shop_id,
-            brand: r.brand || '',
-            model_name: r.model_name || '',
-            part_type: r.part_type || '',
+        const mapped = rows
+          .filter(r => itemVisibleInProfile(r, shopProfiles.get(r.shop_id) || 'hybrid'))
+          .map(r => {
+            const sold = Number(r.qty_sold) || 0;
+            const stock = Number(r.stock_quantity) || 0;
+            const minAlert = Number(r.min_stock_alert) || 0;
+            // Match the counter's reorder sheet (src/inventory.js
+            // listReorderSuggestions): net replenishment need, not a full
+            // buy-up of everything sold. The two surfaces must agree.
+            const suggested_qty = Math.max(Math.round((sold - stock) * 1000) / 1000, 0);
+            return {
+              id: r.id,
+              shop_id: r.shop_id,
+              brand: r.brand || '',
+              model_name: r.model_name || '',
+              part_type: r.part_type || '',
+              item_name: r.item_name || null,
+              category: r.category || '',
+              profile: r.profile || '',
             sku_barcode: r.sku_barcode || '',
             cost_price: Number(r.cost_price) || 0,
             price_retail: Number(r.price_retail) || 0,
@@ -1661,6 +1761,7 @@ const server = http.createServer(async (req, res) => {
           return json(res, 200, { ok: true, shop_id: targetShopId, created: 0, updated: 0, skipped: 0, deduplicated: true });
         }
 
+        const targetShopMode = db.prepare("SELECT COALESCE(business_type, 'hybrid') AS business_type FROM shops WHERE shop_id = ?").get(targetShopId)?.business_type || 'hybrid';
         const now = new Date().toISOString();
         const existingRows = db.prepare("SELECT local_id, row_json FROM shop_rows WHERE shop_id = ? AND table_name = 'inventory'").all(targetShopId)
           .map(r => ({ local_id: r.local_id, data: JSON.parse(r.row_json) }));
@@ -1694,10 +1795,15 @@ const server = http.createServer(async (req, res) => {
               : null;
             if (!match) {
               const bL = brand.toLowerCase(), mL = model_name.toLowerCase(), pL = part_type.toLowerCase();
-              match = existingRows.find(e => e.data
-                && String(e.data.brand || '').trim().toLowerCase() === bL
-                && String(e.data.model_name || '').trim().toLowerCase() === mL
-                && String(e.data.part_type || '').trim().toLowerCase() === pL);
+              match = existingRows.find(e => {
+                if (!e.data) return false;
+                const eb = String(e.data.brand || '').trim().toLowerCase();
+                const em = String(e.data.model_name || '').trim().toLowerCase();
+                const ei = String(e.data.item_name || '').trim().toLowerCase();
+                const ep = String(e.data.part_type || '').trim().toLowerCase();
+                const ec = String(e.data.category || '').trim().toLowerCase();
+                return eb === bL && (em === mL || ei === mL) && (ep === pL || ec === pL);
+              });
             }
 
             // Missing price columns ride as blank + auto_price so the register
@@ -1721,6 +1827,8 @@ const server = http.createServer(async (req, res) => {
             const location = String(raw.location || '').trim();
             const category = raw.category && String(raw.category).trim() ? String(raw.category).trim() : part_type;
             const uom = raw.uom && String(raw.uom).trim() ? String(raw.uom).trim() : '';
+            const rawProfileStr = String(raw.profile || '').trim().toLowerCase();
+            const sheetProfile = VALID_ROW_PROFILES.has(rawProfileStr) ? rawProfileStr : '';
 
             cleanRows.push({
               brand, model_name, part_type,
@@ -1728,6 +1836,7 @@ const server = http.createServer(async (req, res) => {
               category,
               uom,
               allow_fractional: allowFrac ? 1 : 0,
+              ...(sheetProfile ? { profile: sheetProfile } : {}),
               sku_barcode: sku || '',
               cost_price: costProvided ? cost : '',
               price_retail: retailProvided ? retail : '',
@@ -1745,6 +1854,7 @@ const server = http.createServer(async (req, res) => {
               if (raw.category && String(raw.category).trim()) d.category = category;
               if (uom) d.uom = uom;
               if (hasFracFlag) d.allow_fractional = allowFrac ? 1 : 0;
+              if (sheetProfile) d.profile = sheetProfile;
               if (cost > 0) d.cost_price = cost;
               if (retail > 0) d.price_retail = retail;
               if (tech > 0) d.price_technician = tech;
@@ -1758,6 +1868,9 @@ const server = http.createServer(async (req, res) => {
               updated++;
             } else {
               const newId = ++maxLocalId;
+              const newProfile = sheetProfile === 'shared'
+                ? 'shared'
+                : (targetShopMode !== 'hybrid' ? targetShopMode : sheetProfile);
               const newItem = {
                 id: newId,
                 brand, model_name, part_type,
@@ -1765,6 +1878,7 @@ const server = http.createServer(async (req, res) => {
                 category,
                 uom: uom || 'pcs',
                 allow_fractional: allowFrac ? 1 : 0,
+                profile: newProfile,
                 sku_barcode: sku,
                 cost_price: cost,
                 price_retail: retail,
@@ -1803,6 +1917,7 @@ const server = http.createServer(async (req, res) => {
         const today = db.prepare(`SELECT date('now',${TZ_MODIFIER}) AS d`).get().d;
         const shop = url.searchParams.get('shop');
         const filter = getStoreShopFilter(session.storeId, shop, 'r');
+        const shopProfiles = getStoreShopProfiles(session.storeId);
         const lastSold = new Map(db.prepare(`
           SELECT si.shop_id, CAST(json_extract(si.row_json,'$.inventory_id') AS INTEGER) AS inv_id,
                  MAX(date(json_extract(s.row_json,'$.created_at'),${TZ_MODIFIER})) AS last_day
@@ -1828,6 +1943,10 @@ const server = http.createServer(async (req, res) => {
                  json_extract(r.row_json,'$.brand') AS brand,
                  json_extract(r.row_json,'$.model_name') AS model_name,
                  json_extract(r.row_json,'$.part_type') AS part_type,
+                 json_extract(r.row_json,'$.item_name') AS item_name,
+                 json_extract(r.row_json,'$.category') AS category,
+                 COALESCE(CAST(json_extract(r.row_json,'$.allow_fractional') AS INTEGER), 0) AS allow_fractional,
+                 json_extract(r.row_json,'$.profile') AS profile,
                  CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL) AS stock_quantity,
                  CAST(json_extract(r.row_json,'$.cost_price') AS REAL) AS cost_price,
                  date(json_extract(r.row_json,'$.created_at'),${TZ_MODIFIER}) AS stocked_at
@@ -1837,7 +1956,7 @@ const server = http.createServer(async (req, res) => {
             AND CAST(json_extract(r.row_json,'$.stock_quantity') AS REAL) > 0
         `).all(...filter.params);
         const dead = rows
-          .filter(r => !soldInWindow.has(`${r.shop_id}:${r.id}`))
+          .filter(r => !soldInWindow.has(`${r.shop_id}:${r.id}`) && itemVisibleInProfile(r, shopProfiles.get(r.shop_id) || 'hybrid'))
           .map(r => {
             const stockedSince = r.stocked_at || today;
             const last = lastSold.get(`${r.shop_id}:${r.id}`) || stockedSince;
@@ -1845,7 +1964,7 @@ const server = http.createServer(async (req, res) => {
             return {
               id: r.id,
               shop_id: r.shop_id,
-              name: [r.brand, r.model_name, r.part_type].filter(Boolean).join(' '),
+              name: r.item_name || [r.brand, r.model_name, r.part_type].filter(Boolean).join(' '),
               stock_quantity: r.stock_quantity,
               tied_up_capital: Math.round(r.stock_quantity * (Number(r.cost_price) || 0) * 100) / 100,
               last_sold: lastSold.has(`${r.shop_id}:${r.id}`) ? last : null,

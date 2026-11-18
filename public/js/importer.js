@@ -8,19 +8,29 @@
 export const IMPORT_COLUMNS = ['brand', 'model_name', 'part_type', 'sku_barcode', 'cost_price',
   'price_retail', 'price_technician', 'stock_quantity', 'min_stock_alert', 'supplier', 'location'];
 
-// Canonical names included so our own export round-trips the same path.
+// Canonical names and plain-English labels map identically so old and new
+// spreadsheets both import without friction.
 const HEADER_ALIASES = {
-  brand: ['brand', 'manufacturer', 'make', 'brandname'],
-  model_name: ['modelname', 'model', 'partname', 'name', 'productname', 'description'],
-  part_type: ['parttype', 'type', 'category', 'part', 'partcategory'],
-  sku_barcode: ['skubarcode', 'sku', 'barcode', 'code', 'upc', 'ean', 'productcode'],
+  brand: ['brand', 'manufacturer', 'make', 'brandname', 'providerbrand', 'providerorbrand'],
+  model_name: ['modelname', 'model', 'partname', 'name', 'productname', 'description', 'devicemodel', 'deviceormodel'],
+  part_type: ['parttype', 'type', 'category', 'part', 'partcategory', 'componenttype', 'categorytype', 'categoryortype'],
+  sku_barcode: ['skubarcode', 'sku', 'barcode', 'code', 'upc', 'ean', 'productcode', 'servicecode'],
   cost_price: ['costprice', 'cost', 'unitcost', 'purchaseprice', 'buyprice', 'capital', 'capitalprice', 'puhunan'],
   price_retail: ['priceretail', 'retail', 'retailprice', 'price', 'sellingprice', 'sellprice', 'srp'],
   price_technician: ['pricetechnician', 'technician', 'technicianprice', 'techprice', 'wholesale', 'wholesaleprice'],
-  stock_quantity: ['stockquantity', 'stock', 'qty', 'quantity', 'stockqty', 'onhand', 'stockonhand', 'qtyonhand'],
-  min_stock_alert: ['minstockalert', 'minstock', 'reorderpoint', 'minimumstock', 'alertstock', 'stockalert', 'minalert'],
+  stock_quantity: ['stockquantity', 'stock', 'qty', 'quantity', 'stockqty', 'stockcount', 'stocktoadd', 'restockqty', 'onhand', 'stockonhand', 'qtyonhand'],
+  min_stock_alert: ['minstockalert', 'minstock', 'lowstockalert', 'lowalert', 'reorderpoint', 'minimumstock', 'alertstock', 'stockalert', 'minalert'],
   supplier: ['supplier', 'vendor', 'distributor'],
-  location: ['location', 'bin', 'shelf', 'rack', 'storagelocation'],
+  location: ['location', 'bin', 'shelf', 'rack', 'storagelocation', 'shelfbin', 'shelforbin', 'bencharea', 'benchorarea'],
+};
+
+const OPTIONAL_HEADER_ALIASES = {
+  item_name: ['itemname', 'producttitle', 'itemtitle', 'servicename'],
+  category: ['category', 'cat', 'subcategory', 'department'],
+  uom: ['uom', 'unitofmeasure', 'unit'],
+  allow_fractional: ['allowfractional', 'fractional', 'decimal', 'decimalqty', 'sellbyweightordecimal', 'sellbyweightdecimal'],
+  track_serial: ['trackserial', 'serial', 'serialrequired', 'imei', 'requiresserialno', 'requiresserialnumber'],
+  profile: ['profile', 'storeprofile', 'lane', 'businesstype', 'shoptype', 'shopprofile'],
 };
 
 export function normalizeHeader(h) {
@@ -36,7 +46,10 @@ export function matchHeaders(headerRow) {
     const n = normalizeHeader(h);
     if (!n) return;
     for (const [col, aliases] of Object.entries(HEADER_ALIASES)) {
-      if (map[col] === -1 && aliases.includes(n)) { map[col] = i; break; }
+      if (map[col] === -1 && aliases.includes(n)) { map[col] = i; return; }
+    }
+    for (const [col, aliases] of Object.entries(OPTIONAL_HEADER_ALIASES)) {
+      if (map[col] == null && aliases.includes(n)) { map[col] = i; return; }
     }
   });
   return map;

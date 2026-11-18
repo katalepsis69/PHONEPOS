@@ -43,8 +43,12 @@ function seedInitialParts(db, opts = {}) {
     // transactions below nest inside it cleanly).
     txn(db, () => {
       for (const part of INITIAL_PARTS) {
-        const partData = zeroStock ? { ...part, stock_quantity: 0 } : part;
-        createdParts.push(createInventoryItem(db, partData));
+        const partData = {
+          ...part,
+          profile: part.profile || 'phone',
+          ...(zeroStock ? { stock_quantity: 0 } : {})
+        };
+        createdParts.push(createInventoryItem(db, partData, {}, { preserveProfile: true }));
       }
     });
     console.log('Seeding inventory complete!');

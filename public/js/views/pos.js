@@ -1,7 +1,7 @@
 import { S } from '../state.js';
 import { t } from '../i18n.js';
 import { attachCombo, confirmModal, describeLoadFailure, escHtml, fmtMoney, inputModal, openModal, setCounterText, showToast, updateTablePager } from '../ui.js';
-import { renderInvBrandFilter, renderPartTypeOptions, itemMatchesProfile, refreshInventoryBadge, TEMPLATE_BRANDS, TEMPLATE_CATEGORIES } from '../views/inventory.js';
+import { renderInvBrandFilter, renderPartTypeOptions, itemVisibleInProfile, refreshInventoryBadge, TEMPLATE_BRANDS, TEMPLATE_CATEGORIES } from '../views/inventory.js';
 import { autoPrintSlip, renderClaimStub, renderReceipt, shopIdentityIsPlaceholder } from '../receipts.js';
 import { serializeCartForRecovery, deserializeCartForRecovery } from '../cart-recovery.js';
 
@@ -278,7 +278,13 @@ function lookupBarcode(code) {
       }
     }
   }
-  return barcodeMap.get(key) || null;
+  const hit = barcodeMap.get(key) || null;
+  if (!hit) return null;
+  const mode = (typeof S !== 'undefined' && S.shopSettings?.business_type) || 'hybrid';
+  if (mode !== 'hybrid' && typeof itemVisibleInProfile === 'function' && !itemVisibleInProfile(hit, mode)) {
+    return null;
+  }
+  return hit;
 }
 
 export function handleBarcodeScan(scannedCode) {
@@ -641,9 +647,7 @@ export function renderBrandChips() {
   if (!box) return;
   const mode = S.shopSettings?.business_type || 'hybrid';
   const catalog = S.posCatalog || S.inventoryItems;
-  const profileItems = (mode !== 'hybrid')
-    ? catalog.filter(i => itemMatchesProfile(i, mode))
-    : catalog;
+  const profileItems = catalog.filter(i => itemVisibleInProfile(i, mode));
   const chipItems = S.posInStockOnly ? profileItems.filter(i => i.stock_quantity > 0) : profileItems;
 
   const catalogBrands = [...new Set(chipItems.map(i => (i.brand || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -663,9 +667,7 @@ export function renderCategoryOptions() {
   if (!sel) return;
   const mode = S.shopSettings?.business_type || 'hybrid';
   const catalog = S.posCatalog || S.inventoryItems;
-  const profileItems = (mode !== 'hybrid')
-    ? catalog.filter(i => itemMatchesProfile(i, mode))
-    : catalog;
+  const profileItems = catalog.filter(i => itemVisibleInProfile(i, mode));
 
   const catalogCats = [...new Set(profileItems.map(item => categoryOf(item)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const templateCats = (TEMPLATE_CATEGORIES?.[mode] || TEMPLATE_CATEGORIES?.retail || []).filter(c => c !== 'Other');
@@ -684,7 +686,11 @@ export function populateDeviceDatalist() {
   const datalist = document.getElementById('device-datalist');
   const catalog = S.posCatalog || S.inventoryItems;
   if (!datalist || !catalog) return;
-  const models = [...new Set(catalog.map(p => `${p.brand} ${p.model_name}`).filter(Boolean))].sort();
+  const mode = (typeof S !== 'undefined' && S.shopSettings?.business_type) || 'hybrid';
+  const filtered = (mode !== 'hybrid' && typeof itemVisibleInProfile === 'function')
+    ? catalog.filter(p => itemVisibleInProfile(p, mode))
+    : catalog;
+  const models = [...new Set(filtered.map(p => `${p.brand} ${p.model_name}`).filter(Boolean))].sort();
   datalist.innerHTML = models.map(m => `<option value="${escHtml(m)}"></option>`).join('');
 }
 
@@ -800,7 +806,7 @@ export function getFilteredParts() {
   const devTokens = devStr ? devStr.split(/\s+/).filter(Boolean) : [];
 
   return catalog.filter(item => {
-    if (mode !== 'hybrid' && typeof itemMatchesProfile === 'function' && !itemMatchesProfile(item, mode)) return false;
+    if (!itemVisibleInProfile(item, mode)) return false;
     if (devTokens.length > 0) {
       const itemDev = `${item.brand || ''} ${item.model_name || ''}`.toLowerCase();
       const matches = itemDev.includes(devStr) || devStr.includes(itemDev) || devTokens.every(token => itemDev.includes(token));
@@ -837,10 +843,10 @@ export function renderPartsTable() {
   }
 
   let profileCount = catalog.length;
-  if (mode !== 'hybrid' && typeof itemMatchesProfile === 'function') {
+  if (mode !== 'hybrid') {
     profileCount = 0;
     for (const item of catalog) {
-      if (itemMatchesProfile(item, mode)) profileCount++;
+      if (itemVisibleInProfile(item, mode)) profileCount++;
     }
   }
 
@@ -890,8 +896,12 @@ export function renderPartsTable() {
       ? t('pos.filter_why_filters', 'Nothing matches the {filters} filter. Reset them, or add the item to inventory.').replace('{filters}', active.join(', '))
       : t('pos.filter_why_plain', 'Nothing matches yet. Add the item to inventory.');
     const isOnlyInStock = active.length === 1 && S.posInStockOnly;
-    const resetText = (isOnlyInStock && catalog.length > 0)
-      ? t('pos.reset_show_all', 'Show all {n} items').replace('{n}', catalog.length)
+    const activeLane = S.shopSettings?.business_type || 'hybrid';
+    const modeCount = (activeLane !== 'hybrid' && typeof itemVisibleInProfile === 'function')
+      ? catalog.filter(p => itemVisibleInProfile(p, activeLane)).length
+      : catalog.length;
+    const resetText = (isOnlyInStock && modeCount > 0)
+      ? t('pos.reset_show_all', 'Show all {n} items').replace('{n}', modeCount)
       : t('pos.reset_filters', 'Reset filters');
     body.innerHTML = `
       <tr>

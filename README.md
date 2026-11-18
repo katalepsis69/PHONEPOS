@@ -68,7 +68,7 @@ npm run build:exe
 
 Pre-built Windows releases are published on the [Releases](https://github.com/katalepsis69/PHONEPOS/releases) page:
 
-1. Download `TechPartsPOS-Setup-1.4.exe`.
+1. Download `TechPartsPOS-Setup-1.5.exe`.
 2. Run the installer with Administrator permissions. TechParts POS installs to `C:\Program Files\TechPartsPOS` and registers `TechPartsPOS-Server` as a Windows background service under `NT AUTHORITY\SYSTEM`.
 3. Open the desktop shortcut or Start Menu entry to launch the POS workstation in the browser.
 

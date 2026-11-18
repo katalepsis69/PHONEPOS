@@ -291,7 +291,8 @@ test('POS shelf paginates at 100 rows and lookupBarcode resolves via O(1) Map', 
     cartQtyFor: () => 0,
     setPartQty: () => {},
     quickAddPart: () => {},
-    itemMatchesProfile: () => true
+    itemMatchesProfile: () => true,
+    itemVisibleInProfile: () => true
   });
 
   vm.runInContext(`${pagerSlice}\n${slice1}\n${slice2}`, ctx);

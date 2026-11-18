@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process');
 const { getBaseDir } = require('./db');
 
 const REPO = 'katalepsis69/PHONEPOS';
-const CURRENT_VERSION = '1.4';
+const CURRENT_VERSION = '1.5';
 
 /**
  * Parses a version string into an array of integers.

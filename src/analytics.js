@@ -1,6 +1,6 @@
 // phone-repair-pos/src/analytics.js
 const { money } = require('./money');
-const { partLabel } = require('./inventory');
+const { partLabel, activeBusinessType, itemVisibleInProfile } = require('./inventory');
 const { verifyChainIncremental } = require('./audit');
 const { bucketsFor, closedPeriodAt } = require('./reconcile');
 const { getShiftVarianceThreshold } = require('./settings');
@@ -26,16 +26,35 @@ function getStandingStats(db) {
   // Archived parts keep stock and history but leave the catalog: value and
   // low-stock exclude them (the cloud mirror does the same), while the item
   // and unit counts still include them, matching the cloud's types/parts_stock.
-  const invStats = db.prepare(`
-    SELECT
-      COUNT(*) as total_items,
-      COALESCE(SUM(stock_quantity), 0) as total_stock,
-      COALESCE(SUM(CASE WHEN archived = 0 THEN stock_quantity * cost_price ELSE 0 END), 0.0) as total_inventory_cost_value,
-      COALESCE(SUM(CASE WHEN archived = 0 THEN stock_quantity * price_retail ELSE 0 END), 0.0) as total_inventory_retail_value,
-      COALESCE(SUM(CASE WHEN archived = 0 AND ${BELOW_MIN_SQL('inventory')} THEN 1 ELSE 0 END), 0) as low_stock_count,
-      COALESCE(SUM(CASE WHEN archived = 0 AND stock_quantity <= 0 AND NOT ${EVER_STOCKED_SQL('inventory')} THEN 1 ELSE 0 END), 0) as unstocked_catalog_count
+  // Non-hybrid registers count only their own profile lane + shared items.
+  const mode = activeBusinessType(db);
+  const invRows = db.prepare(`
+    SELECT id, brand, model_name, part_type, item_name, category, allow_fractional, profile,
+           archived, stock_quantity, cost_price, price_retail, min_stock_alert,
+           ${EVER_STOCKED_SQL('inventory')} AS ever_stocked
     FROM inventory
-  `).get();
+  `).all().filter(r => itemVisibleInProfile(r, mode));
+  let totalItems = 0;
+  let totalStock = 0;
+  let totalCostVal = 0;
+  let totalRetailVal = 0;
+  let lowStockCount = 0;
+  let unstockedCatalogCount = 0;
+  for (const r of invRows) {
+    totalItems++;
+    const qty = Number(r.stock_quantity || 0);
+    totalStock += qty;
+    if (!r.archived) {
+      totalCostVal += qty * Number(r.cost_price || 0);
+      totalRetailVal += qty * Number(r.price_retail || 0);
+      if (qty <= 0 || qty <= Number(r.min_stock_alert ?? 0)) {
+        lowStockCount++;
+      }
+      if (qty <= 0 && !r.ever_stocked) {
+        unstockedCatalogCount++;
+      }
+    }
+  }
   const creditStats = db.prepare(`
     SELECT
       COALESCE(SUM(credit_balance), 0.0) as total_outstanding_credit,
@@ -43,12 +62,12 @@ function getStandingStats(db) {
     FROM sales WHERE voided = 0 AND credit_balance > 0
   `).get();
   return {
-    total_inventory_types: invStats.total_items,
-    total_parts_stock: invStats.total_stock,
-    total_inventory_cost_value: money(invStats.total_inventory_cost_value),
-    total_inventory_retail_value: money(invStats.total_inventory_retail_value),
-    low_stock_count: invStats.low_stock_count,
-    unstocked_catalog_count: invStats.unstocked_catalog_count,
+    total_inventory_types: totalItems,
+    total_parts_stock: Math.round(totalStock * 1000) / 1000,
+    total_inventory_cost_value: money(totalCostVal),
+    total_inventory_retail_value: money(totalRetailVal),
+    low_stock_count: lowStockCount,
+    unstocked_catalog_count: unstockedCatalogCount,
     total_credit_outstanding: money(creditStats.total_outstanding_credit),
     total_debtors_count: creditStats.total_debtors_count
   };
@@ -469,11 +488,13 @@ function getProductPerformance(db, period = '7d', refDate = null, fromDate = nul
   const lineNetRevenue = `MAX(0.0, (${lineRevenue}) - ${lineRefunds})`;
   const lineNetUnits = `MAX(0, si.quantity - ${refundedUnits})`;
 
+  const mode = activeBusinessType(db);
   const products = db.prepare(`
     SELECT
       si.inventory_id AS id,
       MAX(si.item_name) AS item_name,
       i.brand, i.model_name, i.part_type,
+      i.item_name AS inv_item_name, i.category, i.allow_fractional, i.profile,
       SUM(${lineNetUnits}) AS units,
       SUM(${lineNetRevenue}) AS revenue,
       SUM((${lineNetRevenue}) - (${lineNetUnits} * si.unit_cost) - ${repCost}) AS profit
@@ -483,12 +504,20 @@ function getProductPerformance(db, period = '7d', refDate = null, fromDate = nul
     WHERE s.voided = 0 AND si.item_type = 'part' AND ${W.sql}
     GROUP BY si.inventory_id
     ORDER BY revenue DESC
-  `).all(...W.params).map(r => ({
-    ...r,
-    revenue: money(r.revenue),
-    profit: money(r.profit),
-    margin_pct: r.revenue > 0 ? Math.round((r.profit / r.revenue) * 1000) / 10 : null
-  }));
+  `).all(...W.params)
+    .filter(r => {
+      if (mode === 'hybrid') return true;
+      if (r.brand != null || r.profile != null) {
+        return itemVisibleInProfile({ ...r, item_name: r.inv_item_name ?? r.item_name }, mode);
+      }
+      return itemVisibleInProfile({ item_name: r.item_name, part_type: '' }, mode);
+    })
+    .map(({ inv_item_name, category, allow_fractional, profile, ...r }) => ({
+      ...r,
+      revenue: money(r.revenue),
+      profit: money(r.profit),
+      margin_pct: r.revenue > 0 ? Math.round((r.profit / r.revenue) * 1000) / 10 : null
+    }));
   const labor = db.prepare(`
     SELECT COALESCE(SUM(${lineNetUnits}), 0) AS units, COALESCE(SUM(${lineNetRevenue}), 0.0) AS revenue
     FROM sale_items si
@@ -508,9 +537,10 @@ function getProductPerformance(db, period = '7d', refDate = null, fromDate = nul
 function getDeadStock(db, period = '30d', refDate = null, fromDate = null) {
   const days = PERIOD_DAYS[period] || PERIOD_DAYS['30d'];
   const today = reportEndDate(db, refDate);
+  const mode = activeBusinessType(db);
   const W = windowAnd('s.created_at', fromDate || addLocalDays(db, today, -(days - 1)), today);
   const rows = db.prepare(`
-    SELECT i.id, i.brand, i.model_name, i.part_type, i.stock_quantity,
+    SELECT i.id, i.brand, i.model_name, i.part_type, i.item_name, i.category, i.allow_fractional, i.profile, i.stock_quantity,
            (i.stock_quantity * i.cost_price) AS tied_up_capital,
            date(i.created_at, 'localtime') AS stocked_since
     FROM inventory i
@@ -521,8 +551,7 @@ function getDeadStock(db, period = '30d', refDate = null, fromDate = null) {
         WHERE si.inventory_id = i.id AND s.voided = 0 AND si.item_type = 'part' AND ${W.sql}
       )
     ORDER BY tied_up_capital DESC
-    LIMIT 20
-  `).all(...W.params);
+  `).all(...W.params).filter(r => itemVisibleInProfile(r, mode)).slice(0, 20);
   // Fetch historical last-sale dates only for the 20 returned SKUs instead of scanning all sales.
   const lastSold = new Map();
   if (rows.length) {
@@ -560,9 +589,10 @@ function getDeadStock(db, period = '30d', refDate = null, fromDate = null) {
 function getReorderList(db, period = '30d', refDate = null, fromDate = null) {
   const days = PERIOD_DAYS[period] || PERIOD_DAYS['30d'];
   const today = reportEndDate(db, refDate);
+  const mode = activeBusinessType(db);
   const W = windowAnd('s.created_at', fromDate || addLocalDays(db, today, -(days - 1)), today);
   const rows = db.prepare(`
-    SELECT i.id, i.brand, i.model_name, i.part_type, i.item_name, i.category, i.allow_fractional,
+    SELECT i.id, i.brand, i.model_name, i.part_type, i.item_name, i.category, i.allow_fractional, i.profile,
            i.cost_price, i.stock_quantity, i.min_stock_alert,
            COALESCE(v.units, 0) AS units_sold,
            ${EVER_STOCKED_SQL('i')} AS ever_stocked
@@ -576,7 +606,7 @@ function getReorderList(db, period = '30d', refDate = null, fromDate = null) {
     ) v ON v.id = i.id
     WHERE i.archived = 0
       AND (${BELOW_MIN_SQL('i')} OR v.units > 0)
-  `).all(...W.params);
+  `).all(...W.params).filter(r => itemVisibleInProfile(r, mode));
   return rows
     .map(r => {
       const belowMin = Boolean(r.stock_quantity <= r.min_stock_alert && (r.stock_quantity > 0 || r.ever_stocked));

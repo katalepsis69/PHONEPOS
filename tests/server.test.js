@@ -465,9 +465,9 @@ serverTest('Duplicate SKU returns 409, and inventory CSV export imports back rou
   // Export -> tweak a row -> import: stock tops up, prices overwrite, new row created.
   const resExport = await fetch(`${baseUrl}/api/inventory/export`, { headers: auth });
   assert.strictEqual(resExport.status, 200);
-  assert.match(resExport.headers.get('content-disposition'), /inventory\.csv/);
+  assert.match(resExport.headers.get('content-disposition'), /hybrid-inventory\.csv/);
   const csv = await resExport.text();
-  assert.ok(csv.startsWith('Brand,Model Name,Part Type,SKU / Barcode,Capital,'));
+  assert.ok(csv.startsWith('Shop Type,Item Name,Brand,Device / Model,Category / Type,Unit,Sell by Weight or Decimal,Requires Serial No.,Barcode,Capital,Retail Price,Wholesale Price,Stock Count,Low Stock Alert,Supplier,Shelf / Bin'));
 
   const lines = csv.trim().split('\r\n');
   const header = lines[0].split(',');
@@ -476,10 +476,10 @@ serverTest('Duplicate SKU returns 409, and inventory CSV export imports back rou
     return Object.fromEntries(header.map((h, i) => [h, cells[i] ?? '']));
   });
   assert.ok(rows.length >= 2); // A78 + A98 (the dup POST created nothing)
-  const a78 = rows.find(r => (r['SKU / Barcode'] || r.sku_barcode) === 'OP-A78-OLED');
-  assert.strictEqual(Number(a78['Stock Qty'] || a78.stock_quantity), 3);
+  const a78 = rows.find(r => (r['Barcode'] || r['SKU / Barcode'] || r.sku_barcode) === 'OP-A78-OLED');
+  assert.strictEqual(Number(a78['Stock Count'] || a78['Stock Qty'] || a78.stock_quantity), 3);
 
-  a78['Stock Qty'] = '5';    // top-up via identity (sku present)
+  a78['Stock Count'] = '5';    // top-up via identity (barcode present)
   a78['Retail Price'] = '95';     // overwrite non-empty price
   a78['Supplier'] = 'Greenleaf';
   rows.push({ brand: 'Vivo', model_name: 'Y27', part_type: 'LCD', cost_price: '20', price_retail: '50', stock_quantity: '4' });

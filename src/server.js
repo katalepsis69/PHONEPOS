@@ -19,7 +19,8 @@ const {
   importInventory,
   bulkEditInventory,
   listReorderSuggestions,
-  receiveInventory
+  receiveInventory,
+  buildInventoryExport
 } = require('./inventory');
 const { createSale, listSales, getSaleDetails, voidSale } = require('./sales');
 const {
@@ -608,7 +609,8 @@ function createServer(opts = {}) {
             brand: url.searchParams.get('brand') || '',
             part_type: url.searchParams.get('part_type') || '',
             lowStockOnly: url.searchParams.get('low_stock') === 'true',
-            include_archived: url.searchParams.get('include_archived') === 'true'
+            include_archived: url.searchParams.get('include_archived') === 'true',
+            profile: url.searchParams.get('profile') || 'active'
           }), session, elevated));
         }
 
@@ -662,7 +664,7 @@ function createServer(opts = {}) {
         const invBarcodeMatch = pathname.match(/^\/api\/inventory\/barcode\/([^/]+)$/);
         if (invBarcodeMatch && method === 'GET') {
           const barcode = decodeURIComponent(invBarcodeMatch[1]);
-          const item = getInventoryByBarcode(db, barcode);
+          const item = getInventoryByBarcode(db, barcode, { profile: 'active' });
           if (!item) return sendJson(res, 404, { error: 'Item not found' });
           return sendJson(res, 200, stripInventoryCosts(item, session, elevated));
         }
@@ -1010,7 +1012,7 @@ function createServer(opts = {}) {
             }
             audit(db, session, true, 'settings', 'update', { changes });
           });
-          if (body && (body.sync_url !== undefined || body.sync_token !== undefined)) kickSync();
+          if (body && (body.sync_url !== undefined || body.sync_token !== undefined || body.business_type !== undefined)) kickSync();
           const hasSyncToken = Boolean(db.prepare("SELECT value FROM shop_settings WHERE key = 'sync_token'").get()?.value);
           return sendJson(res, 200, { ...(dnsWarning ? { warning: dnsWarning } : {}), ...getShopSettings(db), sync_token_configured: hasSyncToken, pin_change_required: isDefaultPin(db), recovery_password_configured: hasRecoveryPassword(db) });
         }
@@ -1528,12 +1530,10 @@ function createServer(opts = {}) {
 
         if (pathname === '/api/inventory/export' && method === 'GET') {
           if (!elevated) return elevationDenied();
-          // Same column set as the import, so a round-trip reconciles.
-          const items = listInventory(db);
-          audit(db, session, true, 'inventory', 'export', { rows: items.length });
-          return sendCsv(res, 'inventory.csv',
-            ['Brand', 'Model Name', 'Part Type', 'SKU / Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Qty', 'Min Stock Alert', 'Supplier', 'Location'],
-            items.map(i => [i.brand, i.model_name, i.part_type, i.sku_barcode ?? '', i.cost_price, i.price_retail, i.price_technician, i.stock_quantity, i.min_stock_alert, i.supplier ?? '', i.location ?? '']));
+          // Profile-specific columns + filename matching the import template.
+          const { filename, headers, rows } = buildInventoryExport(db);
+          audit(db, session, true, 'inventory', 'export', { rows: rows.length });
+          return sendCsv(res, filename, headers, rows);
         }
 
         if (pathname === '/api/export/sales.csv' && method === 'GET') {

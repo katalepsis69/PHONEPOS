@@ -346,6 +346,7 @@ function defaultShopSubtitle(settings = {}) {
   if (type === 'grocery') return 'Grocery & General Merchandise';
   if (type === 'pc') return 'PC & Electronics Sales & Services';
   if (type === 'retail') return 'Retail & General Merchandise';
+  if (type === 'service') return 'Repair & Technical Services';
   if (type === 'hybrid') return 'Sales & Repair Services';
   return 'Phone Parts, LCDs & Repair Service';
 }

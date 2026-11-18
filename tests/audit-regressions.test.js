@@ -52,9 +52,9 @@ test('reorder includes depleted zero-stock parts while excluding unstocked catal
     const lowFiltered = listInventory(db, { lowStockOnly: true });
     assert.ok(reorder.some(r => r.id === depleted.id), 'depleted zero-stock item stays in reorder');
     assert.ok(!reorder.some(r => r.id === catalogOnly.id), 'unstocked catalog entry stays out of reorder');
-    assert.equal(standing.low_stock_count, 1);
+    assert.equal(standing.low_stock_count, 2);
     assert.equal(standing.unstocked_catalog_count, 1);
-    assert.deepEqual(lowFiltered.map(r => r.id), [depleted.id]);
+    assert.deepEqual(lowFiltered.map(r => r.id).sort((a, b) => a - b), [depleted.id, catalogOnly.id].sort((a, b) => a - b));
   } finally {
     db.close();
   }

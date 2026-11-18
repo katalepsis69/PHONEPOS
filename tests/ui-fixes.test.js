@@ -2439,7 +2439,7 @@ test('getPeriodStats daily mode emits hourly_trend while keeping daily trend par
   try {
     db.prepare(`
       INSERT INTO sales (sale_code, customer_name, subtotal, discount, total_amount, amount_paid, payment_method, created_at)
-      VALUES ('S-H1', 'Walk-in', 500, 0, 500, 500, 'cash', datetime('now', 'localtime', '-2 hours'))
+      VALUES ('S-H1', 'Walk-in', 500, 0, 500, 500, 'cash', datetime('now'))
     `).run();
     const res = getPeriodStats(db, 'day');
     assert.equal(res.days, 1);
@@ -2765,7 +2765,7 @@ test('reports & profit, reorder, badge, and phone profile ignore unstocked catal
   assert.equal(ctx.itemMatchesProfile({ brand: 'ASUS', model_name: 'RTX 4060', part_type: 'GPU', category: 'GPU' }, 'phone'), false);
 
   ctx.refreshInventoryBadge(S.inventoryItems);
-  assert.equal(elements.get('nav-lowstock-badge').textContent, '1', 'sidebar badge counts only stocked low part');
+  assert.equal(elements.get('nav-lowstock-badge').textContent, '10', 'sidebar badge counts all low + out-of-stock phone items');
 
   ctx.renderDashboard({
     period: 'day',
@@ -2774,7 +2774,7 @@ test('reports & profit, reorder, badge, and phone profile ignore unstocked catal
     current: { revenue: 950, sale_count: 1, avg_ticket: 950, gross_profit: 550, net_profit: 550, cash_collected: 950, gcash_collected: 0, transfer_collected: 0, credit_settled: 0, collected_total: 950, parts_revenue: 950, labor_revenue: 0, credit_issued: 0, refunded_total: 0, replacement_cost: 0, expenses_total: 0, return_cash: 0, return_credit: 0, return_replacements: 0, warranty_returns: 0 },
     previous: { revenue: 0 },
     deltas: {},
-    standing: { low_stock_count: 1, unstocked_catalog_count: 9, total_credit_outstanding: 0, total_debtors_count: 0, total_inventory_retail_value: 2850, total_parts_stock: 3 },
+    standing: { low_stock_count: 10, unstocked_catalog_count: 9, total_credit_outstanding: 0, total_debtors_count: 0, total_inventory_retail_value: 2850, total_parts_stock: 3 },
     backup: { stale: false, age_hours: 0 },
     dead_stock: [],
     trend: [{ bucket: '2026-11-16', revenue: 950, profit: 550, count: 1, refunded: 0 }],
@@ -2785,10 +2785,10 @@ test('reports & profit, reorder, badge, and phone profile ignore unstocked catal
     ],
   });
 
-  assert.match(elements.get('dash-standing').innerHTML, /<strong class="block">1<\/strong>/, 'standing shows 1 low stock');
-  assert.match(elements.get('dash-standing').innerHTML, /9 unstocked catalog/, 'standing clarifies unstocked catalog count');
-  assert.match(elements.get('dash-trend').innerHTML, /1 low stock/, 'trend flows show 1 low stock');
+  assert.match(elements.get('dash-standing').innerHTML, /<strong class="block">10<\/strong>/, 'standing shows 10 low/out items');
+  assert.match(elements.get('dash-standing').innerHTML, /at or below minimum, click to review/);
+  assert.match(elements.get('dash-trend').innerHTML, /10 low stock/, 'trend flows show 10 low stock');
   assert.equal(elements.get('dash-reorder-count').textContent, '1 part', 'reorder count filters to phone profile');
   assert.match(elements.get('dash-reorder').innerHTML, /Receive 1/, 'reorder renders Receive CTA');
-  assert.equal(elements.get('nav-lowstock-badge').textContent, '1', 'dashboard keeps badge at 1');
+  assert.equal(elements.get('nav-lowstock-badge').textContent, '10', 'dashboard keeps badge at 10');
 });

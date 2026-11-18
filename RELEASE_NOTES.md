@@ -1,23 +1,17 @@
-﻿# What is New in TechParts POS (v1.4)
+﻿# What is New in TechParts POS (v1.5)
 
 Here is a simple summary of all the new features and improvements in this release, written for shop owners and cashiers.
 
 ### Highlights in this update:
-- Updated documentation for expand README for open-source contributors and add MIT license
-- Fixed inventory import applies good rows and states every refused row
-- Expanded tests for soak spawns must never open a browser window
-- Fixed quarantine unreadable outbox rows on first sync window
-- Expanded tests for sync soak harness (env-gated)
-- Documentation: Updated .grain (.agents/skills/techparts-pass/SKILL.md, AGENTS.md, GEMINI.md, README.md and 15 more)
-- Security & Licensing: Updated updateStoreMarkupPreview, updateStorePresetSummary, loadDataDiagnostics (LICENSE, public/js/auth.js, src/license.js)
-- Cloud Sync: Updated interface text for "Over", "warn", "Copy" (cloud-deploy/public/app.js, cloud-deploy/public/index.html, cloud-deploy/server.js, cloud/public/app.js and 6 more)
-- Build & Release: Updated interface text for "1.4" (package.json, publish-release.bat, publish.bat, scripts/compat-css.js and 3 more)
-- Counter UI: Updated interface text for "Log out or switch user", "Previous page", "Prev" (public/index.html, public/js/api.js, public/js/chart.js, public/js/i18n.js and 7 more)
-- Repair Counter (POS): Updated interface text for "application/json" (public/js/cart-recovery.js, public/js/views/pos.js)
-- Thermal Printing: Updated interface text for "application/json", "thermal-80mm", "Customer:" (public/js/receipts.js, src/printer.js)
-- Reports & Analytics: Updated interface text for "day" (public/js/report.js, src/analytics.js)
-- Inventory & Import: Updated printBulkSkuLabels, printEditModalLabel, refreshInventoryBadge (public/js/views/inventory.js, src/inventory.js)
-- Server & Database: Updated interface text for "application/json" (src/audit.js, src/db.js, src/reconcile.js, src/returns.js and 5 more)
+- Cloud Sync: Updated interface text for "Export reorder sheet as CSV with blank Stock Count", "Export CSV" (cloud-deploy/public/app.js, cloud-deploy/public/index.html, cloud-deploy/server.js, cloud/public/app.js and 3 more)
+- Counter UI: Updated interface text for "Switch active shop profile", "Set order quantities to replace all units sold in this window", "Receive the ordered quantities above into inventory stock" (public/index.html, public/js/i18n.js, public/js/main.js, public/js/search.js and 2 more)
+- Security & Licensing: Updated interface text for "application/json" (public/js/auth.js)
+- Inventory & Import: Updated interface text for "items", "application/json", "Low-stock alert threshold" (public/js/importer.js, public/js/views/inventory.js, src/inventory.js)
+- Thermal Printing: Updated defaultShopSubtitle (public/js/receipts.js, src/printer.js)
+- Repair Counter (POS): Updated lookupBarcode, renderBrandChips, renderCategoryOptions (public/js/views/pos.js)
+- Reports & Analytics: Updated getStandingStats, getProductPerformance, getDeadStock (src/analytics.js)
+- Server & Database: Updated initDb, seedInitialParts, createServer (src/db.js, src/seed.js, src/server.js)
+- Quality & Tests: Updated test coverage for openImportPreview displays Low Stock Alert and swaps Brand/Model when clicked; inventory table renders an explicit Low Stock Alert column (tests/analytics-parity.test.js, tests/audit-regressions.test.js, tests/frontend-regressions.test.js, tests/perf-optimizations.test.js and 7 more)
 
 ---
 
@@ -116,6 +110,6 @@ Cashiers can ring up sales and handle repair jobs rapidly using keyboard shortcu
   3. When the new version appears, click **Update Now**. The system safely updates itself and restarts with all your shop data preserved.
 
 * **If this is a fresh installation:**
-  1. Download `TechPartsPOS-Setup-1.4.exe` below.
+  1. Download `TechPartsPOS-Setup-1.5.exe` below.
   2. Run the installer to install TechParts POS as a protected background service.
   3. Launch TechParts POS from the Start Menu or Desktop shortcut.

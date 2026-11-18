@@ -395,7 +395,10 @@ function initDb(dbFilePath = DEFAULT_DB_PATH) {
       ['category', "ALTER TABLE inventory ADD COLUMN category TEXT NOT NULL DEFAULT ''"],
       ['uom', "ALTER TABLE inventory ADD COLUMN uom TEXT NOT NULL DEFAULT 'pcs'"],
       ['allow_fractional', 'ALTER TABLE inventory ADD COLUMN allow_fractional INTEGER NOT NULL DEFAULT 0'],
-      ['track_serial', 'ALTER TABLE inventory ADD COLUMN track_serial INTEGER NOT NULL DEFAULT 0']
+      ['track_serial', 'ALTER TABLE inventory ADD COLUMN track_serial INTEGER NOT NULL DEFAULT 0'],
+      // Store-profile lane: '' = legacy/shared (visible in every lane until
+      // assigned). Stamped at creation from the active business_type.
+      ['profile', "ALTER TABLE inventory ADD COLUMN profile TEXT NOT NULL DEFAULT ''"]
     ]) {
       if (!invCols.includes(col)) db.exec(ddl);
     }

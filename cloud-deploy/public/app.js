@@ -4,6 +4,63 @@ let period = 'day';
 let selectedShop = localStorage.getItem('techparts_selected_shop') || '';
 let feedSearchQuery = '';
 let feedChip = 'all';
+let catalogProfile = '';
+
+function getShopBusinessType(shopId) {
+  const shops = lastOverviewState?.shops || [];
+  const sid = shopId || selectedShop;
+  if (sid) {
+    const match = shops.find(s => s.shop_id === sid);
+    return match?.business_type || 'hybrid';
+  }
+  const modes = [...new Set(shops.map(s => s.business_type || 'hybrid'))];
+  return modes.length === 1 ? modes[0] : 'hybrid';
+}
+
+function itemMatchesProfile(item, profile) {
+  if (!profile || profile === 'hybrid') return true;
+  const b = String(item?.brand || '').trim().toLowerCase();
+  const m = String(item?.model_name || '').trim().toLowerCase();
+  const pt = String(item?.part_type || '').trim().toLowerCase();
+  const cat = String(item?.category || '').trim().toLowerCase();
+  const name = String(item?.item_name || '').trim().toLowerCase();
+  const combined = `${b} ${m} ${pt} ${cat} ${name}`;
+  const isPcPart = (
+    /\b(gpu|cpu|motherboard|mobo|ram|ddr4|ddr5|ddr3|nvme|ssd|hdd|power supply|psu|pc case|cooler|thermal paste|graphics card|processor|geforce|radeon|ryzen|intel core)\b/i.test(combined) ||
+    /^(asus|gigabyte|msi|kingston|corsair|amd|intel|deepcool|fantech|western digital|seagate|nvidia|asrock|zotac|palit)$/i.test(b)
+  );
+  const isPhoneBrand = /^(apple|iphone|samsung|xiaomi|redmi|iredmi|poco|infinix|inifnix|tecno|realme|oppo|vivo|huawei|huawe|honor|itel|pixel|nokia|motorola)$/i.test(b);
+  const isPhonePart = (
+    /\b(lcd|oled|amoled|incell|screen|touchscreen|flex cable|charging flex|charging board|charging port|camera glass|back cam|front cam|air piece|earpiece|ear piece|center case|midframe|middle frame|power swich|power switch|back cover|back glass|housing|soldering tip)\b/i.test(combined) ||
+    ((/\bbatt(?:ery)?\b/i.test(combined)) && (isPhoneBrand || /\b(iphone|iph|galaxy|redmi|iredmi|note|poco|infinix|inifnix|tecno|realme|oppo|vivo|huawei|huawe|samsung|apple|pixel|honor)\b/i.test(combined))) ||
+    (!isPcPart && (isPhoneBrand || /^(gx|jk|ca|orig|wf|swich|power swich|charging flex|charging board|air piece|center case)$/i.test(pt)) && !name && !item?.allow_fractional)
+  );
+  if (profile === 'phone') return isPhonePart;
+  if (profile === 'pc') return isPhonePart ? false : isPcPart;
+  if (profile === 'grocery') {
+    if (isPhonePart) return false;
+    if (isPcPart && !/\b(peripherals|mouse|keyboard|cable|usb)\b/i.test(combined)) return false;
+    return true;
+  }
+  if (profile === 'retail') return !isPhonePart;
+  if (profile === 'service') return !(isPhonePart || isPcPart);
+  return true;
+}
+
+function itemVisibleInProfile(item, profile) {
+  if (!profile || profile === 'hybrid') return true;
+  if (item?.profile === 'shared') return true;
+  if (item?.profile) return item.profile === profile;
+  return itemMatchesProfile(item, profile);
+}
+
+function isItemVisibleInCloud(item) {
+  const lane = getShopBusinessType(item?.shop_id);
+  if (lane !== 'hybrid') return itemVisibleInProfile(item, lane);
+  if (!catalogProfile) return true;
+  if (catalogProfile === 'shared') return !item?.profile || item.profile === 'shared';
+  return itemVisibleInProfile(item, catalogProfile);
+}
 let lastLoadedData = null;
 let eventSource = null;
 let currentPairingCode = '';
@@ -865,6 +922,29 @@ function renderChipsForTab() {
       if (lastLoadedData) renderTab(lastLoadedData);
     });
   });
+  if (currentTab === 'stock' || currentTab === 'reorder') {
+    const activeLane = getShopBusinessType();
+    if (activeLane === 'hybrid') {
+      const sel = document.createElement('select');
+      sel.className = 'chip-btn';
+      sel.setAttribute('aria-label', 'Filter catalog by store profile');
+      sel.innerHTML = '<option value="">All profiles</option>' +
+        ['phone', 'pc', 'grocery', 'retail', 'service'].map(p => `<option value="${p}">${p[0].toUpperCase() + p.slice(1)}</option>`).join('') +
+        '<option value="shared">Shared / untagged</option>';
+      sel.value = catalogProfile;
+      sel.addEventListener('change', () => {
+        catalogProfile = sel.value;
+        if (lastLoadedData) renderTab(lastLoadedData);
+      });
+      wrap.appendChild(sel);
+    } else {
+      const badge = document.createElement('span');
+      badge.className = 'chip-btn active';
+      const labels = { phone: 'Phone Repair', pc: 'PC & Electronics', grocery: 'Grocery', retail: 'General Retail', service: 'Service / Labor' };
+      badge.textContent = `Lane: ${labels[activeLane] || activeLane}`;
+      wrap.appendChild(badge);
+    }
+  }
 }
 
 function matchesQuery(text) {
@@ -1054,7 +1134,8 @@ function renderTab(data) {
   } else if (currentTab === 'stock') {
     if (feedChip === 'catalog') {
       const catalog = (data.inventory || []).filter(item => {
-        const name = [item.brand, item.model_name, item.part_type, item.sku_barcode, item.supplier].filter(Boolean).join(' ');
+        if (!isItemVisibleInCloud(item)) return false;
+        const name = [item.item_name, item.brand, item.model_name, item.part_type, item.sku_barcode, item.supplier].filter(Boolean).join(' ');
         return matchesQuery(name);
       });
       const rows = catalog.slice(0, 200);
@@ -1066,7 +1147,7 @@ function renderTab(data) {
       box.innerHTML = rows.map(item => {
         const qty = Number(item.stock_quantity) || 0;
         const minAlert = Number(item.min_stock_alert ?? 2);
-        const name = [item.brand, item.model_name, item.part_type].filter(Boolean).join(' ');
+        const name = item.item_name || [item.brand, item.model_name, item.part_type].filter(Boolean).join(' ');
         const badgeCls = qty <= 0 ? 'utang' : (qty <= minAlert ? 'warn' : 'cash');
         const pend = getPendingDeltaForItem(data, item);
         const pendHtml = pend
@@ -1077,6 +1158,7 @@ function renderTab(data) {
             <div class="feed-left">
               <div class="feed-code-row">
                 <span class="feed-code">${esc(name || 'Part')}</span>
+                ${item.profile ? `<span class="badge">${esc(item.profile)}</span>` : ''}
                 ${item.sku_barcode ? `<span class="badge gcash">${esc(item.sku_barcode)}</span>` : ''}
                 ${pendHtml}
               </div>
@@ -1093,6 +1175,7 @@ function renderTab(data) {
     }
 
     const filtered = (data.reorder || []).filter(item => {
+      if (!isItemVisibleInCloud(item)) return false;
       const qty = Number(item.stock_quantity) || 0;
       if (feedChip === 'out' && qty > 0) return false;
       if (feedChip === 'low' && qty <= 0) return false;
@@ -1611,34 +1694,51 @@ document.querySelectorAll('.period-tab').forEach(tab => {
 document.getElementById('range-from')?.addEventListener('change', () => refresh());
 document.getElementById('range-to')?.addEventListener('change', () => refresh());
 
+const CLOUD_PROFILE_SLUGS = {
+  phone: 'phone-repair',
+  pc: 'pc-electronics',
+  grocery: 'grocery',
+  retail: 'retail',
+  service: 'service-labor',
+  hybrid: 'hybrid',
+};
+
 const CLOUD_IMPORT_TEMPLATE_HEADERS = [
-  'Brand', 'Model Name', 'Part Type', 'SKU / Barcode',
-  'Capital', 'Retail Price', 'Wholesale Price', 'Stock Qty',
-  'Min Stock Alert', 'Supplier', 'Location',
+  'Brand', 'Device / Model', 'Part Type', 'Barcode',
+  'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count',
+  'Low Stock Alert', 'Supplier', 'Shelf / Bin',
 ];
 
 const CLOUD_REORDER_CSV_HEADERS = [
-  'Brand', 'Model Name', 'Part Type', 'SKU / Barcode',
-  'Capital', 'Retail Price', 'Wholesale Price', 'Sold', 'In Stock', 'Stock Qty',
-  'Min Stock Alert', 'Supplier', 'Location',
+  'Brand', 'Device / Model', 'Part Type', 'Barcode',
+  'Capital', 'Retail Price', 'Wholesale Price', 'Sold', 'Current Stock', 'Stock Count',
+  'Low Stock Alert', 'Supplier', 'Shelf / Bin',
+];
+
+const CLOUD_REORDER_ITEM_HEADERS = [
+  'Item Name', 'Brand', 'Category / Type', 'Barcode',
+  'Capital', 'Retail Price', 'Wholesale Price', 'Sold', 'Current Stock', 'Stock Count',
+  'Low Stock Alert', 'Supplier', 'Shelf / Bin',
 ];
 
 const CLOUD_HEADER_ALIASES = {
-  item_name:        ['itemname', 'productname', 'name'],
-  brand:            ['brand', 'make', 'manufacturer'],
-  model_name:       ['model', 'modelname', 'device', 'phone', 'unit'],
-  part_type:        ['parttype', 'part', 'type', 'category', 'item', 'description'],
+  profile:          ['profile', 'storeprofile', 'lane', 'businesstype', 'shoptype', 'shopprofile'],
+  item_name:        ['itemname', 'productname', 'name', 'servicename'],
+  brand:            ['brand', 'make', 'manufacturer', 'providerbrand', 'providerorbrand'],
+  model_name:       ['model', 'modelname', 'device', 'phone', 'devicemodel', 'deviceormodel'],
+  part_type:        ['parttype', 'part', 'type', 'category', 'item', 'description', 'componenttype', 'categorytype', 'categoryortype'],
   category:         ['category', 'cat'],
-  uom:              ['uom', 'unitofmeasure'],
-  allow_fractional: ['allowfractional', 'fractional', 'decimal'],
-  sku_barcode:      ['sku', 'barcode', 'skubarcode', 'code', 'partnumber', 'partno', 'upc', 'ean'],
-  cost_price:       ['costprice', 'cost', 'unitcost', 'buyprice', 'capital', ' puhunan', 'puhunan', 'wholesale'],
+  uom:              ['uom', 'unitofmeasure', 'unit'],
+  allow_fractional: ['allowfractional', 'fractional', 'decimal', 'sellbyweightordecimal', 'sellbyweightdecimal'],
+  track_serial:     ['trackserial', 'serial', 'serialrequired', 'requiresserialno', 'requiresserialnumber'],
+  sku_barcode:      ['sku', 'barcode', 'skubarcode', 'code', 'partnumber', 'partno', 'upc', 'ean', 'servicecode'],
+  cost_price:       ['costprice', 'cost', 'unitcost', 'buyprice', 'capital', 'puhunan', 'wholesale'],
   price_retail:     ['priceretail', 'retail', 'retailprice', 'price', 'sellingprice', 'srp', 'walkin'],
   price_technician: ['pricetechnician', 'technicianprice', 'techprice', 'tprice', 'dealer', 'dealerprice', 'wholesaleprice'],
-  stock_quantity:   ['stockquantity', 'stock', 'qty', 'quantity', 'onhand', 'stockqty'],
-  min_stock_alert:  ['minstockalert', 'minstock', 'reorderlevel', 'alert', 'lowstock', 'min'],
+  stock_quantity:   ['stockquantity', 'stock', 'qty', 'quantity', 'onhand', 'stockqty', 'stockcount', 'stocktoadd', 'restockqty'],
+  min_stock_alert:  ['minstockalert', 'minstock', 'lowstockalert', 'lowalert', 'reorderlevel', 'alert', 'lowstock', 'min'],
   supplier:         ['supplier', 'vendor', 'source'],
-  location:         ['location', 'bin', 'shelf', 'drawer', 'slot'],
+  location:         ['location', 'bin', 'shelf', 'drawer', 'slot', 'shelfbin', 'shelforbin', 'bencharea', 'benchorarea'],
 };
 
 function getActiveReorderRows(data) {
@@ -1651,6 +1751,7 @@ function getActiveReorderRows(data) {
         return true;
       });
   return base.filter(item => {
+    if (!isItemVisibleInCloud(item)) return false;
     const text = [item.name, item.brand, item.model_name, item.part_type, item.sku_barcode, item.supplier].filter(Boolean).join(' ');
     return matchesQuery(text);
   });
@@ -1727,63 +1828,117 @@ function copyCloudReorderOrder() {
   );
 }
 
+function getCloudExportProfileKey() {
+  const activeLane = getShopBusinessType();
+  if (activeLane === 'hybrid' && catalogProfile && catalogProfile !== 'shared' && CLOUD_PROFILE_TEMPLATES[catalogProfile]) {
+    return catalogProfile;
+  }
+  return CLOUD_PROFILE_TEMPLATES[activeLane] ? activeLane : 'phone';
+}
+
 function exportCloudReorderCsv() {
   const rows = getActiveReorderRows(lastLoadedData);
   if (!rows.length) {
     showToast('No reorder items to export');
     return;
   }
-  const body = rows.map(r => [
-    r.brand || '',
-    r.model_name || '',
-    r.part_type || '',
-    r.sku_barcode || '',
-    r.cost_price ?? 0,
-    r.price_retail ?? 0,
-    r.price_technician ?? r.price_retail ?? 0,
-    r.qty_sold ?? r.units_sold ?? 0,
-    r.stock_quantity ?? 0,
-    '',
-    r.min_stock_alert ?? 2,
-    r.supplier || '',
-    r.location || '',
-  ].map(csvCell).join(','));
+  const tplKey = getCloudExportProfileKey();
+  const slug = CLOUD_PROFILE_SLUGS[tplKey] || 'phone-repair';
+  const itemFirst = tplKey === 'grocery' || tplKey === 'retail' || tplKey === 'service' || tplKey === 'hybrid';
+  const headers = itemFirst ? CLOUD_REORDER_ITEM_HEADERS : CLOUD_REORDER_CSV_HEADERS;
+  const body = rows.map(r => (itemFirst
+    ? [
+        r.item_name || r.model_name || '',
+        r.brand || '',
+        r.category || r.part_type || '',
+        r.sku_barcode || '',
+        r.cost_price ?? 0,
+        r.price_retail ?? 0,
+        r.price_technician ?? r.price_retail ?? 0,
+        r.qty_sold ?? r.units_sold ?? 0,
+        r.stock_quantity ?? 0,
+        '',
+        r.min_stock_alert ?? 2,
+        r.supplier || '',
+        r.location || '',
+      ]
+    : [
+        r.brand || '',
+        r.model_name || '',
+        r.part_type || '',
+        r.sku_barcode || '',
+        r.cost_price ?? 0,
+        r.price_retail ?? 0,
+        r.price_technician ?? r.price_retail ?? 0,
+        r.qty_sold ?? r.units_sold ?? 0,
+        r.stock_quantity ?? 0,
+        '',
+        r.min_stock_alert ?? 2,
+        r.supplier || '',
+        r.location || '',
+      ]).map(csvCell).join(','));
   const stamp = new Date().toISOString().slice(0, 10);
-  triggerCsvDownload(`techparts-reorder-${stamp}.csv`, [CLOUD_REORDER_CSV_HEADERS.map(csvCell).join(','), ...body]);
-  showToast(`Exported ${body.length} reorder row${body.length === 1 ? '' : 's'} (fill Stock Qty when order arrives)`);
+  triggerCsvDownload(`${slug}-reorder-${stamp}.csv`, [headers.map(csvCell).join(','), ...body]);
+  showToast(`Exported ${body.length} reorder row${body.length === 1 ? '' : 's'} (fill Stock Count when order arrives)`);
 }
 
+const CLOUD_PROFILE_TEMPLATES = {
+  phone: {
+    headers: CLOUD_IMPORT_TEMPLATE_HEADERS,
+    example: ['Samsung', 'A15 5G', 'LCD Screen', 'SAM-A15-LCD', '650', '1200', '950', '5', '2', 'Quiapo Parts', 'Drawer A2'],
+    row: r => [r.brand || '', r.model_name || '', r.part_type || '', r.sku_barcode || '', r.cost_price ?? 0, r.price_retail ?? 0, r.price_technician ?? 0, r.stock_quantity ?? 0, r.min_stock_alert ?? 2, r.supplier || '', r.location || ''],
+  },
+  pc: {
+    headers: ['Brand', 'Device / Model', 'Component Type', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Requires Serial No.', 'Supplier', 'Shelf / Bin'],
+    example: ['Kingston', 'Fury Beast 16GB', 'RAM DDR4 3200MHz', 'KNG-DDR4-16G', '1450', '2200', '1850', '8', '2', 'Yes', 'PC Hub', 'Shelf B1'],
+    row: r => [r.brand || '', r.model_name || '', r.part_type || '', r.sku_barcode || '', r.cost_price ?? 0, r.price_retail ?? 0, r.price_technician ?? 0, r.stock_quantity ?? 0, r.min_stock_alert ?? 2, Number(r.track_serial) ? 'Yes' : 'No', r.supplier || '', r.location || ''],
+  },
+  grocery: {
+    headers: ['Item Name', 'Brand', 'Category', 'Unit', 'Sell by Weight or Decimal', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'],
+    example: ['Coke 1.5L Bottle', 'Coca-Cola', 'Beverages', 'bottle', 'No', '4801981118519', '58', '75', '68', '24', '6', 'Coca-Cola Dist', 'Aisle 1'],
+    row: r => [r.item_name || r.model_name || '', r.brand || '', r.category || r.part_type || '', r.uom || 'pcs', Number(r.allow_fractional) ? 'Yes' : 'No', r.sku_barcode || '', r.cost_price ?? 0, r.price_retail ?? 0, r.price_technician ?? 0, r.stock_quantity ?? 0, r.min_stock_alert ?? 2, r.supplier || '', r.location || ''],
+  },
+  retail: {
+    headers: ['Item Name', 'Brand', 'Category', 'Unit', 'Sell by Weight or Decimal', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'],
+    example: ['USB-C Fast Braided Cable 1m', 'Anker', 'Accessories', 'pcs', 'No', 'ANK-USBC-1M', '120', '250', '190', '15', '3', 'TechDistro', 'Rack C2'],
+    row: r => [r.item_name || r.model_name || '', r.brand || '', r.category || r.part_type || '', r.uom || 'pcs', Number(r.allow_fractional) ? 'Yes' : 'No', r.sku_barcode || '', r.cost_price ?? 0, r.price_retail ?? 0, r.price_technician ?? 0, r.stock_quantity ?? 0, r.min_stock_alert ?? 2, r.supplier || '', r.location || ''],
+  },
+  service: {
+    headers: ['Service Name', 'Provider / Brand', 'Category', 'Service Code', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Bench / Area'],
+    example: ['LCD Replacement Labor', 'Service', 'Phone Repair Labor', 'SVC-LCD-INSTALL', '0', '500', '400', '999', '0', 'In-House', 'Bench 1'],
+    row: r => [r.item_name || r.model_name || '', r.brand || '', r.category || r.part_type || '', r.sku_barcode || '', r.cost_price ?? 0, r.price_retail ?? 0, r.price_technician ?? 0, r.stock_quantity ?? 0, r.min_stock_alert ?? 2, r.supplier || '', r.location || ''],
+  },
+  hybrid: {
+    headers: ['Shop Type', 'Item Name', 'Brand', 'Device / Model', 'Category / Type', 'Unit', 'Sell by Weight or Decimal', 'Requires Serial No.', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'],
+    example: ['phone', 'Samsung A15 5G LCD', 'Samsung', 'A15 5G', 'LCD Screen', 'pcs', 'No', 'No', 'SAM-A15-LCD', '650', '1200', '950', '5', '2', 'Quiapo Parts', 'Drawer A2'],
+    row: r => [r.profile || '', r.item_name || '', r.brand || '', r.model_name || '', r.part_type || '', r.uom || 'pcs', Number(r.allow_fractional) ? 'Yes' : 'No', Number(r.track_serial) ? 'Yes' : 'No', r.sku_barcode || '', r.cost_price ?? 0, r.price_retail ?? 0, r.price_technician ?? 0, r.stock_quantity ?? 0, r.min_stock_alert ?? 2, r.supplier || '', r.location || ''],
+  },
+};
+
 function downloadCloudTemplateCsv() {
-  const example = ['Samsung', 'A15 5G', 'LCD Screen', 'SAM-A15-LCD', '650', '1200', '950', '5', '2', 'Quiapo Parts', 'Drawer A2'];
-  triggerCsvDownload('techparts-import-template.csv', [
-    CLOUD_IMPORT_TEMPLATE_HEADERS.map(csvCell).join(','),
-    example.map(csvCell).join(','),
+  const tplKey = getCloudExportProfileKey();
+  const slug = CLOUD_PROFILE_SLUGS[tplKey] || 'phone-repair';
+  const tpl = CLOUD_PROFILE_TEMPLATES[tplKey] || CLOUD_PROFILE_TEMPLATES.phone;
+  triggerCsvDownload(`${slug}-import-template.csv`, [
+    tpl.headers.map(csvCell).join(','),
+    tpl.example.map(csvCell).join(','),
   ]);
-  showToast('Template CSV downloaded');
+  showToast(`Downloaded ${slug}-import-template.csv`);
 }
 
 function exportCloudStockCsv() {
-  const items = lastLoadedData?.inventory || [];
+  const items = (lastLoadedData?.inventory || []).filter(isItemVisibleInCloud);
   if (!items.length) {
     showToast('No inventory items to export');
     return;
   }
-  const body = items.map(r => [
-    r.brand || '',
-    r.model_name || '',
-    r.part_type || '',
-    r.sku_barcode || '',
-    r.cost_price ?? 0,
-    r.price_retail ?? 0,
-    r.price_technician ?? 0,
-    r.stock_quantity ?? 0,
-    r.min_stock_alert ?? 2,
-    r.supplier || '',
-    r.location || '',
-  ].map(csvCell).join(','));
+  const tplKey = getCloudExportProfileKey();
+  const slug = CLOUD_PROFILE_SLUGS[tplKey] || 'phone-repair';
+  const tpl = CLOUD_PROFILE_TEMPLATES[tplKey] || CLOUD_PROFILE_TEMPLATES.phone;
+  const body = items.map(r => tpl.row(r).map(csvCell).join(','));
   const stamp = new Date().toISOString().slice(0, 10);
-  triggerCsvDownload(`techparts-inventory-${stamp}.csv`, [CLOUD_IMPORT_TEMPLATE_HEADERS.map(csvCell).join(','), ...body]);
-  showToast(`Exported ${items.length} part${items.length === 1 ? '' : 's'}`);
+  triggerCsvDownload(`${slug}-inventory-${stamp}.csv`, [tpl.headers.map(csvCell).join(','), ...body]);
+  showToast(`Exported ${items.length} item${items.length === 1 ? '' : 's'} (${slug})`);
 }
 
 function parseDelimitedText(text) {
@@ -1842,7 +1997,10 @@ function parseCloudImportRows(text) {
     if (!brand || !model_name || !part_type) continue;
     const rawMin = String(get('min_stock_alert')).trim();
     const rawFrac = String(get('allow_fractional')).trim();
+    const rawSerial = String(get('track_serial')).trim();
+    const rawProfile = String(get('profile')).trim().toLowerCase();
     out.push({
+      ...(rawProfile ? { profile: rawProfile } : {}),
       item_name,
       brand,
       model_name,
@@ -1850,6 +2008,7 @@ function parseCloudImportRows(text) {
       category: category || part_type,
       uom: String(get('uom')).trim(),
       allow_fractional: rawFrac !== '' ? (/^(1|true|yes)$/i.test(rawFrac) ? 1 : 0) : '',
+      ...(rawSerial !== '' ? { track_serial: /^(1|true|yes)$/i.test(rawSerial) ? 1 : 0 } : {}),
       sku_barcode: String(get('sku_barcode')).trim(),
       cost_price: get('cost_price') !== '' ? num(get('cost_price')) : '',
       price_retail: get('price_retail') !== '' ? num(get('price_retail')) : '',
@@ -1941,11 +2100,13 @@ function openCloudImportModal(fileName, rows) {
   const addingCount = rows.filter(r => (Number(r.stock_quantity) || 0) > 0).length;
   const totalAddingUnits = rows.reduce((s, r) => s + (Number(r.stock_quantity) || 0), 0);
   if (subEl) {
-    subEl.textContent = `${fileName}: ${rows.length} row${rows.length === 1 ? '' : 's'} ready (${addingCount} adding +${totalAddingUnits} units total)`;
+    const tplKey = getCloudExportProfileKey();
+    const laneNames = { phone: 'Phone Repair', pc: 'PC & Electronics', grocery: 'Grocery', retail: 'Retail', service: 'Service / Labor', hybrid: 'Hybrid' };
+    subEl.textContent = `${fileName} [${laneNames[tplKey] || tplKey}]: ${rows.length} row${rows.length === 1 ? '' : 's'} ready (${addingCount} adding +${totalAddingUnits} units total)`;
   }
   if (previewEl) {
     previewEl.innerHTML = rows.slice(0, 40).map(r => {
-      const label = [r.brand, r.model_name, r.part_type].filter(Boolean).join(' ');
+      const label = r.item_name || [r.brand, r.model_name, r.part_type].filter(Boolean).join(' ');
       const qty = Number(r.stock_quantity) || 0;
       return `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid var(--border);">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(label)}</span>

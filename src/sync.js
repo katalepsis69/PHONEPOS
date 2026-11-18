@@ -85,10 +85,21 @@ function enqueueCustomerProfile(db, customerName) {
   if (row) enqueue(db, 'customer_profiles', Number(row.id), row);
 }
 
-async function postBatch(url, token, shopId, events, ackCommandIds) {
+function getBusinessType(db) {
+  try {
+    return db.prepare("SELECT value FROM shop_settings WHERE key = 'business_type'").get()?.value || 'hybrid';
+  } catch (_) {
+    return 'hybrid';
+  }
+}
+
+async function postBatch(url, token, shopId, events, ackCommandIds, businessType) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 8000);
   const body = { shop_id: shopId, events };
+  if (typeof businessType === 'string' && businessType) {
+    body.business_type = businessType;
+  }
   if (Array.isArray(ackCommandIds) && ackCommandIds.length > 0) {
     body.ack_command_ids = ackCommandIds;
   }
@@ -197,7 +208,7 @@ async function ackAndFlushCommands(db, url, token, shopId, appliedIds, batch = 5
       events.push({ outbox_id: r.id, table: r.table_name, local_id: r.local_id, deleted, row: deleted ? null : payload });
     } catch (_) {}
   }
-  const res = await postBatch(url, token, shopId, events, appliedIds).catch(() => null);
+  const res = await postBatch(url, token, shopId, events, appliedIds, getBusinessType(db)).catch(() => null);
   if (!res || !res.ok) return;
   const ack = await res.json().catch(() => ({}));
   const acked = new Set(ack.ok_ids || []);
@@ -286,7 +297,7 @@ async function drainOutbox(db, { batch = 50 } = {}) {
     'SELECT id, table_name, local_id, payload FROM sync_outbox WHERE synced_at IS NULL ORDER BY id LIMIT ?'
   ).all(batch);
   if (rows.length === 0) {
-    const res = await postBatch(url, token, shopId, []);
+    const res = await postBatch(url, token, shopId, [], undefined, getBusinessType(db));
     if (!res.ok) throw new Error(`cloud sync responded ${res.status}`);
     const ack = await res.json().catch(() => ({}));
     const appliedIds = applyCloudCommands(db, ack.commands);
@@ -317,7 +328,7 @@ async function drainOutbox(db, { batch = 50 } = {}) {
     return { synced: 0, unreadable, quarantined: unreadable };
   }
 
-  const res = await postBatch(url, token, shopId, events);
+  const res = await postBatch(url, token, shopId, events, undefined, getBusinessType(db));
   if (!res.ok) {
     // The cloud answers a whole-batch 400 when NOTHING in the window
     // validated, and that body still carries the per-row rejected list.

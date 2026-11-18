@@ -11,7 +11,7 @@ function decorateItem(row) {
   return row;
 }
 
-function listInventory(db, { search = '', brand = '', part_type = '', lowStockOnly = false, include_archived = false, limit, offset } = {}) {
+function listInventory(db, { search = '', brand = '', part_type = '', lowStockOnly = false, include_archived = false, profile = '', limit, offset } = {}) {
   const everStockedSql = '(EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.inventory_id = inventory.id) OR EXISTS (SELECT 1 FROM sale_items si WHERE si.inventory_id = inventory.id))';
   let query = `SELECT inventory.*, ${everStockedSql} AS ever_stocked FROM inventory WHERE 1=1`;
   const params = [];
@@ -39,20 +39,31 @@ function listInventory(db, { search = '', brand = '', part_type = '', lowStockOn
   }
 
   if (lowStockOnly) {
-    query += ` AND stock_quantity <= min_stock_alert AND (stock_quantity > 0 OR ${everStockedSql})`;
+    query += ' AND (stock_quantity <= 0 OR stock_quantity <= min_stock_alert)';
   }
 
   query += ' ORDER BY brand ASC, model_name ASC, part_type ASC';
+  const lane = profile === 'active' ? activeBusinessType(db) : str(profile);
+  const filterByLane = Boolean(lane && lane !== 'hybrid' && lane !== 'all');
   // ponytail: optional pagination — unbounded listInventory is fine at <500 SKUs
   // (current catalog), but a 20k-row JSON blocks the sync event loop. Frontend
   // opts in with limit/offset; existing calls stay uncapped for backward compat.
-  if (limit != null || offset != null) {
+  if (!filterByLane && (limit != null || offset != null)) {
     const cap = Math.min(2000, Math.max(1, Number(limit) || 2000));
     const off = Math.max(0, Number(offset) || 0);
     query += ' LIMIT ? OFFSET ?';
     params.push(cap, off);
   }
-  return db.prepare(query).all(...params).map(decorateItem);
+  let rows = db.prepare(query).all(...params).map(decorateItem);
+  if (filterByLane) {
+    rows = rows.filter(r => itemVisibleInProfile(r, lane));
+    if (limit != null || offset != null) {
+      const cap = Math.min(2000, Math.max(1, Number(limit) || 2000));
+      const off = Math.max(0, Number(offset) || 0);
+      rows = rows.slice(off, off + cap);
+    }
+  }
+  return rows;
 }
 
 function getInventoryItem(db, id) {
@@ -60,12 +71,66 @@ function getInventoryItem(db, id) {
   return row ? decorateItem(row) : null;
 }
 
-function getInventoryByBarcode(db, barcode) {
+function getInventoryByBarcode(db, barcode, { profile = '' } = {}) {
   if (!barcode || typeof barcode !== 'string') return null;
   const clean = barcode.trim();
   if (!clean) return null;
   const row = db.prepare('SELECT * FROM inventory WHERE sku_barcode = ? COLLATE NOCASE').get(clean);
-  return row ? decorateItem(row) : null;
+  if (!row) return null;
+  const item = decorateItem(row);
+  const lane = profile === 'active' ? activeBusinessType(db) : str(profile);
+  if (lane && lane !== 'hybrid' && lane !== 'all' && !itemVisibleInProfile(item, lane)) return null;
+  return item;
+}
+
+// Store-profile lanes. 'shared' explicitly spans every profile; '' stays untagged
+// legacy until assigned (falling back to itemMatchesProfile).
+const PROFILE_LANES = new Set(['phone', 'pc', 'grocery', 'retail', 'service', 'shared']);
+
+function activeBusinessType(db) {
+  return db.prepare("SELECT value FROM shop_settings WHERE key = 'business_type'").get()?.value || 'hybrid';
+}
+
+function itemMatchesProfile(item, profile) {
+  if (!profile || profile === 'hybrid') return true;
+
+  const b = String(item?.brand || '').trim().toLowerCase();
+  const m = String(item?.model_name || '').trim().toLowerCase();
+  const pt = String(item?.part_type || '').trim().toLowerCase();
+  const cat = String(item?.category || '').trim().toLowerCase();
+  const name = String(item?.item_name || '').trim().toLowerCase();
+  const combined = `${b} ${m} ${pt} ${cat} ${name}`;
+
+  const isPcPart = (
+    /\b(gpu|cpu|motherboard|mobo|ram|ddr4|ddr5|ddr3|nvme|ssd|hdd|power supply|psu|pc case|cooler|thermal paste|graphics card|processor|geforce|radeon|ryzen|intel core)\b/i.test(combined) ||
+    /^(asus|gigabyte|msi|kingston|corsair|amd|intel|deepcool|fantech|western digital|seagate|nvidia|asrock|zotac|palit)$/i.test(b)
+  );
+
+  const isPhoneBrand = /^(apple|iphone|samsung|xiaomi|redmi|iredmi|poco|infinix|inifnix|tecno|realme|oppo|vivo|huawei|huawe|honor|itel|pixel|nokia|motorola)$/i.test(b);
+
+  const isPhonePart = (
+    /\b(lcd|oled|amoled|incell|screen|touchscreen|flex cable|charging flex|charging board|charging port|camera glass|back cam|front cam|air piece|earpiece|ear piece|center case|midframe|middle frame|power swich|power switch|back cover|back glass|housing|soldering tip)\b/i.test(combined) ||
+    ((/\bbatt(?:ery)?\b/i.test(combined)) && (isPhoneBrand || /\b(iphone|iph|galaxy|redmi|iredmi|note|poco|infinix|inifnix|tecno|realme|oppo|vivo|huawei|huawe|samsung|apple|pixel|honor)\b/i.test(combined))) ||
+    (!isPcPart && (isPhoneBrand || /^(gx|jk|ca|orig|wf|swich|power swich|charging flex|charging board|air piece|center case)$/i.test(pt)) && !name && !item?.allow_fractional)
+  );
+
+  if (profile === 'phone') return isPhonePart;
+  if (profile === 'pc') return isPhonePart ? false : isPcPart;
+  if (profile === 'grocery') {
+    if (isPhonePart) return false;
+    if (isPcPart && !/\b(peripherals|mouse|keyboard|cable|usb)\b/i.test(combined)) return false;
+    return true;
+  }
+  if (profile === 'retail') return !isPhonePart;
+  if (profile === 'service') return !(isPhonePart || isPcPart);
+  return true;
+}
+
+function itemVisibleInProfile(item, profile) {
+  if (!profile || profile === 'hybrid') return true;
+  if (item?.profile === 'shared') return true;
+  if (item?.profile) return item.profile === profile;
+  return itemMatchesProfile(item, profile);
 }
 
 // Trust boundary for text fields: control characters never enter a stored
@@ -142,6 +207,8 @@ function validateInventory(data) {
   const category = cap(str(data.category || data.part_type || ''));
   const uom = cap(str(data.uom || 'pcs')) || 'pcs';
   const track_serial = Number(data.track_serial) ? 1 : 0;
+  const profile = str(data.profile);
+  if (profile && !PROFILE_LANES.has(profile)) throw new Error(`Unknown store profile "${profile}"`);
 
   return {
     brand,
@@ -152,6 +219,7 @@ function validateInventory(data) {
     uom,
     allow_fractional,
     track_serial,
+    profile,
     sku_barcode: cap(str(data.sku_barcode)).toUpperCase() || null,
     cost_price,
     price_retail,
@@ -178,15 +246,22 @@ const partLabel = item => item.item_name || `${item.brand} ${item.model_name} - 
 
 function createInventoryItem(db, data, meta = {}, ctx = {}) {
   const v = validateInventory(data);
+  // Lane ownership: a non-hybrid register stamps its active profile on every
+  // new item (unless marked 'shared' or explicitly preserved by seeding);
+  // hybrid honors whatever profile the form sent.
+  const mode = activeBusinessType(db);
+  const profile = (ctx.preserveProfile && v.profile)
+    ? v.profile
+    : (v.profile === 'shared' ? 'shared' : (mode !== 'hybrid' ? mode : v.profile));
   return txn(db, () => {
     const opId = opIdOf(meta.op_id);
     const replay = opReplayed(db, opId);
     if (replay) return getInventoryItem(db, replay.entity_id);
     const item = db.prepare(`
-      INSERT INTO inventory (brand, model_name, part_type, sku_barcode, cost_price, price_retail, price_technician, stock_quantity, min_stock_alert, supplier, location, item_name, category, uom, allow_fractional, track_serial)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO inventory (brand, model_name, part_type, sku_barcode, cost_price, price_retail, price_technician, stock_quantity, min_stock_alert, supplier, location, item_name, category, uom, allow_fractional, track_serial, profile)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING *
-    `).get(v.brand, v.model_name, v.part_type, v.sku_barcode, v.cost_price, v.price_retail, v.price_technician, v.stock_quantity, v.min_stock_alert, v.supplier, v.location, v.item_name, v.category, v.uom, v.allow_fractional, v.track_serial);
+    `).get(v.brand, v.model_name, v.part_type, v.sku_barcode, v.cost_price, v.price_retail, v.price_technician, v.stock_quantity, v.min_stock_alert, v.supplier, v.location, v.item_name, v.category, v.uom, v.allow_fractional, v.track_serial, profile);
     if (opId) opRecord(db, opId, item.id);
     enqueueRow(db, 'inventory', item.id);
     if (v.stock_quantity !== 0) {
@@ -231,10 +306,10 @@ function updateInventoryItem(db, id, data, meta = {}, ctx = {}) {
         brand = ?, model_name = ?, part_type = ?, sku_barcode = ?, cost_price = ?,
         price_retail = ?, price_technician = ?, stock_quantity = ?, min_stock_alert = ?,
         supplier = ?, location = ?, item_name = ?, category = ?, uom = ?,
-        allow_fractional = ?, track_serial = ?, updated_at = CURRENT_TIMESTAMP
+        allow_fractional = ?, track_serial = ?, profile = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
       RETURNING *
-    `).get(v.brand, v.model_name, v.part_type, v.sku_barcode, v.cost_price, v.price_retail, v.price_technician, v.stock_quantity, v.min_stock_alert, v.supplier, v.location, v.item_name, v.category, v.uom, v.allow_fractional, v.track_serial, id);
+    `).get(v.brand, v.model_name, v.part_type, v.sku_barcode, v.cost_price, v.price_retail, v.price_technician, v.stock_quantity, v.min_stock_alert, v.supplier, v.location, v.item_name, v.category, v.uom, v.allow_fractional, v.track_serial, v.profile, id);
     enqueueRow(db, 'inventory', id);
 
     // "Set stock to" in the edit modal lands here; log the diff so the ledger
@@ -316,53 +391,68 @@ function archiveInventoryItem(db, id, archived, ctx = {}) {
 function normalizeRow(r) {
   if (!r || typeof r !== 'object') return {};
   const res = { ...r };
-  if (res.cost_price == null) {
-    if (res['Capital'] != null) res.cost_price = res['Capital'];
-    else if (res['Cost Price'] != null) res.cost_price = res['Cost Price'];
-    else if (res['Cost'] != null) res.cost_price = res['Cost'];
-  }
-  if (res.price_retail == null) {
-    if (res['Retail Price'] != null) res.price_retail = res['Retail Price'];
-    else if (res['Retail'] != null) res.price_retail = res['Retail'];
-  }
-  if (res.price_technician == null) {
-    if (res['Wholesale Price'] != null) res.price_technician = res['Wholesale Price'];
-    else if (res['Wholesale'] != null) res.price_technician = res['Wholesale'];
-    else if (res['Technician Price'] != null) res.price_technician = res['Technician Price'];
-    else if (res['technician_price'] != null) res.price_technician = res['technician_price'];
-  }
-  if (res.sku_barcode == null) {
-    if (res['SKU / Barcode'] != null) res.sku_barcode = res['SKU / Barcode'];
-    else if (res['SKU'] != null) res.sku_barcode = res['SKU'];
-    else if (res['Barcode'] != null) res.sku_barcode = res['Barcode'];
-  }
-  if (res.brand == null && res['Brand'] != null) res.brand = res['Brand'];
-  if (res.model_name == null && res['Model Name'] != null) res.model_name = res['Model Name'];
-  if (res.part_type == null && res['Part Type'] != null) res.part_type = res['Part Type'];
-  if (res.stock_quantity == null) {
-    if (res['Stock Qty'] != null) res.stock_quantity = res['Stock Qty'];
-    else if (res['Stock Quantity'] != null) res.stock_quantity = res['Stock Quantity'];
-  }
-  if (res.min_stock_alert == null) {
-    if (res['Min Stock Alert'] != null) res.min_stock_alert = res['Min Stock Alert'];
-    else if (res['Alert Stock'] != null) res.min_stock_alert = res['Alert Stock'];
-    else if (res['Stock Alert'] != null) res.min_stock_alert = res['Stock Alert'];
-  }
-  if (res.supplier == null && res['Supplier'] != null) res.supplier = res['Supplier'];
-  if (res.location == null && res['Location'] != null) res.location = res['Location'];
-  if (res.item_name == null) {
-    if (res['Item Name'] != null) res.item_name = res['Item Name'];
-    else if (res['Product Name'] != null) res.item_name = res['Product Name'];
-    else if (res['Name'] != null) res.item_name = res['Name'];
-  }
-  if (res.category == null && res['Category'] != null) res.category = res['Category'];
-  if (res.uom == null) {
-    if (res['UOM'] != null) res.uom = res['UOM'];
-    else if (res['Unit'] != null) res.uom = res['Unit'];
-  }
-  if (res.allow_fractional == null && res['Allow Fractional'] != null) res.allow_fractional = res['Allow Fractional'];
-  if (res.track_serial == null && res['Track Serial'] != null) res.track_serial = res['Track Serial'];
+  const pick = (...keys) => keys.find(k => r[k] != null);
+  const assign = (field, ...keys) => {
+    if (res[field] != null) return;
+    const hit = pick(...keys);
+    if (hit !== undefined) res[field] = r[hit];
+  };
+  assign('cost_price', 'Capital', 'Cost Price', 'Cost');
+  assign('price_retail', 'Retail Price', 'Retail');
+  assign('price_technician', 'Wholesale Price', 'Wholesale', 'Technician Price', 'technician_price');
+  assign('sku_barcode', 'Barcode', 'SKU / Barcode', 'SKU', 'Service Code');
+  assign('brand', 'Brand', 'Provider / Brand');
+  assign('model_name', 'Device / Model', 'Model Name');
+  assign('part_type', 'Part Type', 'Component Type', 'Category / Type');
+  assign('stock_quantity', 'Stock Count', 'Stock Qty', 'Stock Quantity', 'Stock to Add');
+  assign('min_stock_alert', 'Low Stock Alert', 'Min Stock Alert', 'Alert Stock', 'Stock Alert');
+  assign('supplier', 'Supplier');
+  assign('location', 'Shelf / Bin', 'Bench / Area', 'Location');
+  assign('item_name', 'Item Name', 'Service Name', 'Product Name', 'Name');
+  assign('category', 'Category');
+  assign('uom', 'Unit', 'UOM');
+  assign('allow_fractional', 'Sell by Weight or Decimal', 'Allow Fractional');
+  assign('track_serial', 'Requires Serial No.', 'Track Serial');
+  assign('profile', 'Shop Type', 'Shop Profile', 'Profile');
   return res;
+}
+
+const PROFILE_EXPORT_SLUGS = {
+  phone: 'phone-repair',
+  pc: 'pc-electronics',
+  grocery: 'grocery',
+  retail: 'retail',
+  service: 'service-labor',
+  hybrid: 'hybrid'
+};
+
+function profileFileSlug(mode) {
+  return PROFILE_EXPORT_SLUGS[mode] || 'phone-repair';
+}
+
+function buildInventoryExport(db) {
+  const mode = activeBusinessType(db);
+  const items = listInventory(db, { profile: 'active' });
+  const slug = profileFileSlug(mode);
+  const yesNo = v => (Number(v) ? 'Yes' : 'No');
+  let headers, rows;
+  if (mode === 'pc') {
+    headers = ['Brand', 'Device / Model', 'Component Type', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Requires Serial No.', 'Supplier', 'Shelf / Bin'];
+    rows = items.map(i => [i.brand, i.model_name, i.part_type, i.sku_barcode ?? '', i.cost_price, i.price_retail, i.price_technician, i.stock_quantity, i.min_stock_alert, yesNo(i.track_serial), i.supplier ?? '', i.location ?? '']);
+  } else if (mode === 'grocery' || mode === 'retail') {
+    headers = ['Item Name', 'Brand', 'Category', 'Unit', 'Sell by Weight or Decimal', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'];
+    rows = items.map(i => [i.item_name || i.model_name, i.brand, i.category || i.part_type, i.uom || 'pcs', yesNo(i.allow_fractional), i.sku_barcode ?? '', i.cost_price, i.price_retail, i.price_technician, i.stock_quantity, i.min_stock_alert, i.supplier ?? '', i.location ?? '']);
+  } else if (mode === 'service') {
+    headers = ['Service Name', 'Provider / Brand', 'Category', 'Service Code', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Bench / Area'];
+    rows = items.map(i => [i.item_name || i.model_name, i.brand, i.category || i.part_type, i.sku_barcode ?? '', i.cost_price, i.price_retail, i.price_technician, i.stock_quantity, i.min_stock_alert, i.supplier ?? '', i.location ?? '']);
+  } else if (mode === 'hybrid') {
+    headers = ['Shop Type', 'Item Name', 'Brand', 'Device / Model', 'Category / Type', 'Unit', 'Sell by Weight or Decimal', 'Requires Serial No.', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'];
+    rows = items.map(i => [i.profile || '', i.item_name || '', i.brand, i.model_name, i.part_type, i.uom || 'pcs', yesNo(i.allow_fractional), yesNo(i.track_serial), i.sku_barcode ?? '', i.cost_price, i.price_retail, i.price_technician, i.stock_quantity, i.min_stock_alert, i.supplier ?? '', i.location ?? '']);
+  } else {
+    headers = ['Brand', 'Device / Model', 'Part Type', 'Barcode', 'Capital', 'Retail Price', 'Wholesale Price', 'Stock Count', 'Low Stock Alert', 'Supplier', 'Shelf / Bin'];
+    rows = items.map(i => [i.brand, i.model_name, i.part_type, i.sku_barcode ?? '', i.cost_price, i.price_retail, i.price_technician, i.stock_quantity, i.min_stock_alert, i.supplier ?? '', i.location ?? '']);
+  }
+  return { mode, filename: `${slug}-inventory.csv`, headers, rows };
 }
 
 // CSV import: hoisted prepares, one txn. Refused rows no longer refuse the
@@ -376,7 +466,7 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
   const defaultRet = meta.retail_markup != null && meta.retail_markup !== '' ? Number(meta.retail_markup) : getDefaultRetailMarkup(db);
   const defaultWho = meta.wholesale_markup != null && meta.wholesale_markup !== '' ? Number(meta.wholesale_markup) : getDefaultWholesaleMarkup(db);
   const bySku = db.prepare('SELECT * FROM inventory WHERE sku_barcode = ? COLLATE NOCASE');
-  const byTriple = db.prepare(`SELECT * FROM inventory WHERE brand = ? COLLATE NOCASE AND model_name = ? COLLATE NOCASE AND part_type = ? COLLATE NOCASE ORDER BY id LIMIT 1`);
+  const byTriple = db.prepare(`SELECT * FROM inventory WHERE brand = ? COLLATE NOCASE AND (model_name = ? COLLATE NOCASE OR item_name = ? COLLATE NOCASE) AND (part_type = ? COLLATE NOCASE OR category = ? COLLATE NOCASE) ORDER BY id LIMIT 1`);
   const errors = [];
   const steps = [];
   const applied = [];
@@ -385,9 +475,12 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
     try {
       const r = normalizeRow(raw);
       const sku = str(r.sku_barcode) || null;
-      const brand = str(r.brand), model = str(r.model_name), part_type = str(r.part_type);
+      const rawName = str(r.item_name || r.name);
+      const brand = str(r.brand) || (rawName ? 'General' : '');
+      const model = str(r.model_name) || rawName;
+      const part_type = str(r.part_type || r.category) || (rawName ? 'General' : '');
       let match = sku ? bySku.get(sku) : null;
-      if (!match && brand && model && part_type) match = byTriple.get(brand, model, part_type);
+      if (!match && brand && model && part_type) match = byTriple.get(brand, model, model, part_type, part_type);
       const hasFracFlag = r.allow_fractional != null && str(r.allow_fractional) !== '';
       const allowFrac = hasFracFlag ? parseBoolFlag(r.allow_fractional) === 1 : Boolean(match?.allow_fractional);
       const rawQty = Number(r.stock_quantity ?? 0);
@@ -406,7 +499,7 @@ function importInventory(db, rows, ctx = {}, meta = {}) {
         }
         const fields = {};
         for (const k of ['cost_price', 'price_retail', 'price_technician', 'min_stock_alert']) if (str(r[k]) !== '') fields[k] = Number(r[k]);
-        for (const k of ['sku_barcode', 'supplier', 'location', 'item_name', 'category', 'uom']) if (str(r[k]) !== '') fields[k] = str(r[k]);
+        for (const k of ['sku_barcode', 'supplier', 'location', 'item_name', 'category', 'uom', 'profile']) if (str(r[k]) !== '') fields[k] = str(r[k]);
         for (const k of ['allow_fractional', 'track_serial']) if (r[k] != null && str(r[k]) !== '') fields[k] = parseBoolFlag(r[k]);
         if (meta.auto_price && fields.cost_price != null && fields.cost_price > 0) {
           const costChanged = match.cost_price == null || Number(match.cost_price) !== fields.cost_price;
@@ -497,7 +590,7 @@ function deleteInventoryItem(db, id, ctx = {}) {
 
 function bulkEditInventory(db, { ids, action, params = {} }, ctx = {}, meta = {}) {
   if (!Array.isArray(ids) || ids.length === 0) throw new Error('No items selected for bulk edit');
-  if (!['adjust_price', 'recalculate_markup', 'update_fields', 'archive', 'unarchive'].includes(action)) {
+  if (!['adjust_price', 'recalculate_markup', 'update_fields', 'archive', 'unarchive', 'delete'].includes(action)) {
     throw new Error(`Unknown bulk edit action "${action}"`);
   }
   const cleanIds = [...new Set(ids.map(Number).filter(n => Number.isInteger(n) && n > 0))];
@@ -509,6 +602,7 @@ function bulkEditInventory(db, { ids, action, params = {} }, ctx = {}, meta = {}
     const opId = opIdOf(meta.op_id);
     if (opId && opReplayed(db, opId)) return { ok: true, updated: 0, replayed: true };
     let updated = 0;
+    let skipped = 0;
     const getItem = db.prepare('SELECT * FROM inventory WHERE id = ?');
 
     if (action === 'adjust_price') {
@@ -575,6 +669,11 @@ function bulkEditInventory(db, { ids, action, params = {} }, ctx = {}, meta = {}
         if (Number.isInteger(minAlert) && minAlert >= 0) fields.min_stock_alert = minAlert;
         else throw new Error('Min stock alert must be a non-negative integer');
       }
+      if (typeof params.profile === 'string') {
+        const p = str(params.profile);
+        if (p && !PROFILE_LANES.has(p)) throw new Error(`Unknown store profile "${p}"`);
+        fields.profile = p;
+      }
       if (Object.keys(fields).length === 0) throw new Error('At least one field to update is required');
 
       for (const id of cleanIds) {
@@ -589,21 +688,31 @@ function bulkEditInventory(db, { ids, action, params = {} }, ctx = {}, meta = {}
         const res = archiveInventoryItem(db, id, isArch, ctx);
         if (res) updated++;
       }
+    } else if (action === 'delete') {
+      // Sold parts stay referable (same rule as single delete): skip and
+      // report them instead of aborting the whole batch over one receipt.
+      const soldLines = db.prepare('SELECT COUNT(*) AS c FROM sale_items WHERE inventory_id = ?');
+      for (const id of cleanIds) {
+        if (!getItem.get(id)) continue;
+        if (soldLines.get(id).c > 0) { skipped++; continue; }
+        if (deleteInventoryItem(db, id, ctx)) updated++;
+      }
     }
 
     audit(db, ctx.actor, ctx.elevated, 'inventory', 'bulk_edit', { count: updated, action, params });
     if (opId) opRecord(db, opId);
-    return { ok: true, updated };
+    return action === 'delete' ? { ok: true, updated, skipped } : { ok: true, updated };
   });
 }
 
 // ponytail: computed live from sale_items on every open, nothing stored or scheduled
-function listReorderSuggestions(db, { days = 3 } = {}) {
+function listReorderSuggestions(db, { days = 3, profile = 'active' } = {}) {
   const n = Number(days);
   const windowDays = Number.isInteger(n) && n >= 1 && n <= 90 ? n : 3;
+  const lane = profile === 'active' ? activeBusinessType(db) : str(profile);
   const rows = db.prepare(`
-    SELECT i.id, i.brand, i.model_name, i.part_type, i.item_name, i.uom, i.allow_fractional,
-           i.sku_barcode, i.supplier, i.stock_quantity, i.cost_price,
+    SELECT i.id, i.brand, i.model_name, i.part_type, i.item_name, i.category, i.uom, i.allow_fractional,
+           i.profile, i.sku_barcode, i.supplier, i.stock_quantity, i.cost_price,
            i.price_retail, i.price_technician, i.min_stock_alert, i.location,
            COALESCE(SUM(si.quantity), 0) AS qty_sold
     FROM sale_items si
@@ -613,7 +722,8 @@ function listReorderSuggestions(db, { days = 3 } = {}) {
       AND datetime(s.created_at) >= datetime('now', ?)
     GROUP BY si.inventory_id
     ORDER BY i.supplier COLLATE NOCASE ASC, qty_sold DESC, i.brand ASC, i.model_name ASC
-  `).all(`-${windowDays} days`);
+  `).all(`-${windowDays} days`)
+    .filter(r => !lane || lane === 'hybrid' || lane === 'all' || itemVisibleInProfile(r, lane));
   for (const r of rows) {
     r.qty_sold = roundQty(r.qty_sold);
     r.suggested_qty = Math.max(roundQty(r.qty_sold - r.stock_quantity), 0);
@@ -680,6 +790,9 @@ function receiveInventory(db, items, ctx = {}) {
 
 module.exports = {
   partLabel,
+  activeBusinessType,
+  itemMatchesProfile,
+  itemVisibleInProfile,
   opReplayed,
   opRecord,
   listInventory,
@@ -695,5 +808,7 @@ module.exports = {
   deleteInventoryItem,
   bulkEditInventory,
   listReorderSuggestions,
-  receiveInventory
+  receiveInventory,
+  buildInventoryExport,
+  profileFileSlug
 };

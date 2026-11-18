@@ -1,8 +1,8 @@
 import { S } from './state.js';
 import { addTenderedAmount, applyThemeVisual, closeModal, closeTopModal, confirmModal, currentTopModalId, debounce, initConfirmModal, initInputModal, initLiveClock, openModal, searchCustomers, searchInventory, searchReturns, searchSales, showToast, toggleTheme } from './ui.js';
-import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, updateStoreMarkupPreview, syncCloudUi, openForgotPinPanel, closeForgotPinPanel, submitRecoveryPinReset, submitRecoveryPasswordChange } from './auth.js';
+import { applyRoleVisibility, checkLicenseStatus, clearQrImage, copyMachineId, disconnectCloud, dismissLicenseOverlay, doLogout, handleLicenseFileUpload, initLoginGateListeners, initSessionGate, loadAuditChain, loadAuditLog, loadPrinters, loadReceiptPreview, loadShopSettings, loginGateBack, openPinSetup, openSettingsModal, onSettingsQrPathInput, handleQrFileUpload, pairCloudWithCode, pasteLicenseKeyTo, probeServer, saveShopSettings, skipPinSetup, submitLicenseActivation, submitLoginPin, submitNewStaff, submitPinChange, submitPinSetup, submitPinVerification, submitSettingsLicenseActivation, closePinModal, renderStaffPanel, requireManagerPin, setElevation, deactivateStaffPrompt, resetStaffPinPrompt, switchSettingsTab, toggleCostPriceReveal, updateLicensePreview, applyBusinessPreset, switchActiveBusinessProfile, updateStoreMarkupPreview, syncCloudUi, openForgotPinPanel, closeForgotPinPanel, submitRecoveryPinReset, submitRecoveryPasswordChange } from './auth.js';
 import { autoPrintEnabled, calculateChange, calculateCreditBalance, clearDeviceSelection, setPosBrandFilter, clearRepairOrder, completeSale, copyRepairRef, customerComboboxInit, editCartQtyPrompt, fillExactAmount, focusImeiForScan, formatPhPhone, loadCustomerSuggestions, loadPosCatalog, newRepairRef, onCustomerNameInput, onDeviceSelected, onPartSearchKeydown, onRepairIntakeInput, printClaimStub, quickAddPart, refreshDraftChip, removeCartItem, renderCartSummary, resetPosFilters, resetRepairCounter, restoreCartRecovery, saveRepairDraft, setPartCategory, setInStockOnly, setPaymentMethod, setPriceTier, toggleRepairNote, renderPartsTable, initScanListeners, resumeRepairDraft, clearRefusedScans, openScanRefusals } from './views/pos.js';
-import { archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, clearInventorySelection, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, printBulkSkuLabels, printEditModalLabel, setAddItemTemplate, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
+import { PROFILE_TEMPLATE_SLUGS, archiveInventoryItemPrompt, attachPartCombos, attachSkuWarning, bulkDeleteSelectedPrompt, clearInventorySelection, deleteInventoryItemPrompt, downloadImportTemplate, exportReorderCsv, importCsvFile, loadInventoryTable, matchReorderToSold, openAddPartModal, openAdjustStockModal, openBulkEditModal, openEditPartModal, openMovementHistory, printBulkSkuLabels, printEditModalLabel, receiveReorderPrompt, setAddItemTemplate, setupInventoryEnhancements, submitAddPart, submitAdjustStock, submitEditPart, triggerCsvImport } from './views/inventory.js';
 import { loadRepairs, wireRepairsView } from './views/repairs.js';
 import { copyUtangReminder, editCreditLimitPrompt, fillFullSettlement, loadCustomers, loadDashboardData, loadDayClose, loadExceptions, loadSalesHistory, loadWarrantyReturnsTable, openCustomerLedger, openWarrantyReturnModal, printActiveCustomerSoa, printDayZRead, printSettlementReceiptById, restoreBackup, shutdownServer, submitCreditSettlement, submitDayClose, submitWarrantyReturn, switchLedgerTab, toggleSettleRefInput, triggerBackup, viewSaleDetails, voidSalePrompt, checkForAppUpdates, applyAppUpdate, openUpdateModal, downloadBackup, updateReturnsBadge } from './views/backoffice.js';
 import { openShiftPrompt, closeShiftPrompt } from './views/pos.js';
@@ -187,10 +187,12 @@ export async function downloadCsvFile(url, filename) {
   try {
     const res = await fetch(url); // wrapper attaches session + elevation
     if (!res.ok) throw new Error('Export rejected');
+    const cd = res.headers?.get?.('content-disposition') || '';
+    const cdMatch = cd.match(/filename="([^"]+)"/i);
     const blob = await res.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = filename;
+    a.download = (cdMatch && cdMatch[1]) || filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -203,7 +205,9 @@ export async function downloadCsvFile(url, filename) {
 }
 
 export function exportInventoryCsv() {
-  requireManagerPin('Enter manager PIN to export the catalog', () => downloadCsvFile('/api/inventory/export', 'inventory.csv'));
+  const mode = (typeof S !== 'undefined' && S.shopSettings?.business_type) || 'hybrid';
+  const fname = `${PROFILE_TEMPLATE_SLUGS[mode] || 'phone-repair'}-inventory.csv`;
+  requireManagerPin('Enter manager PIN to export the catalog', () => downloadCsvFile('/api/inventory/export', fname));
 }
 
 // -------------------------------------------------------------
@@ -299,13 +303,17 @@ const ACTIONS = {
   'movement-history': el => openMovementHistory(Number(el.dataset.partId)),
   'archive-part': el => archiveInventoryItemPrompt(Number(el.dataset.partId), false),
   'unarchive-part': el => archiveInventoryItemPrompt(Number(el.dataset.partId), true),
+  'delete-part': el => deleteInventoryItemPrompt(Number(el.dataset.partId)),
   'reveal-cost': () => toggleCostPriceReveal(),
   'export-inventory-csv': () => exportInventoryCsv(),
   'export-reorder-csv': () => exportReorderCsv(),
+  'reorder-match-sold': () => matchReorderToSold(),
+  'receive-reorder': () => receiveReorderPrompt(),
   'import-csv': () => triggerCsvImport(),
   'import-template': () => downloadImportTemplate(),
   'bulk-clear': () => clearInventorySelection(),
   'bulk-edit': () => openBulkEditModal(),
+  'bulk-delete': () => bulkDeleteSelectedPrompt(),
   'bulk-print-labels': () => printBulkSkuLabels(),
   'print-edit-label': () => printEditModalLabel(),
   'copy-utang-reminder': () => copyUtangReminder(),
@@ -499,6 +507,7 @@ function initFormWiring() {
   on('settings-item-rows', 'change', loadReceiptPreview);
   on('settings-paper-width', 'change', loadReceiptPreview);
   on('settings-business-type', 'change', e => applyBusinessPreset(e.target.value));
+  on('topbar-profile-switcher', 'change', e => switchActiveBusinessProfile(e.target.value));
   on('settings-default-retail-markup', 'input', updateStoreMarkupPreview);
   on('settings-default-wholesale-markup', 'input', updateStoreMarkupPreview);
 

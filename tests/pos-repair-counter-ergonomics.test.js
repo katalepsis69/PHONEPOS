@@ -155,11 +155,10 @@ test('inventory view: honest metric copy, screen tech badges, and action hit are
   assert.match(invJs, /units === 1 \? t\('inv\.stat_unit_single'/);
   assert.match(invJs, /units > 0 \? t\('inv\.stat_low_only', 'below alert level'\) : t\('inv\.stat_none', 'nothing on hand'\)/);
 
-  // OUT card: red only when the shop actually stocks things (units > 0); a
-  // catalog-only shelf of zero-stock entries is a fact, not an alarm
-  assert.match(invJs, /stat--danger', units > 0 && out > 0\)/);
+  // OUT card: red whenever out > 0, calm green label when all stocked
+  assert.match(invJs, /stat--danger', out > 0\)/);
   assert.match(invJs, /t\('inv\.stat_out_ok', 'all stocked'\)/);
-  assert.match(invJs, /t\('inv\.stat_out_catalog', 'catalog entries, not stocked'\)/);
+  assert.match(invJs, /t\('inv\.stat_restock', 'needs restock'\)/);
 
   // Screen tech rendered with uppercase badge
   assert.match(invJs, /<span class="tag tag--subtle font-mono uppercase text-xs">\$\{escHtml\(item\.part_type\)\}<\/span>/);
